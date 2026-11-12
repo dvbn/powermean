@@ -1,4 +1,4 @@
-# Powermean
+# Powermean <img src="https://raw.githubusercontent.com/dvbn/powermean/main/docs/assets/powermean-logo.png" align="right" width="120" alt="Powermean logo" />
 
 Powermean is a Python package for estimating proportional effects. It brings exponential regression, including Poisson pseudo-maximum likelihood (PPML) and Gamma pseudo-maximum likelihood (GPML), and log-linear regression into a common power-mean framework. It can be used for estimation and inference of treatment effects or gravity models. The methods build on Benatia, Bellégo and Pape (BBP),
 [*Dealing with Logs and Zeros in Regression Models*](https://arxiv.org/abs/2203.11820).
