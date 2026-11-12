@@ -1,0 +1,48 @@
+name: Installed alpha
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  normal:
+    name: NORMAL / ${{ matrix.os }} / Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2022]
+        python: ["3.12", "3.13", "3.14"]
+    env:
+      PM_PROFILE: NORMAL
+    steps: &installed_alpha_steps
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Build and test the installed artifact
+        run: |
+          python -m pip --disable-pip-version-check install --only-binary=:all: build
+          python -I -B .github/ci/installed_alpha.py
+
+  minimum:
+    name: MINIMUM / ${{ matrix.os }} / Python ${{ matrix.python }}
+    needs: normal
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2022]
+        python: ["3.12"]
+    env:
+      PM_PROFILE: MINIMUM
+    steps: *installed_alpha_steps
