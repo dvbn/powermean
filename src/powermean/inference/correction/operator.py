@@ -1,4 +1,4 @@
-"""Fresh-point cancelled and identified bias operators.
+"""Fresh-point cancelled and identified bias operators for design03 Section 5.
 
 Wraps ``cancelled_equations`` and ``identified_equations`` at a fresh candidate
 point, reserves numeric workspace before allocation, and provides tensor-free
@@ -19,6 +19,8 @@ from powermean.fe.retained import CenteredDesign
 from powermean.inference.correction._cancelled_operator import (
     CancelledBiasState,
     _second_zeta_sorted,
+    gathers_apply,
+    group_forms,
 )
 from powermean.inference.correction._inputs import (
     BiasOperatorRequest,
@@ -82,7 +84,14 @@ class IdentifiedBiasState:
         return self.identified_state.jac_t_vec(values)
 
     def hessian(self) -> NDArray[np.float64]:
-        """Materialize the exact ``(d, d)`` nonsymmetric Jacobian ``H = -nabla S``."""
+        """Materialize the exact ``(d, d)`` nonsymmetric Jacobian ``H = -nabla S``.
+
+        The state's assembly from its rows where it applies
+        (:meth:`IdentifiedState.jacobian`), column by column otherwise.
+        """
+        assembled = self.identified_state.jacobian()
+        if assembled is not None:
+            return finite_product(assembled)
         n_id = self.geometry.n_identified
         matrix = np.zeros((n_id, n_id), dtype=np.float64)
         basis = np.zeros(n_id, dtype=np.float64)
@@ -124,13 +133,51 @@ class IdentifiedBiasState:
     def contract_second_derivative_with_rows(
         self, matrix: ArrayLike
     ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
-        """Compute ``sum_g nabla^2 psi_g : C`` and sorted row curvature ``zeta``."""
+        """Compute ``sum_g nabla^2 psi_g : C`` and sorted row curvature ``zeta``.
+
+        The row curvature summed over the columns of ``C`` is
+        ``-k_dot_i b_i'Cb_i + eta_i sum_j k_j (b_i'Cb_j + b_j'Cb_i)`` over the
+        rows ``j`` of the group of ``i``. It is formed from those within-group
+        forms where ``gathers_apply`` holds, and column by column otherwise.
+        """
         n_id = self.geometry.n_identified
         mat = checked_array(matrix, (n_id, n_id), "matrix").copy()
 
         cb = self.cancelled_bias_state
         s = cb.design.structure
-        zeta_total = np.zeros(s.n_rows, dtype=np.float64)
+        if gathers_apply(cb, n_id, self.geometry.basis_matrix, mat):
+            zeta_total = self._zeta_by_groups(mat)
+        else:
+            zeta_total = self._zeta_by_columns(mat)
+
+        with np.errstate(over="raise", invalid="raise"):
+            zeta_sums = segment_sum(s, zeta_total)
+            d2_rho = finite_product(
+                zeta_total - cb.state.pi * zeta_sums[s.sorted_codes]
+            )
+        return self.geometry.rmatvec_sorted(d2_rho), zeta_total
+
+    def _zeta_by_groups(self, mat: NDArray[np.float64]) -> NDArray[np.float64]:
+        """Summed row curvature from the within-group forms of ``T C T'``."""
+        cb = self.cancelled_bias_state
+        with np.errstate(over="raise", invalid="raise"):
+            gathered = self.geometry.gathered(mat)
+            if gathered is None:
+                own, right, left = group_forms(
+                    cb.design, self.geometry.inflate(mat), cb.state.k
+                )
+            else:
+                own, right, left = group_forms(
+                    cb.design, gathered[0], cb.state.k, gathered[1]
+                )
+            coupled = finite_product(cb.primitives.eta_weights * (right + left))
+            return finite_product(coupled - cb.primitives.k_dot * own)
+
+    def _zeta_by_columns(self, mat: NDArray[np.float64]) -> NDArray[np.float64]:
+        """Summed row curvature, one column of ``C`` and two products at a time."""
+        n_id = self.geometry.n_identified
+        cb = self.cancelled_bias_state
+        zeta_total = np.zeros(cb.design.structure.n_rows, dtype=np.float64)
         basis = np.zeros(n_id, dtype=np.float64)
         for col in range(n_id):
             basis[col] = 1.0
@@ -140,13 +187,7 @@ class IdentifiedBiasState:
             zeta_col = _second_zeta_sorted(cb.state, cb.primitives, du, dv)
             with np.errstate(over="raise", invalid="raise"):
                 zeta_total = finite_product(zeta_total + zeta_col)
-
-        with np.errstate(over="raise", invalid="raise"):
-            zeta_sums = segment_sum(s, zeta_total)
-            d2_rho = finite_product(
-                zeta_total - cb.state.pi * zeta_sums[s.sorted_codes]
-            )
-        return self.geometry.rmatvec_sorted(d2_rho), zeta_total
+        return zeta_total
 
     def contract_second_derivative(self, matrix: ArrayLike) -> NDArray[np.float64]:
         """Compute ``sum_g nabla^2 psi_g : C`` in ``R^d`` without ``d^3`` arrays."""
@@ -233,6 +274,8 @@ def evaluate_identified_bias_state(
 
     Numerical geometry checks are vetoes, not structural rank/sampling admission.
     The caller supplies an uncorrected root; this evaluator does not certify one.
+    A fit's own admission in the request lets its one check stand for the same
+    geometry and bit-identical raw inputs; otherwise the check is fresh.
     """
     if type(geometry) is not NumericalGeometry:
         raise TypeError("geometry must be a NumericalGeometry")
@@ -259,6 +302,7 @@ def evaluate_identified_bias_state(
         variance=family,
         centered_offset=point.offset,
         obs_weights=point.weights,
+        admitted=request.admitted,
     )
     prim, cell_data = compute_bias_row_primitives(
         id_state.full_state, point, family, cell=request.cell

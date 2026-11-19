@@ -17,6 +17,7 @@ from powermean.fe._cancel_storage import (
     IndexStorage,
     finite_product,
 )
+from powermean.fe.admission import AdmittedGeometry
 from powermean.fe.geometry_design import NumericalGeometry
 from powermean.inference.correction._inputs import checked_array
 from powermean.inference.correction.budget import BiasBounds, enforce
@@ -50,6 +51,7 @@ class BiasEvalOptions:
     rcond_min: float
     require_symmetric_pairs: bool
     bounds: BiasBounds
+    admitted: AdmittedGeometry | None
 
     def __init__(
         self,
@@ -60,6 +62,7 @@ class BiasEvalOptions:
         rcond_min: float,
         require_symmetric_pairs: bool = True,
         bounds: BiasBounds,
+        admitted: AdmittedGeometry | None = None,
     ) -> None:
         if type(order) is not OrderScale:
             raise TypeError("order must be an OrderScale")
@@ -67,6 +70,8 @@ class BiasEvalOptions:
             raise TypeError("bounds must be a BiasBounds")
         if type(require_symmetric_pairs) is not bool:
             raise TypeError("require_symmetric_pairs must be a bool")
+        if admitted is not None and type(admitted) is not AdmittedGeometry:
+            raise TypeError("admitted must be the fit's AdmittedGeometry")
         enforce(64 * order.dimension, 16 * order.dimension, bounds)
         if order.omega == 0.0:
             raise ValueError("BBP correction is not needed at omega=0")
@@ -84,6 +89,7 @@ class BiasEvalOptions:
         object.__setattr__(self, "rcond_min", check_rcond_min(rcond_min))
         object.__setattr__(self, "require_symmetric_pairs", require_symmetric_pairs)
         object.__setattr__(self, "bounds", bounds)
+        object.__setattr__(self, "admitted", admitted)
 
     @property
     def order(self) -> OrderScale:
@@ -97,7 +103,7 @@ class BiasEvalOptions:
 
     @property
     def obs_weights(self) -> NDArray[np.float64] | None:
-        """Detached positive multipliers, with no sampling-weight interpretation."""
+        """Detached positive D12 multipliers, with no sampling-weight interpretation."""
         return None if self._obs_weights is None else self._obs_weights.view()
 
 

@@ -1,11 +1,14 @@
-"""The internal full-joint certificate of absorbed points and candidates.
+"""The private full-joint certificate of absorbed points and candidates.
+
+``design/02_computation.md``, Section 7 and D49; the M1.14 dispatch, readiness Sections
+1 to 4 with revision A, and the WLS entry notes (``plan/evidence/M1.14_*``); decisions
+D49, D51 and D54.  Task M1.14, private.
 
 :func:`certify_point` certifies one point with explicit ``CertificateControls``, its
 matching inner controls and an :class:`FEScaleProvider`.  :func:`certify_candidate`
 audits an actual ``ProfiledCandidate`` or ``IndexCandidate`` (certificate controls from
-``candidate.options``, inner controls ``candidate.absorbed``) and
-:func:`certify_linear_candidate` an ``AbsorbedLinearCandidate`` with the caller's
-controls (inner controls ``candidate.controls``; nothing inferred from ``af``).  An
+``candidate.options``, inner controls ``candidate.absorbed``).  Fixed-effect log-OLS
+holds no certificate (owner's ruling 52; :mod:`powermean.interface.fe_linear`).  An
 audit owns the admitted history before certifying the selected point and keeps both,
 with no combined verdict: no historical veto, no erasure.  :class:`FEAssessor` is the
 unchanged point-only retry assessor.
@@ -19,25 +22,24 @@ slopes and a formed correction, an
 the requested covariance, the direct report map and ``W``; the provider's result is
 admitted as an owned snapshot (:func:`~powermean.solve.absorbed_certificate_scale.
 admitted_scale`), which the certificate keeps private and hands out as a fresh copy at
-each access; the unchanged corrections and the coefficient gate follow.
-``K = 0`` calls no provider: an empty coefficient restriction.
-The work of each stage is recorded when it
+each access; the unchanged corrections and D49 gate follow.  ``K = 0`` calls no
+provider: an empty coefficient restriction.  The work of each stage is recorded when it
 completes, before a later refusal: the support check, the assembly, the equilibration.
 
 Gates (a NaN passes none): ``evaluation``, ``effects`` (largest raw-weight level mean at
 most ``tol``), ``inner``, ``curvature``, ``conditioning``, ``score`` and ``index`` (at
-most the level's tolerance) and ``coefficient`` (vacuous without slopes); the
-secondary level relaxes only score and index.  :func:`assessment` is the retry
+most the level's tolerance) and ``coefficient`` (D49, vacuous without slopes); the
+secondary level relaxes only score and index.  :func:`assessment` is the M0 retry
 reading.  The certificate's work is recorded apart from any solver's.
 
-Selected roots.  An
+Selected roots (``design/02_computation.md``, Sections 5.3 and 7; decision D51).  An
 exact root point of the full joint system outside ``tau in [1, 2]``
 (:class:`~powermean.solve.absorbed_root_records.RootPoint`, kind ``"root"``) is
 certified as a regular root, not as a minimum, by the same evidence: its original
 rows and every original effect equation, the observed geometry, the full ordinary
 factor and its conditioning, the full index correction with its ``B'(b - C dq)``
-diagnostic, the provider's direct reported standard errors and the coefficient gate.
-Two gates differ, each recorded in :attr:`FEPointCertificate.not_applicable`, never
+diagnostic, the provider's direct reported standard errors and the D49 gate.  Two
+gates differ, each recorded in :attr:`FEPointCertificate.not_applicable`, never
 counted as passed: ``inner`` does not apply (no absorption or profile forms the point,
 whose inner evidence holds explicit inapplicable components), and ``curvature`` is
 waived where the scaled score has a metric: ``Hplus`` where it is positive definite,
@@ -75,7 +77,6 @@ from powermean.solve.absorbed_certificate_geometry import (
 from powermean.solve.absorbed_certificate_history import (
     CandidateHistory,
     index_history,
-    linear_history,
     profiled_history,
     root_history,
 )
@@ -115,9 +116,8 @@ from powermean.solve.assessment import (
     CertificateControls,
     certificate_controls,
 )
-from powermean.solve.linear_absorbed_point import LinearPoint
-from powermean.solve.linear_absorbed_state import AbsorbedLinearCandidate
-from powermean.solve.absorbed import AbsorbedOptions
+from powermean.solve.compact_matrix import CompactMatrix
+from powermean.solve.m1_options import AbsorbedOptions
 from powermean.solve.newton_absorbed import IndexCandidate
 from powermean.solve.newton_profiled import ProfiledCandidate
 from powermean.solve.profiled_trigger import WholePoint
@@ -127,7 +127,7 @@ from powermean.solve.reduced_execution import (
     _OwnedReducedExecution,
 )
 from powermean.solve.reduced_nonlinear import ConditionalPoint
-from powermean.solve.reported import CoefficientCheck, coefficient_check
+from powermean.solve.reported import CoefficientCheck, coefficient_check, saturated
 from powermean.systems.profiled import PointProfile, ProfiledProblem
 
 FEGate = Literal[
@@ -191,17 +191,31 @@ class FEPointCertificate:
         return not self.point.selected_root
 
     @property
+    def saturated(self) -> bool:
+        """Whether the fit is saturated: as many rows as ``K + |J|``.
+
+        :func:`powermean.solve.reported.saturated` on the rows of the geometry (every
+        row of the sample has a positive weight) and its dimension; ``False`` where no
+        geometry was formed.
+        """
+        geometry = self.geometry
+        return geometry is not None and saturated(
+            int(geometry.design.shape[0]), geometry.dimension
+        )
+
+    @property
     def not_applicable(self) -> tuple[FEGate, ...]:
         """The gates that do not apply at the point, never counted as passed.
 
         At a selected root: ``inner``, and ``curvature`` where the scaled score has a
-        metric (module docstring); nothing elsewhere.
+        metric (module docstring); at a saturated fit, ``coefficient``
+        (:attr:`saturated`); nothing elsewhere.
         """
-        if not self.point.selected_root:
-            return ()
-        found: set[FEGate] = {"inner"}
-        if self.score_metric != "none":
-            found.add("curvature")
+        found: set[FEGate] = {"coefficient"} if self.saturated else set()
+        if self.point.selected_root:
+            found.add("inner")
+            if self.score_metric != "none":
+                found.add("curvature")
         return tuple(gate for gate in FE_GATES if gate in found)
 
     @property
@@ -223,7 +237,7 @@ class FEPointCertificate:
 
     @property
     def degenerate(self) -> bool:
-        """Whether a reported standard error is zero: degenerate inference."""
+        """Whether a reported standard error is zero: degenerate inference (D49)."""
         return self.coefficients is not None and self.coefficients.degenerate
 
     @property
@@ -264,7 +278,9 @@ def _refused(name: str, error: Exception) -> WorkStep:
 
 
 _FRESH_ROW_HOOKS = (
-    fresh_rows, prepared_effect_equations, _share_row_evaluation,
+    fresh_rows,
+    prepared_effect_equations,
+    _share_row_evaluation,
     _prepared_effect_equations_from_rows,
 )
 _INNER_EVIDENCE = inner_evidence
@@ -279,18 +295,27 @@ def _fresh(
     """The fresh rows, then the effect equations; a range refusal stops the work."""
     evaluated: list[RowEvaluation | None] | None = None
     try:
-        current = (fresh_rows, prepared_effect_equations, _share_row_evaluation,
-                   _prepared_effect_equations_from_rows)
-        if (prepared is not None
-                and all(a is b for a, b in zip(current, _FRESH_ROW_HOOKS, strict=True))
-                and _share_row_evaluation(point, prepared)):
+        current = (
+            fresh_rows,
+            prepared_effect_equations,
+            _share_row_evaluation,
+            _prepared_effect_equations_from_rows,
+        )
+        if (
+            prepared is not None
+            and all(a is b for a, b in zip(current, _FRESH_ROW_HOOKS, strict=True))
+            and _share_row_evaluation(point, prepared)
+        ):
             evaluated = [None]
     except MemoryError:
         # Only optional admission/collector allocation, never row or equation math.
         evaluated = None
     try:
-        rows = (fresh_rows(point) if evaluated is None
-                else fresh_rows(point, _evaluated=evaluated))
+        rows = (
+            fresh_rows(point)
+            if evaluated is None
+            else fresh_rows(point, _evaluated=evaluated)
+        )
     except FloatingPointError as error:
         errors["evaluation"] = str(error)
         steps.append(_refused("rows", error))
@@ -301,10 +326,9 @@ def _fresh(
         effects = (
             effect_equations(point)
             if prepared is None
-            else prepared_effect_equations(prepared, point.q) if evaluation is None
-            else _prepared_effect_equations_from_rows(
-                prepared, point.q, evaluation
-            )
+            else prepared_effect_equations(prepared, point.q)
+            if evaluation is None
+            else _prepared_effect_equations_from_rows(prepared, point.q, evaluation)
         )
     except FloatingPointError as error:
         errors["effects"] = str(error)
@@ -372,6 +396,17 @@ def _measured(
     for gate in ("curvature", "conditioning"):
         if gate in measures.errors:
             errors[gate] = measures.errors[gate]
+    mapped = measures.slope_map
+    map_refused = mapped is not None and not np.isfinite(mapped).all()
+    if map_refused:
+        # The raw transpose-inverse map is required by the scale provider and
+        # retained evidence. Do not diagnose its overflow as lost influence.
+        measures = replace(measures, slope_map=None)
+    if saturated(int(geometry.design.shape[0]), geometry.dimension):
+        return geometry, measures, None, None  # no coefficient gate, no provider call
+    if map_refused:
+        errors["coefficient"] = "the raw slope map is not representable in float64"
+        return geometry, measures, None, None
     scaled, check = _coefficients(geometry, measures, scale, controls.coef_tol)
     return geometry, measures, scaled, check
 
@@ -382,10 +417,7 @@ def _coefficients(
     provider: FEScaleProvider,
     coef_tol: float,
 ) -> tuple[FEScaleResult | None, CoefficientCheck | None]:
-    """The provider's admitted result and the coefficient gate.
-
-    None without a correction.
-    """
+    """The provider's admitted result and the D49 gate; none without a correction."""
     k, correction, slope_map = (
         geometry.n_slopes,
         measures.correction,
@@ -463,31 +495,51 @@ class _CertificateCall:
 
 
 def _certify_numeric_point(
-    whole: object, controls: CertificateControls, *, absorbed: AbsorbedOptions,
-    scale: FEScaleProvider, problem: ProfiledProblem,
+    whole: object,
+    controls: CertificateControls,
+    *,
+    absorbed: AbsorbedOptions,
+    scale: FEScaleProvider,
+    problem: ProfiledProblem,
     basis: CertificateBasis | None = None,
 ) -> FEPointCertificate:
     """Fresh original equations and gates using fixed operation-owned row inputs."""
     fresh = problem._fresh_certificate_problem()
     reduced = problem.__dict__.get("_reduced_execution")
     execution = (
-        reduced if (kind := type(reduced)) is ReducedExecution
-        or kind is _OwnedReducedExecution else None
+        reduced
+        if (kind := type(reduced)) is ReducedExecution or kind is _OwnedReducedExecution
+        else None
     )
-    return _certify(
+    certificate = _certify(
         _CertificateCall(whole, controls, absorbed, scale, None),
-        fresh, basis, execution,
+        fresh,
+        basis,
+        execution,
     )
+    geometry = certificate.geometry
+    if geometry is not None:
+        # History admission validates the final rows independently. Keep only
+        # raw geometry and scales while it does that work.
+        for matrix in (geometry.ordinary, geometry.curvature):
+            if type(matrix) is CompactMatrix:
+                matrix._release_working()
+    return certificate
 
 
 def _certify(
-    call: _CertificateCall, numeric: ProfiledProblem | None,
+    call: _CertificateCall,
+    numeric: ProfiledProblem | None,
     prepared_basis: CertificateBasis | None = None,
     execution: ReducedExecution | None = None,
 ) -> FEPointCertificate:
     """The single existing certificate implementation, not a second gate."""
     whole, controls, absorbed, scale, merit = (
-        call.whole, call.controls, call.absorbed, call.scale, call.merit
+        call.whole,
+        call.controls,
+        call.absorbed,
+        call.scale,
+        call.merit,
     )
     if type(controls) is not CertificateControls:
         raise TypeError("certify with CertificateControls")
@@ -495,7 +547,8 @@ def _certify(
     if not callable(scale) or type(request) is not CovarianceRequest:
         raise TypeError("certify with an FEScaleProvider holding a CovarianceRequest")
     point, prepared = (
-        admit_prepared_point(whole, absorbed) if numeric is None
+        admit_prepared_point(whole, absorbed)
+        if numeric is None
         else _admit_numeric_point(whole, absorbed, numeric)
     )
     if point.sample.grouping is None:
@@ -505,11 +558,21 @@ def _certify(
     if prepared_basis is not None and basis.grouping is not point.sample.grouping:
         raise ValueError("the prepared basis belongs to another sample grouping")
     steps = [WorkStep("basis", "completed", basis.route, (("rows", basis.rows),))]
-    backend = vars(absorbed).get("basis_backend") if type(absorbed) is AbsorbedOptions else None
+    backend = (
+        vars(absorbed).get("basis_backend")
+        if type(absorbed) is AbsorbedOptions
+        else None
+    )
     if type(backend) is str and backend == "cpp":
-        execution_info = vars(basis).get("_basis_backend") if type(basis) is CertificateBasis else None
+        execution_info = (
+            vars(basis).get("_basis_backend")
+            if type(basis) is CertificateBasis
+            else None
+        )
         actual, native_work, python_work, decline, attempted = (
-            ("python", None, None, "ineligible", False) if execution_info is None else execution_info
+            ("python", None, None, "ineligible", False)
+            if execution_info is None
+            else execution_info
         )
         counters = [("rows", basis.rows), ("native_attempted", int(attempted))]
         if native_work is not None:
@@ -530,10 +593,11 @@ def _certify(
         except MemoryError:
             pass  # Optional handoff only; original inner checks remain required.
         inner = (
-            inner_evidence(point, effects, rows.curvature, controls.tol,
-                           _projection=projection)
-            if projection is not None else
-            inner_evidence(point, effects, rows.curvature, controls.tol)
+            inner_evidence(
+                point, effects, rows.curvature, controls.tol, _projection=projection
+            )
+            if projection is not None
+            else inner_evidence(point, effects, rows.curvature, controls.tol)
         )
         del projection
         steps.extend(inner.steps)
@@ -541,8 +605,14 @@ def _certify(
             errors["inner"] = inner.reason
         reuse = None if execution is None else execution.offer(point, rows, basis)
         geometry, measures, scaled, check = _measured(
-            point, rows, basis, controls, scale, factors=(fixed, reuse),
-            errors=errors, steps=steps,
+            point,
+            rows,
+            basis,
+            controls,
+            scale,
+            factors=(fixed, reuse),
+            errors=errors,
+            steps=steps,
         )
     parts = (controls, point, basis, rows, effects, inner, geometry, measures)
     found = FEPointCertificate(
@@ -556,7 +626,7 @@ def _certify(
 
 
 def assessment(certificate: FEPointCertificate) -> Assessment:
-    """The retry reading of a certificate.
+    """The M0 retry reading of a certificate.
 
     ``accepted`` at either level, ``score`` the scaled score, ``error`` the larger of
     the scaled score and the index correction, NaN when either is NaN.
@@ -615,23 +685,6 @@ def certify_candidate(
         whole = WholePoint(history.sample, candidate.variance, point)
         absorbed = candidate.absorbed
         certificate = certify_point(whole, controls, absorbed=absorbed, scale=scale)
-    return CandidateAudit(history, controls, certificate)
-
-
-def certify_linear_candidate(
-    candidate: AbsorbedLinearCandidate,
-    controls: CertificateControls,
-    *,
-    scale: FEScaleProvider,
-) -> CandidateAudit:
-    """Audit an absorbed WLS candidate with the caller's explicit controls."""
-    if type(controls) is not CertificateControls:
-        raise TypeError("controls must be CertificateControls")
-    history = linear_history(candidate)
-    admitted, point, certificate = history.candidate, history.point, None
-    if isinstance(point, LinearPoint) and isinstance(admitted, AbsorbedLinearCandidate):
-        inner = admitted.controls
-        certificate = certify_point(point, controls, absorbed=inner, scale=scale)
     return CandidateAudit(history, controls, certificate)
 
 

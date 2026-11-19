@@ -1,6 +1,7 @@
 """The four designs of the three-way panel simulation.
 
-The design is that of the tables of Weidner and Zylkin (2021).  A panel of
+Port of ``wz_fe_sim/dgp/innovations.py`` and ``wz_fe_sim/dgp/transform.py``, which
+implement the design of the tables of Weidner and Zylkin (2021).  A panel of
 exporters ``i``, importers ``j`` and years ``t`` has
 
     x[i,j,t] = x[i,j,t-1] / 2 + a[i,t] + g[j,t] + nu[i,j,t]
@@ -60,7 +61,7 @@ def _philox_key(seed: int, draw: int) -> npt.NDArray[np.uint64]:
 
 
 def _box_muller(bitgen: np.random.Philox, n: int) -> FloatArray:
-    """Standard normals from raw 64-bit words.
+    """Standard normals from raw 64-bit words (``_normals``).
 
     The stream depends on the Philox bit generator and not on the algorithm of
     ``Generator.normal``.
@@ -104,7 +105,7 @@ def master_innovations(
 def _threeway_master(
     innovations: Mapping[str, FloatArray],
 ) -> tuple[FloatArray, FloatArray, FloatArray]:
-    """Regressor, log mean and standardized disturbance.
+    """Regressor, log mean and standardized disturbance (``build_master``).
 
     The regressor follows ``x[t] = x[t-1] / 2 + a[i,t] + g[j,t] + nu[i,j,t]`` and the
     disturbance is a stationary AR(1) with coefficient 0.3 and unit variance.

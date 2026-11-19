@@ -1,6 +1,6 @@
 """Detach cancelled solver diagnostics without copying the outer captured fit.
 
-Provenance is lossless, but mutable array metadata returned to callers
+Design 02.9: provenance is lossless, but mutable array metadata returned to callers
 must not mutate the retained record. Immutable owned storage and current-point
 IdentifiedState are shared; only outward diagnostic records are detached.
 """
@@ -12,7 +12,7 @@ from dataclasses import fields, is_dataclass, replace
 from types import MappingProxyType
 
 from powermean.data.accounting import MissingAccount
-from powermean.data.raw import RawInputs
+from powermean.data.raw import RawInputs, _OwnedMapping
 from powermean.results.owned import _owned_attempt, _owned_coefficients
 from powermean.solve.cancelled_records import (
     CancelledCertificate,
@@ -32,10 +32,10 @@ def _mapping_memo(value: object, memo: dict[int, object], seen: set[int]) -> Non
     if id(value) in seen or id(value) in memo:
         return
     seen.add(id(value))
-    if isinstance(value, MappingProxyType):
+    if isinstance(value, (MappingProxyType, _OwnedMapping)):
         for item in value.values():
             _mapping_memo(item, memo, seen)
-        memo[id(value)] = MappingProxyType(copy.deepcopy(dict(value), memo))
+        memo[id(value)] = type(value)(copy.deepcopy(dict(value), memo))
     elif is_dataclass(value) and not isinstance(value, type):
         for field in fields(value):
             _mapping_memo(getattr(value, field.name), memo, seen)

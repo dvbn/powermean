@@ -1,4 +1,8 @@
-"""Owned input-value helpers, result-local keys, and RetainedInputSnapshot."""
+"""Owned input-value helpers, result-local keys, and RetainedInputSnapshot.
+
+``design/02_computation.md``, Sections 2 and 7; ``plan/evidence/M1.15_contract.txt``,
+items 1, 3 and 4; ``brief/layout_C_ownership.txt`` (P01).
+"""
 
 from __future__ import annotations
 
@@ -6,7 +10,7 @@ import math
 import operator
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any, cast, overload
+from typing import Any, cast, overload
 
 import numpy as np
 import pandas as pd
@@ -41,10 +45,6 @@ from powermean.results.retained_labels import (
     _stored_raw_elements,
     build_label_batch,
 )
-
-if TYPE_CHECKING:
-    # The primitive snapshot module imports this one; the parts record is a type here.
-    from powermean.results.primitive_parts import PrimitiveParts
 
 InputKey = int
 SampleKey = int
@@ -112,6 +112,8 @@ def _is_missing_scalar(value: object) -> bool:
     """Return True if ``value`` is a missing marker or nonfinite float."""
     if value is None or value is pd.NA or value is pd.NaT:
         return True
+    if type(value) is np.longdouble:
+        return not bool(np.isfinite(value))
     if isinstance(value, float | np.floating):
         return not math.isfinite(float(value))
     if isinstance(value, np.datetime64 | np.timedelta64):
@@ -354,13 +356,7 @@ class RetainedInputSnapshot:
     The clean internal fit path transfers one already isolated working capture
     through _from_owned_prepared; no duplicate baseline or snapshot is constructed.
     Its outward accessors are the same fresh-copy accessors below.
-    General route: the private storage is a deep copy of the base and of the prepared
-    frame's parts, and every accessor copies it again.  Primitive route
-    (:meth:`_from_parts`): the private storage is the once-materialized
-    :class:`~powermean.results.primitive_parts.PrimitiveParts` of the owning context
-    (``_parts``), immutable views over the capture's bytes shared inside that context;
-    no model frame is retained, and every accessor materializes afresh from the
-    capture, or selects fresh objects at the requested rows.
+    Other constructors own copies of the base and optional frame parts.
     """
 
     key: InputKey
@@ -372,7 +368,6 @@ class RetainedInputSnapshot:
     _frame: ModelFrame | None
     _labels: pd.Index[Any] | None
     _effects: EffectColumns | None
-    _parts: PrimitiveParts | None
 
     def __init__(
         self,
@@ -410,7 +405,6 @@ class RetainedInputSnapshot:
                 "_effects",
                 None if prepared is None else _owned_effect_columns(prepared.effects),
             ),
-            ("_parts", None),
         ):
             object.__setattr__(self, attr, val)
 
@@ -428,78 +422,46 @@ class RetainedInputSnapshot:
         """Use private fit-owned parts; every outward accessor still detaches."""
         snap = object.__new__(cls)
         for name, value in (
-            ("key", int(key)), ("nobs", prepared.base.nobs),
-            ("columns", prepared.columns), ("subset_missing", prepared.subset_missing),
-            ("_dependence", prepared.dependence), ("_base", prepared.base),
-            ("_frame", prepared._frame), ("_labels", prepared._labels),
-            ("_effects", prepared.effects), ("_parts", None),
+            ("key", int(key)),
+            ("nobs", prepared.base.nobs),
+            ("columns", prepared.columns),
+            ("subset_missing", prepared.subset_missing),
+            ("_dependence", prepared.dependence),
+            ("_base", prepared.base),
+            ("_frame", prepared._frame),
+            ("_labels", prepared._labels),
+            ("_effects", prepared.effects),
         ):
             object.__setattr__(snap, name, value)
-        return snap
-
-    @classmethod
-    def _from_parts(
-        cls, parts: PrimitiveParts, *, key: InputKey = 0
-    ) -> RetainedInputSnapshot:
-        """The snapshot of the primitive route, over the context's parts.
-
-        Internal to that route: ``parts`` are the once-materialized parts of the
-        context's immutable capture, held nowhere outward; the snapshot shares them as
-        its private storage, retains no model frame, and materializes every outward part
-        afresh from the capture.
-        """
-        # Keep the ordinary constructor's signature and ownership behavior intact.
-        # This private factory is called only with the context's unexposed parts.
-        # Normal initialization costs one base copy at preparation, never at a
-        # consumer entry; the copy is replaced by the context-owned storage below.
-        snap = cls(parts.base, key=key)
-        for attr, val in (
-            ("nobs", parts.nobs),
-            ("columns", parts.columns),
-            ("subset_missing", parts.capture.subset_missing),
-            ("_dependence", parts.dependence),
-            ("_base", parts.base),
-            ("_labels", parts.labels),
-            ("_effects", parts.effects),
-            ("_parts", parts),
-        ):
-            object.__setattr__(snap, attr, val)
         return snap
 
     @property
     def dependence(self) -> DependenceProvenance | None:
         """Return a fresh deeply owned ``DependenceProvenance``, or ``None``."""
-        if self._parts is not None:
-            return self._parts.capture.dependence_provenance()
         return _owned_dependence_provenance(self._dependence)
 
     @property
     def base(self) -> SampleBase:
         """Return a fresh deeply owned ``SampleBase``."""
-        if self._parts is not None:
-            return self._parts.capture.sample_base()
         result = _owned_sample_base(self._base)
         if self._dependence is not None:
             metadata = dict(result.inputs.metadata.columns)
             for name, column in self._dependence.columns.items():
                 if name not in metadata:
                     metadata[name] = Column(column.values)
-            object.__setattr__(result.inputs, "metadata",
-                               AlignedColumns(metadata, self.nobs))
+            object.__setattr__(
+                result.inputs, "metadata", AlignedColumns(metadata, self.nobs)
+            )
         return result
 
     @property
     def frame(self) -> ModelFrame | None:
         """Return a fresh deeply owned ``ModelFrame``, or ``None``."""
-        if self._parts is not None:
-            return self._parts.capture.model_frame()
         return None if self._frame is None else _owned_model_frame(self._frame)
 
     @property
     def labels(self) -> pd.Index[Any]:
         """Return a fresh owned copy of the full-frame user row ``Index``."""
-        if self._parts is not None:
-            return self._parts.capture.labels_index()
         if self._labels is None:
             return pd.Index(range(self.nobs))
         return _owned_index(self._labels)
@@ -507,18 +469,10 @@ class RetainedInputSnapshot:
     @property
     def effects(self) -> EffectColumns | None:
         """Return a fresh deeply owned ``EffectColumns``, or ``None``."""
-        if self._parts is not None:
-            return self._parts.capture.effect_columns()
         return _owned_effect_columns(self._effects)
 
     def labels_at(self, positions: IndexArray) -> pd.Index[Any]:
-        """Return a fresh owned user row ``Index`` sliced at ``positions``.
-
-        Primitive route: a fresh selection of the parts' plain labels, not a copy of
-        every label first (:meth:`PrimitiveParts.labels_at`).
-        """
-        if self._parts is not None:
-            return self._parts.labels_at(positions)
+        """Return a fresh owned user row index sliced at ``positions``."""
         return self.labels.take(positions)
 
     def metadata_at(self, positions: IndexArray) -> AlignedColumns:

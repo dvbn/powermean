@@ -8,13 +8,49 @@ array header, sample or provider.
 
 from __future__ import annotations
 
-from bisect import bisect_left
-from collections.abc import Iterator, Sequence
-from fractions import Fraction
 import math
-from typing import Callable, NamedTuple, cast
+from bisect import bisect_left
+from collections.abc import Callable, Iterator, Sequence
+from fractions import Fraction
+from typing import TYPE_CHECKING, NamedTuple, Protocol, cast
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from typing import ClassVar, SupportsIndex, dataclass_transform
+
+    from powermean.fe.certificate_basis import (
+        BoolArray,
+        Rational,
+        Row,
+        _AuditPrimitives,
+        _CanonicalWitness,
+        _DependentKernel,
+        _FractionConstructor,
+        _ReferenceKernel,
+        _WitnessAudit,
+    )
+    from powermean.model.order import IndexArray
+
+    class _IndexBuffer(Protocol):
+        def __call__(self, buffer: bytes, /, *, dtype: type[np.intp]) -> IndexArray: ...
+
+    @dataclass_transform(frozen_default=True)
+    class _ValueTuple:
+        """Immutable named fields and positional access as in the runtime tuple."""
+
+        _fields: ClassVar[tuple[str, ...]]
+
+        def __len__(self) -> int: ...
+
+        def __iter__(self) -> Iterator[object]: ...
+
+        def __getitem__(self, key: SupportsIndex | slice, /) -> object: ...
+
+else:
+    # Use the original tuple factory, including its field descriptors and methods.
+    _ValueTuple = NamedTuple
+
 
 Witness = tuple[tuple[int, int, int], ...]
 
@@ -34,9 +70,9 @@ class SparseValues(NamedTuple):
         """The exact promised ordered rational triples on actual demand."""
         if not self.denominators:
             return tuple((p, n, 1) for p, n in self.items())
-        return tuple(zip(
-            self.positions, self.numerators, self.denominators, strict=True
-        ))
+        return tuple(
+            zip(self.positions, self.numerators, self.denominators, strict=True)
+        )
 
     def at(self, column: int, _fraction: type[Fraction] = Fraction) -> int | Fraction:
         """One exact coefficient, without expanding the other entries."""
@@ -44,8 +80,11 @@ class SparseValues(NamedTuple):
         if index == len(self.positions) or self.positions[index] != column:
             return 0
         numerator = self.numerators[index]
-        return (numerator if not self.denominators else
-                _fraction(numerator, self.denominators[index]))
+        return (
+            numerator
+            if not self.denominators
+            else _fraction(numerator, self.denominators[index])
+        )
 
 
 class HeadRecipe(NamedTuple):
@@ -67,7 +106,8 @@ class HeadRecipe(NamedTuple):
         return value
 
     def expanded(
-        self, _gcd: Callable[..., int] = math.gcd,
+        self,
+        _gcd: Callable[..., int] = math.gcd,
         _lcm: Callable[..., int] = math.lcm,
     ) -> SparseValues:
         """Reconstruct the SAME historical primitive row only on actual demand."""
@@ -90,7 +130,7 @@ class HeadRecipe(NamedTuple):
         return SparseValues(columns, tuple(integers[c] // divisor for c in columns))
 
 
-class PackedHeads(NamedTuple):
+class PackedHeads(_ValueTuple):
     """Dense head prefix, with original anchors and immutable birth versions.
 
     No per-level Python record exists until an actual outward demand. The
@@ -105,16 +145,30 @@ class PackedHeads(NamedTuple):
     versions: tuple[SparseValues, ...]
     later: tuple[SparseValues, ...] = ()
 
-    def head(self, index: int, _recipe: type[HeadRecipe] = HeadRecipe,
-             _buffer=np.frombuffer, _index=np.intp) -> HeadRecipe:
+    def head(
+        self,
+        index: int,
+        _recipe: type[HeadRecipe] = HeadRecipe,
+        _buffer: _IndexBuffer = np.frombuffer,
+        _index: type[np.intp] = np.intp,
+    ) -> HeadRecipe:
+        """The recipe of the head ``index``, read from the stored offsets."""
         offsets = _buffer(self.offsets, dtype=_index)
         low, high = int(offsets[index]), int(offsets[index + 1])
         anchors = _buffer(self.anchors, dtype=_index)[low:high]
         births = _buffer(self.births, dtype=_index)[low:high]
-        return tuple.__new__(_recipe, (index, tuple(map(int, anchors)), tuple(
-            (int(column), self.versions[int(version)])
-            for column, version in zip(anchors, births, strict=True) if version >= 0
-        )))
+        return tuple.__new__(
+            _recipe,
+            (
+                index,
+                tuple(map(int, anchors)),
+                tuple(
+                    (int(column), self.versions[int(version)])
+                    for column, version in zip(anchors, births, strict=True)
+                    if version >= 0
+                ),
+            ),
+        )
 
 
 class RetainedRows(NamedTuple):
@@ -134,7 +188,7 @@ class RetainedRows(NamedTuple):
     norm: Fraction
 
 
-class HeadRows(NamedTuple):
+class HeadRows(_ValueTuple):
     """Operational head anchors in the existing immutable input topology.
 
     Only the first source row of each head is retained. No primitive row,
@@ -146,13 +200,26 @@ class HeadRows(NamedTuple):
     codes: tuple[bytes, ...]
     columns: tuple[bytes, ...]
 
-    def anchor(self, index: int, _buffer=np.frombuffer, _index=np.intp) -> tuple[int, ...]:
+    def anchor(
+        self,
+        index: int,
+        _buffer: _IndexBuffer = np.frombuffer,
+        _index: type[np.intp] = np.intp,
+    ) -> tuple[int, ...]:
+        """The columns that anchor the entry ``index``, from its first row."""
         row = int(_buffer(self.first, dtype=_index)[index])
-        return tuple(column for codes, columns in zip(
-            self.codes[1:], self.columns[1:], strict=True
-        ) if (column := int(_buffer(columns, dtype=_index)[
-            int(_buffer(codes, dtype=_index)[row])
-        ])) >= 0)
+        return tuple(
+            column
+            for codes, columns in zip(self.codes[1:], self.columns[1:], strict=True)
+            if (
+                column := int(
+                    _buffer(columns, dtype=_index)[
+                        int(_buffer(codes, dtype=_index)[row])
+                    ]
+                )
+            )
+            >= 0
+        )
 
 
 class FactoredRows(NamedTuple):
@@ -166,14 +233,20 @@ class FactoredRows(NamedTuple):
     def dependent(self, column: int, minimum: int = 0) -> Witness:
         """Demand one column of A_D - A_Q T and T, in canonical J order."""
         found: list[tuple[int, int, int]] = []
-        count = (self.heads.count if type(self.heads) is PackedHeads or type(self.heads) is HeadRows
-                 else len(self.heads))
+        count = (
+            self.heads.count
+            if type(self.heads) is PackedHeads or type(self.heads) is HeadRows
+            else len(self.heads)
+        )
         for position in range(minimum, count):
             if type(self.heads) is HeadRows:
                 anchor = self.heads.anchor(position)
             else:
-                head = (self.heads.head(position) if type(self.heads) is PackedHeads
-                        else self.heads[position])
+                head = (
+                    self.heads.head(position)
+                    if type(self.heads) is PackedHeads
+                    else cast("tuple[HeadRecipe, ...]", self.heads)[position]
+                )
                 anchor = head.anchor
             value: int | Fraction = int(column in anchor)
             for pivot in anchor:
@@ -186,6 +259,32 @@ class FactoredRows(NamedTuple):
             if position >= minimum and (value := row.at(column)):
                 found.append((position, value.numerator, value.denominator))
         return tuple(found)
+
+
+if TYPE_CHECKING:
+
+    class _ReferenceRows(Protocol):
+        """The common inputs of the shared exact reference methods."""
+
+        @property
+        def columns(self) -> tuple[bytes, ...]: ...
+
+        @property
+        def components(self) -> tuple[bytes, ...]: ...
+
+        @property
+        def positions(self) -> tuple[bytes, ...]: ...
+
+        def dependent(self, column: int, minimum: int = 0) -> Witness: ...
+
+        def _add(
+            self,
+            total: dict[int, int | Fraction],
+            position: int,
+            column: int,
+            multiple: int,
+            minimum: int = 0,
+        ) -> None: ...
 
 
 class WitnessContext(NamedTuple):
@@ -203,11 +302,20 @@ class WitnessContext(NamedTuple):
         if self.factors is not None:
             return self.factors.dependent(column, minimum)
         index = bisect_left(self.dependent_columns, column)
-        return tuple(term for term in self.dependent_values[index].canonical()
-                     if term[0] >= minimum)
+        return tuple(
+            term
+            for term in self.dependent_values[index].canonical()
+            if term[0] >= minimum
+        )
 
-    def _add(self, total: dict[int, int | Fraction], position: int,
-             column: int, multiple: int, minimum: int = 0) -> None:
+    def _add(
+        self: _ReferenceRows,
+        total: dict[int, int | Fraction],
+        position: int,
+        column: int,
+        multiple: int,
+        minimum: int = 0,
+    ) -> None:
         """The original exact sparse addition, including immediate zero cancellation."""
         if position >= 0:
             if position < minimum:
@@ -225,7 +333,10 @@ class WitnessContext(NamedTuple):
                 total.pop(p, None)
 
     def references(
-        self, block: int, levels: Sequence[int], minimum: int = 0,
+        self: _ReferenceRows,
+        block: int,
+        levels: Sequence[int],
+        minimum: int = 0,
     ) -> dict[int, Witness]:
         """Compose only requested reference values, with one ordered pass per block.
 
@@ -245,17 +356,25 @@ class WitnessContext(NamedTuple):
         columns = np.frombuffer(self.columns[block], dtype=np.intp)
         for level, component in enumerate(first):
             if int(component) in totals:
-                self._add(totals[int(component)], int(first_positions[level]),
-                          int(first_columns[level]), 1, minimum)
+                self._add(
+                    totals[int(component)],
+                    int(first_positions[level]),
+                    int(first_columns[level]),
+                    1,
+                    minimum,
+                )
         for level, component in enumerate(components):
             key = int(component)
             if key in totals and level != reference[key]:
-                self._add(totals[key], int(positions[level]), int(columns[level]),
-                          -1, minimum)
+                self._add(
+                    totals[key], int(positions[level]), int(columns[level]), -1, minimum
+                )
         return {
-            level: tuple((p, value.numerator, value.denominator)
-                         for p, value in sorted(totals[int(components[level])].items())
-                         if value)
+            level: tuple(
+                (p, value.numerator, value.denominator)
+                for p, value in sorted(totals[int(components[level])].items())
+                if value
+            )
             for level in levels
         }
 
@@ -283,24 +402,36 @@ class WitnessBlock(NamedTuple):
             if value is None:
                 assert self.context is not None
                 return self.context.references(self.block, (level,))[level]
-            return value
+            return cast("Witness", value)
         return ((self.start + level - index, 1, 1),)
 
     def materialize(self) -> tuple[Witness, ...]:
         """Complete canonical tuple for an actual rich/public consumer."""
-        requested = [level for level, value in zip(self.levels, self.values, strict=True)
-                     if value is None]
-        references = ({} if not requested or self.context is None
-                      else self.context.references(self.block, requested))
+        requested = [
+            level
+            for level, value in zip(self.levels, self.values, strict=True)
+            if value is None
+        ]
+        references = (
+            {}
+            if not requested or self.context is None
+            else self.context.references(self.block, requested)
+        )
         found: list[Witness] = []
         index, position = 0, self.start
+        # The producer pairs every dependent column number with its context.
         for level in range(self.size):
             if index < len(self.levels) and self.levels[index] == level:
                 value = self.values[index]
-                found.append(value.canonical() if type(value) is SparseValues
-                             else self.context.dependent(value)
-                             if type(value) is int and self.context is not None
-                             else references[level] if value is None else value)
+                found.append(
+                    value.canonical()
+                    if type(value) is SparseValues
+                    else self.context.dependent(value)
+                    if type(value) is int and self.context is not None
+                    else references[level]
+                    if value is None
+                    else cast("Witness", value)
+                )
                 index += 1
             else:
                 found.append(((position, 1, 1),))
@@ -312,35 +443,52 @@ class WitnessBlock(NamedTuple):
         requested = []
         for level in levels:
             index = bisect_left(self.levels, level)
-            if (index < len(self.levels) and self.levels[index] == level
-                    and self.values[index] is None):
+            if (
+                index < len(self.levels)
+                and self.levels[index] == level
+                and self.values[index] is None
+            ):
                 requested.append(level)
-        references = ({} if not requested or self.context is None
-                      else self.context.references(self.block, requested))
+        references = (
+            {}
+            if not requested or self.context is None
+            else self.context.references(self.block, requested)
+        )
         for level in levels:
             yield references[level] if level in references else self.witness(level)
 
     def iter_witnesses(self) -> Iterator[Witness]:
         """Stream all declared terms when a numerical consumer really needs them."""
-        if (type(self) is not WitnessBlock
-                or WitnessBlock.witness is not _BLOCK_WITNESS
-                or WitnessBlock.__getattribute__ is not _BLOCK_ACCESS):
+        if (
+            type(self) is not WitnessBlock
+            or WitnessBlock.witness is not _BLOCK_WITNESS
+            or WitnessBlock.__getattribute__ is not _BLOCK_ACCESS
+        ):
             for level in range(self.size):
                 yield self.witness(level)
             return
-        requested = [level for level, value in zip(self.levels, self.values, strict=True)
-                     if value is None]
-        references = ({} if not requested or self.context is None
-                      else self.context.references(self.block, requested))
+        requested = [
+            level
+            for level, value in zip(self.levels, self.values, strict=True)
+            if value is None
+        ]
+        references = (
+            {}
+            if not requested or self.context is None
+            else self.context.references(self.block, requested)
+        )
         for level in range(self.size):
             yield references[level] if level in references else self.witness(level)
+
+
+type _EchelonRow = tuple[tuple[int, int], ...] | SparseValues | HeadRecipe
 
 
 class WitnessProof(NamedTuple):
     """Canonical exceptions/echelon, detached from every mutable producer map."""
 
     blocks: tuple[WitnessBlock, ...]
-    echelon: tuple[tuple[tuple[int, int], ...] | SparseValues | HeadRecipe, ...] | PackedHeads
+    echelon: tuple[_EchelonRow, ...] | PackedHeads
     retained: RetainedRows | None = None
 
     def witness(self, block: int, level: int) -> Witness:
@@ -354,20 +502,84 @@ class WitnessProof(NamedTuple):
     def materialize_echelon(self) -> tuple[tuple[tuple[int, int], ...], ...]:
         """Expose historical integer rows as the unchanged exact outward tuples."""
         if type(self.echelon) is PackedHeads:
-            return tuple(tuple(self.echelon.head(index).expanded().items())
-                         for index in range(self.echelon.count)) + tuple(
-                tuple(row.items()) for row in self.echelon.later
-            )
-        return tuple(tuple(row.expanded().items()) if type(row) is HeadRecipe else
-                     tuple(row.items()) if type(row) is SparseValues else row
-                     for row in self.echelon)
+            return tuple(
+                tuple(self.echelon.head(index).expanded().items())
+                for index in range(self.echelon.count)
+            ) + tuple(tuple(row.items()) for row in self.echelon.later)
+        return tuple(
+            tuple(row.expanded().items())
+            if type(row) is HeadRecipe
+            else tuple(row.items())
+            if type(row) is SparseValues
+            else cast("tuple[tuple[int, int], ...]", row)
+            for row in cast("tuple[_EchelonRow, ...]", self.echelon)
+        )
 
 
 _BLOCK_WITNESS = WitnessBlock.witness
 _BLOCK_ACCESS = WitnessBlock.__getattribute__
 
 
-class OperationalBasis(NamedTuple):
+type _AuditView = tuple[
+    tuple[tuple[Witness, ...], ...], tuple[tuple[tuple[int, int], ...], ...]
+]
+
+
+if TYPE_CHECKING:
+
+    class _ReduceKernel(Protocol):
+        def __call__(
+            self, row: Row, pivots: dict[int, Row], /, *, _primitives: _AuditPrimitives
+        ) -> Row: ...
+
+    class _ColumnKernel(Protocol):
+        def __call__(
+            self,
+            pivots: dict[int, Row],
+            kept: list[int],
+            count: int,
+            /,
+            *,
+            _audit: tuple[_DependentKernel, _FractionConstructor],
+        ) -> dict[int, Rational]: ...
+
+    class _WitnessKernel(Protocol):
+        def __call__(
+            self,
+            grouping: None,
+            parts: None,
+            columns: tuple[IndexArray, ...],
+            of_column: dict[int, Rational],
+            /,
+            *,
+            _audit: _WitnessAudit,
+        ) -> tuple[tuple[Witness, ...], ...]: ...
+
+    type _AuditKernels = tuple[
+        _ReduceKernel,
+        _ColumnKernel,
+        _DependentKernel,
+        _WitnessKernel,
+        _CanonicalWitness,
+        _ReferenceKernel,
+        _AuditPrimitives,
+        Callable[[BoolArray], IndexArray],
+    ]
+    # Fixed lengths let the existing guard narrow the optional replay callback.
+    type _AuditWithReplay = tuple[
+        _ReduceKernel,
+        _ColumnKernel,
+        _DependentKernel,
+        _WitnessKernel,
+        _CanonicalWitness,
+        _ReferenceKernel,
+        _AuditPrimitives,
+        Callable[[BoolArray], IndexArray],
+        Callable[[OperationalBasis], _AuditView | None],
+    ]
+
+
+class OperationalBasis(_ValueTuple):
     """One numerical layout/action, not a certificate presentation graph.
 
     The immutable topology bytes already belong to this fit. Final tails and
@@ -382,28 +594,43 @@ class OperationalBasis(NamedTuple):
     retained: RetainedRows | None = None
 
     def dependent(self, column: int, minimum: int = 0) -> Witness:
+        """The witness of ``column`` from the factored rows (``FactoredRows``)."""
         return self.factors.dependent(column, minimum)
 
     _add = WitnessContext._add
     references = WitnessContext.references
 
-    def audit(self, kernels: tuple, _buffer=np.frombuffer, _index=np.intp) -> tuple[
-            tuple[tuple[Witness, ...], ...],
-            tuple[tuple[tuple[int, int], ...], ...]]:
+    def audit(
+        self,
+        kernels: _AuditKernels | _AuditWithReplay,
+        _buffer: _IndexBuffer = np.frombuffer,
+        _index: type[np.intp] = np.intp,
+    ) -> _AuditView:
         """Adapt immutable values through the one existing exact audit kernels.
 
         The caller supplies the package's captured original kernels/primitives.
         No fit, provider, profile, absorption, verdict or numerical capability is
         consumed, and no result is cached on this value-only record.
         """
-        reduce, column_witnesses, dependent, witnesses, canonical, reference, primitives, flat = kernels[:8]
+        (
+            reduce,
+            column_witnesses,
+            dependent,
+            witnesses,
+            canonical,
+            reference,
+            primitives,
+            flat,
+        ) = kernels[:8]
         if len(kernels) > 8:
             try:
                 replayed = kernels[8](self)
             except (MemoryError, TypeError, ValueError, IndexError, OverflowError):
-                replayed = None  # Malformed/optional views keep the original checked route.
+                replayed = (
+                    None  # Malformed/optional views keep the original checked route.
+                )
             if replayed is not None:
-                return cast("tuple", replayed)
+                return replayed
         heads = self.factors.heads
         assert type(heads) is HeadRows
         columns = tuple(_buffer(raw, dtype=_index) for raw in self.columns)
@@ -411,16 +638,28 @@ class OperationalBasis(NamedTuple):
         parts = tuple(_buffer(raw, dtype=_index) for raw in self.components)
         pivots: dict[int, dict[int, int]] = {}
         for values in zip(*codes, strict=True):
-            row = reduce(dict.fromkeys((int(col[int(code)]) for col, code in
-                         zip(columns, values, strict=True) if col[int(code)] >= 0), 1),
-                         pivots, _primitives=primitives)
+            row = reduce(
+                dict.fromkeys(
+                    (
+                        int(col[int(code)])
+                        for col, code in zip(columns, values, strict=True)
+                        if col[int(code)] >= 0
+                    ),
+                    1,
+                ),
+                pivots,
+                _primitives=primitives,
+            )
             if row:
                 pivots[min(row)] = row
         kept = sorted(pivots)
         count = sum(int((column >= 0).sum()) for column in columns)
-        maps = column_witnesses(pivots, kept, count,
-                                _audit=(dependent, primitives[5]))
-        views = witnesses(None, None, columns, maps,
-                          _audit=(parts, tuple(len(c) for c in columns),
-                                  flat, canonical, reference))
+        maps = column_witnesses(pivots, kept, count, _audit=(dependent, primitives[5]))
+        views = witnesses(
+            None,
+            None,
+            columns,
+            maps,
+            _audit=(parts, tuple(len(c) for c in columns), flat, canonical, reference),
+        )
         return views, tuple(tuple(sorted(pivots[p].items())) for p in kept)

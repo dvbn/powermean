@@ -1,4 +1,4 @@
-"""Explicit learned-design contrasts.
+"""Explicit learned-design contrasts, design/04 Sections 9.1, 9.2 and 9.5.
 
 Only the two supplied raw RHS rows are replayed. The common design-target engine
 owns validation/alignment and the effects engine owns inference. A contrast-only
@@ -23,6 +23,7 @@ from powermean.effects.targets import (
     IntervalKind,
     ReportingContext,
     TargetEstimate,
+    _target_influence_rows,
     evaluate,
 )
 from powermean.errors import SpecificationError
@@ -183,7 +184,9 @@ class ContrastResult:
         source = self._influence_provider()
         if tuple(source.columns) != self.context.names:
             raise ValueError("target influence and coefficient basis differ")
-        values = source.to_numpy(dtype=np.float64) @ self.gradient
+        values = _target_influence_rows(
+            source.to_numpy(dtype=np.float64), self.gradient
+        )
         return pd.Series(
             np.array(values, dtype=np.float64, copy=True),
             index=source.index.copy(deep=True),

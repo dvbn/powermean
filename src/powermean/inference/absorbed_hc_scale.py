@@ -4,13 +4,10 @@ from __future__ import annotations
 
 import numpy as np
 
+from powermean.inference.absorbed_block_hc import BlockPreflight, block_composition
 from powermean.inference.absorbed_preflight import AbsorbedPreflight
 from powermean.inference.convention import (
     Covariance,
-)
-from powermean.inference.hc import (
-    HCComposition,
-    _absorbed_composition,
 )
 from powermean.inference.ssc import (
     direct_errors,
@@ -45,23 +42,32 @@ def hc_scale(
             ).fisher_curvature,
             dtype=np.float64,
         )
-    hc_cov = _absorbed_composition(
+    # Fixed-effect log-OLS forms its named HC in
+    # :mod:`powermean.inference.absorbed_linear` and holds no scale input.
+    held = pre.hc_preflight
+    assert type(held) is BlockPreflight
+    hc_cov = block_composition(
         design,
         basis,
         rows,
         fisher,
-        request.method,
-        convention=pre.resolved,
+        held,
         bread=request.bread,
-        prepared=HCComposition(pre.hc_preflight, pre.code_tuples, influence),
+        observed_influence=influence,
     )
-    errors = direct_errors(hc_cov.covariance, order)
+    # An undefined request (a hat above the near-one warning criterion) holds a missing
+    # covariance: the fit's coefficient gate then reads the unadjusted estimate of
+    # the same rows, and the reported covariance of the request is missing.
+    errors = direct_errors(hc_cov.gate_covariance, order)
     rep_cov: FloatArray | None = None
     cov_err: str | None = None
-    try:
-        rep_cov = order.covariance(hc_cov.covariance)
-    except FloatingPointError as exc:
-        cov_err = str(exc)
+    if hc_cov.undefined:
+        rep_cov = hc_cov.covariance
+    else:
+        try:
+            rep_cov = order.covariance(hc_cov.covariance)
+        except FloatingPointError as exc:
+            cov_err = str(exc)
     cov_rec = Covariance(
         covariance=hc_cov.covariance,
         kind="hc",

@@ -1,11 +1,12 @@
 """Detached snapshots of the stages, directions and merit of an absorbed root solve.
 
-The start and the continuation path are recorded.  The leaf records of the retained
-selected-root route (:mod:`powermean.solve.absorbed_root`): every array is an owned copy
-made at ingress and handed out afresh; the solver's immutable scalar records (a
-direction record, a stage summary, the counted work) are kept with their mappings
-frozen.  Nothing here reads a sample, a history or a certificate: those snapshots are
-composed by :mod:`powermean.results.absorbed_root`.
+``design/02_computation.md``, Sections 5.3, 6 (the start and the continuation path,
+recorded) and 9 (provenance); decisions D51 and D57.  The leaf records of the
+retained selected-root route (:mod:`powermean.solve.absorbed_root`): every array is
+an owned copy made at ingress and handed out afresh; the solver's immutable scalar
+records (a direction record, a stage summary, the counted work) are kept with their
+mappings frozen.  Nothing here reads a sample, a history or a certificate: those
+snapshots are composed by :mod:`powermean.results.absorbed_root`.
 """
 
 from __future__ import annotations

@@ -1,13 +1,15 @@
 """The quantities of the certificate, from the sums and the observed bread.
 
-At a fresh evaluation of the
+``design/02_computation.md``, Section 7; decision D51.  At a fresh evaluation of the
 joint system (:mod:`powermean.systems.joint`), with the moment ``S``, the observed
 bread ``C = -dS/dgamma'`` and the active design ``X``:
 
     curvature        C_sym = (C + C')/2 positive definite: its Cholesky factor L,
                      L L' = C_sym, exists (:mod:`powermean.solve.factorization`)
-    scaled score     ||C_sym^(-1/2) S|| = ||L^-1 S||, where C_sym is positive definite
-    correction       p = C^-1 S by the equilibrated LU, when its estimate of the
+    scaled score     ||C_sym^(-1/2) S|| = ||L^-1 S||, where C_sym is positive definite,
+                     which the certificates read relative to the unit of the
+                     criterion (:func:`relative_score`)
+    correction       p = C^-1 S by S4's equilibrated LU, when its estimate of the
                      reciprocal condition number exceeds rcond_min: gamma + p is the
                      next Newton iterate, an additive correction
     index correction sqrt(sum_i n_i (x_i' p)^2 / sum_i n_i), the root mean square
@@ -19,7 +21,7 @@ The sums are those of the system, not the averages of the iteration, whose commo
 factor ``1/A`` leaves ``p`` unchanged but divides the scaled score by ``sqrt(A)``, and
 the curvature is the observed bread, not the expected information.  Frequency weights
 count replicated observations; analytic and probability weights, or none, count each
-row once: the caller states
+row once (``design/04_inference_and_effects.md``, Section 2.2): the caller states
 which, and the kind is never inferred from the values.  Rows of zero weight are not
 in the active design and enter nothing.  Each norm is formed on the values divided by
 the largest of them, and the multiplicities by theirs, so that no square or sum
@@ -121,6 +123,31 @@ def curvature(moment: FloatArray, bread: FloatArray) -> Curvature:
     )
 
 
+def relative_score(
+    scaled: float, unit: float, *, unit_free_metric: bool = False
+) -> float:
+    """The scaled score in the unit of its criterion: ``scaled / sqrt(unit)``.
+
+    ``||L^-1 S||^2 = S' C_sym^-1 S`` is the Newton decrement of the sums, homogeneous
+    in the unit of the outcome as the score ``S`` is: of degree ``2 - tau`` for the
+    joint equations of a power variance, of degree 1 for the cancelled equations.
+    The certificate compares the score with the pure numbers ``tol`` and
+    ``tol_secondary``, so it reads the score relative to that unit, ``unit`` being
+    :func:`~powermean.model.variance.score_unit` or
+    :func:`~powermean.model.variance.cancelled_score_unit`: the decrement in units of
+    the criterion, as R's ``glm`` reads the change of the deviance relative to the
+    deviance.  A unit of 1 leaves the score as formed; NaN stays NaN.
+
+    ``unit_free_metric``: the norm is taken in a fixed merit metric that does not
+    scale with the outcome (the Gram matrix of the design, or the Gamma curvature of
+    the joint equations at a start that moves with the outcome), so ``||L_M^-1 S||``
+    has the full degree of ``S`` and is read as ``scaled / unit``.
+    """
+    if unit == 1.0:
+        return scaled
+    return scaled / unit if unit_free_metric else scaled / math.sqrt(unit)
+
+
 class Step(NamedTuple):
     """The Newton correction and the estimate, or the error of the factorization."""
 
@@ -130,7 +157,7 @@ class Step(NamedTuple):
 
 
 def newton_step(moment: FloatArray, bread: FloatArray, rcond_min: float) -> Step:
-    """``p = C^-1 S`` from the equilibrated LU of ``C``, when it passes its test."""
+    """``p = C^-1 S`` from S4's equilibrated LU of ``C``, when it passes its test."""
     try:
         factor = factorize(bread, rcond_min)
     except SingularJacobianError as error:

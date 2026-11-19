@@ -1,9 +1,10 @@
 """The model frame of a formula's first part, evaluated by Formulaic on every row.
 
-A thin adapter to Formulaic's documented public API, not a formula engine.  The first
-part, ``outcome ~ regressors``, goes as written to the explicit native pandas
-materializer bridge (:mod:`powermean.formula.materialization`), which evaluates it
-with an explicit
+``DESIGN.md``, Section 4.2; ``design/02_computation.md``, Section 2, step 1;
+``design/06_reuse_map.md``, the rows of ``formula/`` (decisions D51 and D56).  A thin
+adapter to Formulaic's documented public API, not a formula engine.  The first part,
+``outcome ~ regressors``, goes as written to the explicit native pandas materializer
+bridge (:mod:`powermean.formula.materialization`), which evaluates it with an explicit
 empty context, so that no variable of a caller or of a module is ever read, explicit
 pandas output, and ``na_action="ignore"``, so that every row is kept; the fitted
 ``ModelSpec`` of the right-hand side is replayed and checked for ``na_action="drop"``
@@ -12,16 +13,16 @@ empty context and ``materializer="pandas"`` recorded on the fitted spec.  The
 outcome stays in the formula so that Formulaic reads the regressors as it reads any
 two-sided formula.  Formulaic owns their semantics: transformations, categorical
 encoding and contrasts, interactions, polynomials and splines, and the names and order
-of terms and columns.  Its structural contrast coding is not the package's
-collinearity resolution.  The outcome is the raw data column that Formulaic reads for it
+of terms and columns.  Its structural contrast coding is not the collinearity
+resolution of M1.  The outcome is the raw data column that Formulaic reads for it
 (:mod:`powermean.formula.grammar`).  Formulaic is called through the typed views of
 :mod:`powermean.formula.formulaic_api`.
 
-Evaluation is not sample selection.  The data
+Evaluation is not sample selection (``design/02``, Section 2; task M0.20).  The data
 are copied into an owned working frame indexed by position, so rows are never aligned
 by label and duplicate labels are kept.  A record keeps every input row in order, with
-the row labels, the raw outcome and three masks, kept apart for the sample
-accounting, which alone applies ``subset``, missing values, the domain and the weights:
+the row labels, the raw outcome and three masks, kept apart for the accounting of
+M0.20, which alone applies ``subset``, missing values, the domain and the weights:
 
 - ``ModelFrame.outcome_invalid``: the raw outcome is missing or infinite;
 - ``Design.referenced_invalid``: a data column that the regressors read is missing or
@@ -54,6 +55,13 @@ them, so it does not tell which columns Python reads, and it is not used.  With 
 empty context, a name loaded from the mapping that is not a column is one of
 Formulaic's transforms or a builtin.
 
+A supported literal ``Q("name")`` call also reads that raw column, including an
+escaped Python string.  The same scope-aware traversal attributes it only when
+``Q`` is the mapping's transform, not a data column or a locally bound name.  This
+rule applies to fitted and replayed designs alike.  Dynamic string reads are not
+inferred and do not make every column of a conservatively copied frame referenced;
+independently known direct and literal reads are still recorded.
+
 Formulaic's null check is read from a second materialization of the same fitted spec
 with ``na_action="drop"`` on the positional frame (Formulaic 1.0.0 has no ``drop_rows``
 argument): only the positions that it keeps are used, as bookkeeping of the rows that
@@ -84,8 +92,9 @@ multi-part syntax inside the first part.  Every other error, such as Formulaic's
 from __future__ import annotations
 
 import importlib.metadata
+from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import numpy as np
 import pandas as pd
@@ -121,8 +130,8 @@ class Design:
     formulaic_version : str
         The version of Formulaic that evaluated the matrix.
     _contrast_spec : formulaic.ModelSpec
-        A separate owned snapshot of fitted encoding/transform metadata. Contrast
-        clones its state per call; ordinary replay/prediction never receives it.
+        An owned snapshot of the fitted encoding and transform metadata used for
+        predictions on new data and for contrasts.
     """
 
     matrix: pd.DataFrame
@@ -170,7 +179,7 @@ def model_frame(formula: str, data: pd.DataFrame) -> ModelFrame:
     Parameters
     ----------
     formula : str
-        A formula of the grammar of :mod:`powermean.formula.grammar`.
+        A formula of ``DESIGN.md``, Section 4.2 (:mod:`powermean.formula.grammar`).
     data : pandas.DataFrame
         The data, read by position and never modified.
 
@@ -206,6 +215,48 @@ def model_frame(formula: str, data: pd.DataFrame) -> ModelFrame:
     )
 
 
+def names_read(text: str, columns: Iterable[str]) -> set[str] | None:
+    """The names of the columns that Formulaic's evaluation of ``text`` reads.
+
+    ``text`` is a formula that Formulaic evaluates on a frame with the columns
+    ``columns``: a first part, or the one-sided formula of an offset expression.  It is
+    parsed by Formulaic, not evaluated.  A factor that Formulaic looks up reads the
+    column of its name; a Python factor reads :func:`names.python_names` and
+    :func:`names.string_lookups`.  ``None`` when the columns read are known only from
+    the evaluation: ``text`` does not parse, has parts of Formulaic's own, uses the
+    operator ``.`` (every column not on the left-hand side, of the frame evaluated) or
+    reads a column by a string that the parse does not give.  The ``.`` is found by
+    Formulaic's own parser, given one available name that is no column (longer than
+    every name of ``columns``), which ``.`` alone can produce.
+    """
+    absent = "\x00" * (1 + max((len(name) for name in columns), default=0))
+    available = {"__formulaic_variables_available__": [absent]}
+    try:
+        parsed = formulaic.Formula(text, _context=available)
+        sides = (
+            (parsed,)
+            if isinstance(parsed, formulaic.SimpleFormula)
+            else (getattr(parsed, "lhs", None), getattr(parsed, "rhs", None))
+        )
+        read: set[str] = set()
+        for side in sides:
+            if not isinstance(side, formulaic.SimpleFormula):
+                return None
+            for term in side:
+                for factor in term.factors:
+                    method = factor.eval_method.value
+                    if method == "lookup":
+                        read.add(factor.expr)
+                    elif method == "python":
+                        by_string = names.string_lookups(factor.expr)
+                        if by_string is None:
+                            return None
+                        read |= by_string | names.python_names(factor.expr)
+    except Exception:  # Formulaic's or Python's refusal: told by the evaluation
+        return None
+    return None if absent in read else read
+
+
 def replay_design(design: Design, data: pd.DataFrame) -> Design:
     """Evaluate a fitted right-hand side on the rows of ``data``, learning nothing.
 
@@ -237,18 +288,28 @@ def _working_frame(data: pd.DataFrame) -> pd.DataFrame:
 
 
 def replay_contrast_design(design: Design, data: pd.DataFrame) -> Design:
-    """One contrast-only row replay, preserving fitted state and null diagnostics.
+    """Evaluate contrast rows against the fitted levels and transformation state."""
+    return _replay_fitted_design(design, data, argument="configurations")
 
-    Ordinary fit, prepare, prediction and replay_design retain their own paths.
-    The private fitted metadata snapshot is cloned by the materializer, so neither
-    successful nor failed contrast evaluation can write the result's fitted state.
-    """
+
+def replay_prediction_design(design: Design, data: pd.DataFrame) -> Design:
+    """Evaluate prediction rows in input order and refuse unknown categorical values."""
+    return _replay_fitted_design(design, data, argument="data")
+
+
+def _replay_fitted_design(
+    design: Design, data: pd.DataFrame, *, argument: Literal["configurations", "data"]
+) -> Design:
     working = _working_frame(data)
     with np.errstate(divide="ignore", invalid="ignore"):
-        matrix = materialization.materialize_contrast(design._contrast_spec, working)
+        matrix = materialization.materialize_fitted(
+            design._contrast_spec, working, argument=argument
+        )
     table = cast("pd.DataFrame", matrix).copy(deep=True)
     invalid = np.ones(len(working), dtype=bool)
     invalid[table.index.to_numpy(dtype=np.intp)] = validity.design_invalid(table)
+    if argument == "data" and len(table) != len(working):
+        table = table.reindex(working.index)
     return replace(
         design,
         matrix=table,
@@ -290,10 +351,11 @@ def _design(
 def _columns_read(spec: Spec, columns: pd.Index[Any]) -> tuple[str, ...]:
     """The data columns that the factors of ``spec`` read, sorted (module docstring)."""
     read: set[str] = set()
+    literal_q = "Q" not in columns
     for term in spec.term_slices:
         for factor in term.factors:
             if factor.eval_method.value == "lookup":
                 read.add(factor.expr)
             elif factor.eval_method.value == "python":
-                read |= names.python_names(factor.expr)
+                read |= names.python_names(factor.expr, literal_q=literal_q)
     return tuple(sorted(name for name in read if name in columns))

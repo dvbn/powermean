@@ -88,7 +88,7 @@ DIRECT_PROGRESS_MONITOR_POLICY: Final = (
     "plain_map_residual_maxabs_star_at_current_iterate"
 )
 DIRECT_POST_CHECK_POLICY: Final = "invalid_verification_map_clears_convergence"
-DIRECT_NOFE_FIXED_TAU_SCHEMA: Final = "powermean.direct_nofe_fixed_tau.v1"
+DIRECT_NOFE_FIXED_TAU_SCHEMA: Final = "pyiols.direct_nofe_fixed_tau.v1"
 DIRECT_NOFE_FIXED_TAU_ROUTE: Final = "direct_nofe_fixed_tau"
 DIRECT_NOFE_FIXED_TAU_ALGORITHM: Final = "iols_phase1_phase2_at_requested_tau"
 DIRECT_NOFE_FIXED_TAU_RESULT_KEYS: Final = (
@@ -192,7 +192,7 @@ class IOLSKernelControl:
 
 @dataclass(frozen=True)
 class IOLSIterationDiagnostics:
-    """Iteration record for one kernel solve."""
+    """Iteration ledger for one kernel solve."""
 
     converged: bool
     phase: str

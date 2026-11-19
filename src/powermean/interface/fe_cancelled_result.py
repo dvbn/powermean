@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import copy
+import importlib
 from collections.abc import Mapping
 from dataclasses import asdict
-from typing import Unpack
+from typing import Unpack, cast
 
 import numpy as np
 import pandas as pd
@@ -19,14 +20,18 @@ from powermean.effects.targets import ReportingContext, ReportingPoint
 from powermean.errors import ConvergenceError, SpecificationError
 from powermean.inference.convention import ClusterCodes
 from powermean.inference.wz_binding import WZSource
+from powermean.interface.fe_joint_result import exact_count_domain
 from powermean.interface.fe_result_backends import (
     CancelledState,
     FEView,
     _bind_cancelled_cluster_codes,
+    _fe_summary_lines,
     _parse_vcov_spec_for_absorbed,
     _target_reporting_context,
     _tidy_frame,
     _vcov_frame_from_retained,
+    default_announcement,
+    saturated_fe,
 )
 from powermean.results import citations, naming
 from powermean.results.cancelled_recovery import cancelled_effect
@@ -36,6 +41,7 @@ from powermean.results.fe_helpers import (
     prediction_kind,
 )
 from powermean.results.fe_sample import FESampleView
+from powermean.results.indefinite import indefinite, note
 from powermean.results.owned import owned_array
 from powermean.results.provenance import (
     IMPLEMENTATION,
@@ -55,6 +61,7 @@ from powermean.results.retained_inference import (
 from powermean.results.retained_inference import (
     RetainedInference,
 )
+from powermean.results.saturated import SaturatedCovariance
 from powermean.results.summary import (
     WIDTH,
     _table,
@@ -69,7 +76,10 @@ class CancelledResultBackend:
 
     def __init__(self, view: FEView, state: CancelledState) -> None:
         """Bind the authentic retained state to owned normal-call views."""
-        self._inference_override: RetainedInference | RetainedHC | None = None
+        # A named HC covariance requested with the fit is the fit's reported scale.
+        self._inference_override: (
+            RetainedInference | RetainedHC | SaturatedCovariance | None
+        ) = state.envelope.initial_hc
         estimator = view.estimator
         order_sample = view.order_sample
         input_labels = view.input_labels
@@ -100,25 +110,49 @@ class CancelledResultBackend:
         self.controls = controls
         self.requested_absorbed_options = state.requested_absorbed_options
         self._bias = state.bias_correction
+        self._announce_defaults = view.announce_defaults
         self.fit_vcov_spec = fit_vcov_spec
         self.requested_start = (
             None if requested_start is None else owned_array(requested_start)
         )
+        walked = state.walked
         self._sample_view = FESampleView(
-            order_sample,
+            order_sample if walked is None else walked[0],
             self.input_labels,
             columns,
             subset_missing,
             dependence=dependence.retained_names,
+            outcome_snapshot=None if walked is None else walked[1],
             cancelled_envelope=envelope,
         )
         self.status = envelope.status
+        # A certified fit whose certificate decided it saturated (results.saturated)
+        # answers each covariance request that parses and binds with a missing record
+        # and its note; its certificate formed no initial scale.
+        self._saturated = envelope.accepted and envelope.certificate.saturated
+        if self._saturated:
+            init_vcov, _, init_bread = self.fit_vcov_spec
+            self._inference_override = self._saturated_answer(init_vcov, init_bread)
         self._provenance = self._build_provenance()
+
+    def _saturated_answer(self, fe_vcov: object, bread: str) -> SaturatedCovariance:
+        """The missing covariance of a request on this saturated fit, with its note."""
+        return saturated_fe(
+            fe_vcov,
+            bread,
+            self._sample_view.count,
+            len(self.envelope.slope_names),
+            cancelled=self.envelope.cancelled_name,
+        )
 
     @property
     def certified(self) -> bool:
         """Return the certified from the actual retained state, detached outward."""
         return bool(self.envelope.accepted)
+
+    def _indefinite_root(self) -> bool:
+        """Whether the certified root's curvature is not positive definite."""
+        return indefinite(self.certified, self.envelope.score_metric)
 
     @property
     def certificate(self) -> CancelledCertificate:
@@ -154,20 +188,13 @@ class CancelledResultBackend:
             certificate=cert,
         )
 
-    def _has_point(self) -> bool:
-        """Distinguish an evaluated candidate from a diagnostic fallback point."""
-        trace = self.envelope.tau1_result
-        if trace is None:
-            return True
-        candidate = trace.candidate
-        return (
-            candidate is not None
-            and candidate.attempts[candidate.retained].point is not None
-        )
-
     def coef(self) -> pd.Series[float]:
-        """Return the reported point; certification stays at the uncorrected root."""
-        if not self._has_point():
+        """Return the reported point; certification stays at the uncorrected root.
+
+        A fit refused as ``no_finite_root`` reports no point, as on the joint route
+        (owner's rulings 70 and 71): its last iterate lies on a recession direction.
+        """
+        if not self.envelope.has_evaluated_point or self.status == "no_finite_root":
             raise self._withheld()
         if self._bias is not None and not self.certified:
             raise self._withheld()
@@ -203,7 +230,9 @@ class CancelledResultBackend:
             name="std_error",
         )
 
-    def _initial_scale(self) -> RetainedInference | RetainedHC | None:
+    def _initial_scale(
+        self,
+    ) -> RetainedInference | RetainedHC | SaturatedCovariance | None:
         """Read the view covariance; the original fit certificate stays intact."""
         return (
             self.envelope.initial_scale
@@ -244,7 +273,9 @@ class CancelledResultBackend:
         result._provenance = result._build_provenance()
         return result
 
-    def _inference(self, spec: object = None) -> RetainedInference | RetainedHC:
+    def _inference(
+        self, spec: object = None
+    ) -> RetainedInference | RetainedHC | SaturatedCovariance:
         """Return the vcov from the actual retained state, detached outward."""
         if not self.certified:
             raise self._withheld()
@@ -258,6 +289,14 @@ class CancelledResultBackend:
         fe_vcov, ssc_val, bread_val = _parse_vcov_spec_for_absorbed(
             spec, init_ssc, init_bread
         )
+        # A cancelled fit is never log-OLS: the count option is refused, as at the fit.
+        exact_count_domain(ssc_val, 1.0)
+        if self._saturated:
+            if isinstance(fe_vcov, ClusterRequest):
+                _bind_cancelled_cluster_codes(
+                    self.envelope, self.dependence, self.grouping, fe_vcov
+                )
+            return self._saturated_answer(fe_vcov, bread_val)
         if isinstance(fe_vcov, HCRequest):
             hc_req = HCInferenceRequest.from_hc_request(
                 fe_vcov,
@@ -325,7 +364,9 @@ class CancelledResultBackend:
             if self._inference_override is None
             else self._inference_override.standard_errors,
             level,
-            scale.applied.reference,
+            scale.reference
+            if type(scale) is SaturatedCovariance
+            else cast("RetainedInference | RetainedHC", scale).applied.reference,
         )
         if self._bias is not None:
             assert self._bias.point is not None
@@ -358,6 +399,15 @@ class CancelledResultBackend:
             np.array(inf_arr, dtype=np.float64, copy=True),
             index=pd.Index(range(inf_arr.shape[0]), name="group"),
             columns=self._names(),
+        )
+
+    def influence_rows(self) -> pd.DataFrame:
+        """Return the original-row influence terms, formed on request."""
+        if not self.certified:
+            raise self._withheld()
+        module = importlib.import_module("powermean.results.cancelled_rows")
+        return cast(
+            "pd.DataFrame", module.influence_frame(self.envelope, self._names())
         )
 
     def fixef(self) -> dict[str, pd.Series[float]]:
@@ -433,14 +483,20 @@ class CancelledResultBackend:
     def summary(self, level: float = 0.95) -> str:
         """Render actual sample, formulation, coverage and retained inference."""
         normal_quantile(level)
+        effects_line, observations_line, coverage_line = _fe_summary_lines(
+            self.estimator,
+            cast(Mapping[str, int], self.provenance.sample["counts"]),
+            self.sample.nobs,
+            self.provenance.coverage,
+        )
         lines = [
             "powermean",
             "=" * WIDTH,
             naming.estimator_name(self.estimator),
-            f"Fixed effects: {self.estimator.fixed_effects.to_dict()}",
-            f"Observations: {self.sample.count} of {self.sample.nobs}",
+            effects_line,
+            observations_line,
             f"Status: {self.status}; certified: {self.certified}",
-            f"Coverage: {self.provenance.coverage}",
+            coverage_line,
         ]
         if self.certified:
             table = self.tidy(level)
@@ -452,6 +508,11 @@ class CancelledResultBackend:
                 )
                 lines.append(table[["uncorrected", "bias", "estimate"]].to_string())
             lines.extend(_table(table, level))
+            if self._indefinite_root():
+                lines.append(note(self.status))
+            scale = self._initial_scale()
+            if type(scale) is SaturatedCovariance:
+                lines.append(f"Note: {scale.note}")
         else:
             lines.append("Inference withheld: the retained solution is not certified.")
             if self._bias is not None:
@@ -459,6 +520,13 @@ class CancelledResultBackend:
                     f"{self._bias.label} correction withheld: "
                     "no certified uncorrected root."
                 )
+        if self._announce_defaults:
+            lines.append(
+                default_announcement(
+                    self.envelope.cancelled_name,
+                    None if self._bias is None else self._bias.label,
+                )
+            )
         return "\n".join(lines)
 
     def _build_provenance(self) -> Provenance:
@@ -543,7 +611,7 @@ class CancelledResultBackend:
                 "root_selection": self.envelope.root_selection,
                 "continuation_used": self.envelope.continuation_used,
                 "n_root_stages": len(self.envelope.root_stages),
-                "has_evaluated_point": self._has_point(),
+                "has_evaluated_point": self.envelope.has_evaluated_point,
             }
         )
         return Provenance(
@@ -570,10 +638,12 @@ class CancelledResultBackend:
             else _frozen(
                 {
                     "status": self.status,
-                    "no_point": not self._has_point(),
+                    "no_point": not self.envelope.has_evaluated_point,
                     "native_message": None
                     if self.envelope.tau1_result is None
                     else self.envelope.tau1_result.message,
+                    # Ruling 71, tau = 2 (solve.cancelled_existence); None elsewhere.
+                    "existence": self.envelope.existence,
                 }
             ),
         )

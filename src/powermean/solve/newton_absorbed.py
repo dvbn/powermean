@@ -1,12 +1,15 @@
 """The internal fitted-index Newton solver of the joint system with absorbed effects.
 
-The explicitly selected internal organization ``absorbed='index'`` (Newton in the
-fitted index, as ``ppmlhdfe`` organizes it) for the power family with ``tau`` in
-``[1, 2]`` and NB2.
-No public route, default organization, certificate, covariance, linear path,
+``design/02_computation.md``, Sections 4, 5.1, 5.2, 5.7 and 6; ``DESIGN.md``, Sections
+5.3 and 6.2; decisions D10, D24, D40, D47, D48, D50, D51 and D73; the M1.12 contract
+(``plan/evidence/M1.12_contract.txt``: the scope, the mechanics, and the engineering
+and mathematical reviews, which bind the accepted M1.11 interfaces).  Task M1.12: the
+explicitly selected private organization ``absorbed='index'`` (Newton in the fitted
+index, as ``ppmlhdfe`` organizes it) for the power family with ``tau`` in ``[1, 2]``
+and NB2.  No public route, default organization, certificate, covariance, linear path,
 IOLS, cancellation, nonconvex continuation or instrument.
 
-:func:`solve` takes the accepted immutable final sample, the working
+:func:`solve` takes the accepted immutable final sample of task M1.10, the working
 variance of its request, the resolved options, the explicit absorbed options, a required
 trigger with its admission of an outcome, an optional independent whole-point assessor
 and an optional full start, and returns a candidate with its trace
@@ -28,12 +31,12 @@ The start.  Automatic: zero slopes and ``log(mean z)`` in every level of the fir
 block, then one sweep at ``profile_tol``, an initializer whose budget status is no
 failure (a range refusal stops): the family's accepted profiler, or, for the first
 attempt with one block, no slope and exact PPML or the exact NB2 ``kappa = 0`` alias,
-the local evaluation of that same sweep
-(:mod:`powermean.solve.absorbed_start`), recorded as its own work.  The caller's
+the local evaluation of that same sweep (decision D75,
+:mod:`powermean.solve.absorbed_start`), recorded as its own work.  The caller's
 :class:`~powermean.solve.absorbed_direction.IndexStart` gives the slopes and a
 coefficient witness bound to the grouping, whose index is reconstructed without a
 profile.  A retry starts at the retained ``(gamma, q)`` without a sweep, its schedule
-reset to ``absorb_tol_start`` and its forcing history to ``1e-3``, the
+reset to ``absorb_tol_start`` and its forcing history to ``1e-3`` (decision D74), the
 budget and the logged work shared.
 
 The final work, after a native stop only, at the same ``q`` and in this order:
@@ -43,7 +46,7 @@ accepted fresh equations of every original block; the slope absorption when ther
 slopes, then the full-RHS solve, at exactly ``absorb_tol_final`` and with the most
 recently issued forcing factor (``1e-3`` when none was issued), no factor issued for
 it, its exception guarded by the final rows' raw-weight total and ``gradient_tol``
-(success needs ``af`` and either the relative bound or a native residual
+(correction B: success needs ``af`` and either the relative bound or a native residual
 at most ``gradient_tol``, never ``af`` alone); the indications.  It stops at the first
 failed part, the operative reason ``final_failure``, every completed part kept; it is
 outside the iteration's evaluation budget and never takes another Newton step.  A
@@ -56,7 +59,8 @@ whole point and the family's TIGHTER controls, its trace bound, its first diagno
 admitted again and its outcome kept only when the caller's admission admits it.  The
 solver never resumes, certifies, adopts a new sample or deletes a row.
 
-The opening of the retry.  The retry rule assesses the first attempt's initialized start
+The opening of the retry (the author's approval of 27 October 2026 of the private
+opening-only prototype).  The retry rule assesses the first attempt's initialized start
 through the same counted and timed call as every assessment.  When the assessor is the
 exact private pair :class:`_OpeningDispatch`, recognized by its exact type at that one
 statement, that call goes to the pair's ``opening`` callback; every other call of the
@@ -64,36 +68,10 @@ pair goes to its ``regular`` callback, unchanged.  Any other assessor receives e
 call, the opening's included, as before: no attribute of it is read and no argument is
 added.  The attempts, budgets, rule and selection are unchanged.
 
-The equation-aware stop.  When the assessor is the
-exact private adapter :class:`_EquationStop`, recognized by its exact type in
-:func:`solve`, every attempt of the solve tests its accepted steps with
-:class:`_ProbedEvaluator`: the two native formulas first, unchanged and in their order;
-only when both pass, one probe of the unchanged ``fresh_equations(_prepared(problem,
-base), q)`` at the accepted trial, ``q`` its full index and ``base =
-base_index(problem, theta)`` of its slopes (the transformed offset included), on the
-problem, weights, family and grouping of the final work.  The native stop needs both
-formulas and ``maximum <= tol`` (:func:`_passes`, equality passing), ``tol`` the solver
-option read once at the solve's start.  A finite failed probe continues the same
-attempt through the unchanged loop: it is no assessment, final work, reading or retry,
-and the schedule and forcing history go on.  A refused probe (``FloatingPointError``)
-waits for the step hook: the accepted step is counted and its indications run first,
-an alarm keeping its precedence and the combined flag; then the refusal ends the
-attempt as ``numerical_breakdown`` with its reason.  The probes are not pointwise
-evaluations: they consume no slot of the one budget and create no allowance, at most
-one per accepted step, none at a start or a held trial.  Each probe is logged in the
-fit's :class:`ProbeLog` (:class:`EquationProbe`: its attempt and accepted step, the
-two formulas' values, the SHA-256 of its ``theta``, base and ``q`` bytes, its bound,
-maximum or refusal, outcome, the step's combined native flag and its own seconds,
-inside the iteration's).  :func:`solve` starts the log before any work and finishes it
-with its candidate; a started log is refused by any other solve.  After a combined
-native stop, the final work, the retry rule, the budgets and the selection are those
-above.  Any other assessor and every other call of this solver keep the original
-iteration.
 """
 
 from __future__ import annotations
 
-import hashlib
 import time
 from dataclasses import dataclass, replace
 from typing import Literal, NamedTuple, Protocol
@@ -121,16 +99,15 @@ from powermean.solve.absorbed_rhs import RHSResult
 from powermean.solve.absorbed_start import LocalInitializer
 from powermean.solve.assessment import Assessment, CertificateControls
 from powermean.solve.assessment import certificate_controls as controls_of
-from powermean.solve.absorbed import AbsorbedOptions
+from powermean.solve.m1_options import AbsorbedOptions
 from powermean.solve.newton_convex import (
     NewtonProblem,
     NewtonProvider,
     ProfiledIteration,
-    Solver,
     resolve_provider,
     run_index_attempt,
 )
-from powermean.solve.newton_retry import improved, verdict
+from powermean.solve.newton_retry import improved, kept, short_of_strict, verdict
 from powermean.solve.newton_trace import NativeReason, Timing
 from powermean.solve.options import Provider, SolverOptions
 from powermean.solve.profiled_indications import Alarm
@@ -265,7 +242,7 @@ class IndexAttempt:
     accepted point at the stop (``None`` when no point was evaluated); ``loss`` and
     ``gradient`` its criterion and full score when evaluated; ``direction`` the last
     completed full direction; ``initializer`` the automatic start's one-sweep profile,
-    or its local start in the local domain; ``final`` the fresh final work;
+    or its local start in the domain of decision D75; ``final`` the fresh final work;
     ``alarm`` the indication that stopped it; ``assessment`` the retry rule's
     assessment of it, if made.
     """
@@ -381,271 +358,14 @@ class _OpeningDispatch:
         return self.regular(point, controls)
 
 
-# ------------------------------------------------- the private equation-aware stop
-
-ProbeOutcome = Literal["pass", "continue", "refused"]
-REUSED = "a probe log serves one solve"
-UNFINISHED = "the probe log was not finished by the solve of this candidate"
-
-
-def array_digest(values: FloatArray) -> str:
-    """The SHA-256 of the binary64 bytes of ``values``: a content binding, no copy."""
-    found = np.ascontiguousarray(values, dtype=np.float64)
-    return hashlib.sha256(found.tobytes()).hexdigest()
-
-
-def _passes(maximum: float, tol: float) -> bool:
-    """The equations' part of the combined native stop: ``maximum <= tol``."""
-    return maximum <= tol
-
-
-@dataclass(frozen=True)
-class EquationProbe:
-    """One fresh-equations probe of the private equation-aware stop (module docstring).
-
-    ``attempt`` and ``step`` locate the accepted step it tested (its accepted steps in
-    the attempt, that one counted); ``score`` and ``decrement`` are the two native
-    formulas' values that passed there, ``max |G|`` and half the unhalved decrement at
-    the direction's origin, against ``gradient_tol``; ``theta``, ``base`` and ``q`` the
-    SHA-256 of the bytes of the accepted slopes, of their ``base_index`` (``None`` when
-    it was refused) and of the accepted index; ``maximum`` the largest absolute fresh
-    equation, ``None`` when refused, against ``tol``; ``outcome`` is ``pass``,
-    ``continue`` or ``refused`` (``reason`` its refusal); ``stopped`` the step's
-    combined native flag as the step hook received it (``None`` before the hook);
-    ``wall`` and ``cpu`` the probe's own seconds, inside the iteration's and never
-    added to them.
-    """
-
-    attempt: int
-    step: int
-    score: float
-    decrement: float
-    gradient_tol: float
-    theta: str
-    base: str | None
-    q: str
-    tol: float
-    maximum: float | None
-    outcome: ProbeOutcome
-    reason: str
-    stopped: bool | None
-    wall: float
-    cpu: float
-
-
-@dataclass(frozen=True)
-class StopProbes:
-    """The frozen probes of one solve under the private equation-aware stop.
-
-    ``tol`` bounds the fresh equations and ``gradient_tol`` the two native formulas,
-    each read once at the solve's start; ``probes`` holds every probe, in order.  An
-    empty tuple is a stop that ran and whose native formulas never passed.
-    """
-
-    tol: float
-    gradient_tol: float
-    probes: tuple[EquationProbe, ...]
-
-
-class ProbeLog:
-    """The probes of one solve as they are made (module docstring); one log per fit.
-
-    :func:`solve` starts it with the two bounds before any work and finishes it with
-    its candidate; each probe is logged when it is made and keeps its step's combined
-    native flag once the step hook has received it.  A started log is refused by any
-    other solve, and its receipt is that of the solve which finished it only.
-    """
-
-    def __init__(self) -> None:
-        self.controls: tuple[float, float] | None = None
-        self.probes: list[EquationProbe] = []
-        self.candidate: IndexCandidate | None = None
-
-    @property
-    def active(self) -> bool:
-        """Whether a solve started the log: its stop ran, whatever it probed."""
-        return self.controls is not None
-
-    def start(self, tol: float, gradient_tol: float) -> None:
-        """A solve starts with its two bounds; ``ValueError`` for a started log."""
-        if self.controls is not None:
-            raise ValueError(REUSED)
-        self.controls = (tol, gradient_tol)
-
-    def made(self, probe: EquationProbe) -> None:
-        """A probe, logged as it was made."""
-        self.probes.append(probe)
-
-    def stepped(self, attempt: int, step: int, stopped: bool) -> None:
-        """The combined native flag of an accepted step, kept on that step's probe."""
-        if not self.probes:
-            return
-        last = self.probes[-1]
-        if (last.attempt, last.step, last.stopped) == (attempt, step, None):
-            self.probes[-1] = replace(last, stopped=stopped)
-
-    def finish(self, candidate: IndexCandidate) -> None:
-        """The candidate of the solve that started the log; ``ValueError`` otherwise."""
-        if self.controls is None or self.candidate is not None:
-            raise ValueError(REUSED)
-        self.candidate = candidate
-
-    def receipt(self, candidate: object) -> StopProbes:
-        """The frozen probes of the solve that returned ``candidate``.
-
-        ``ValueError`` unless that very solve started and finished the log.
-        """
-        controls, finished = self.controls, self.candidate
-        if controls is None or finished is None or finished is not candidate:
-            raise ValueError(UNFINISHED)
-        return StopProbes(controls[0], controls[1], tuple(self.probes))
-
-
-@dataclass(frozen=True, eq=False)
-class _EquationStop:
-    """The private equation-aware stop: an assessor and the fit's own probe log.
-
-    Its call is ``assess``'s, unchanged, and the retry rule's opening is ``assess``'s
-    (:meth:`_Assessments.opening`).  :func:`solve` recognizes it by its exact type only
-    and starts ``log`` (module docstring).
-    """
-
-    assess: IndexAssessor
-    log: ProbeLog
-
-    def __call__(
-        self, point: IndexWholePoint, controls: CertificateControls, /
-    ) -> Assessment:
-        """``assess``'s assessment of ``point``."""
-        return self.assess(point, controls)
-
-
-class _Stop(NamedTuple):
-    """The private equation-aware stop of one solve: its log, the equations' bound."""
-
-    log: ProbeLog
-    tol: float
-
-
-def _started(assess: IndexAssessor | None, options: SolverOptions) -> _Stop | None:
-    """The stop of a solve whose assessor is the exact private adapter, else ``None``.
-
-    The adapter's log is started with ``tol`` and ``gradient_tol``, each read once
-    here (``ValueError`` for a log that a solve started); no other assessor is read.
-    """
-    if type(assess) is _EquationStop:
-        tol = options.tol
-        assess.log.start(tol, options.gradient_tol)
-        return _Stop(assess.log, tol)
-    return None
-
-
-class _ProbedEvaluator(IndexEvaluator):
-    """The attempt state of the private equation-aware stop (module docstring).
-
-    The native test of :class:`IndexEvaluator` and, only when both of its formulas pass
-    at an accepted step, one probe of that accepted point; the step hook of
-    :class:`IndexEvaluator` before the refusal of the step's probe.
-
-    Parameters
-    ----------
-    context : IndexContext
-        The fixed parts of the solve.
-    stop : _Stop
-        The solve's probe log and the bound of the equations.
-    attempt : int
-        The index of the attempt in the solve.
-    origin : IndexStart, IndexPoint or None
-        The origin of :class:`IndexEvaluator`.
-    """
-
-    def __init__(
-        self,
-        context: IndexContext,
-        stop: _Stop,
-        *,
-        attempt: int,
-        origin: IndexStart | IndexPoint | None,
-    ) -> None:
-        super().__init__(context, attempt=attempt, origin=origin)
-        self.stop = stop
-        self.refusal: FloatingPointError | None = None
-
-    def converged(self, solver: Solver) -> bool:
-        """The two native formulas, then, at their pass, the probe's ``maximum <= tol``.
-
-        A refused probe is no stop: its refusal waits for the step hook.
-        """
-        if not super().converged(solver):
-            return False
-        probe = self._probe(solver.tol)
-        self.stop.log.made(probe)
-        return probe.outcome == "pass"
-
-    def _probe(self, gradient_tol: float) -> EquationProbe:
-        """The fresh equations at the accepted trial, bound and timed (docstring).
-
-        Only ``FloatingPointError``, the refusal of the base or of the equations, is
-        caught, and held for the step hook; nothing is replaced by a passing value.
-        """
-        accepted, problem, tol = self._accepted(), self.context.problem, self.stop.tol
-        wall, cpu = time.perf_counter(), time.process_time()
-        base: FloatArray | None = None
-        maximum: float | None = None
-        reason = ""
-        try:
-            base = base_index(problem, accepted.theta)
-            maximum = fresh_equations(_prepared(problem, base), accepted.index).maximum
-        except FloatingPointError as error:
-            self.refusal, reason = error, str(error)
-        outcome: ProbeOutcome = "refused"
-        if maximum is not None:
-            outcome = "pass" if _passes(maximum, tol) else "continue"
-        binding = None if base is None else array_digest(base)
-        return EquationProbe(
-            attempt=self.attempt,
-            step=self.steps + 1,
-            score=float(np.max(np.abs(self._view().gradient))),
-            decrement=0.5 * self._direction().decrement,
-            gradient_tol=gradient_tol,
-            theta=array_digest(accepted.theta),
-            base=binding,
-            q=array_digest(accepted.index),
-            tol=tol,
-            maximum=maximum,
-            outcome=outcome,
-            reason=reason,
-            stopped=None,
-            wall=time.perf_counter() - wall,
-            cpu=time.process_time() - cpu,
-        )
-
-    def stepped(self, converged: bool, gradient: FloatArray) -> None:
-        """The step's combined flag on its probe, the unchanged hook, then a refusal.
-
-        The accepted step is counted and its indications run first, an alarm keeping
-        its precedence; a refused probe of the step then ends the attempt as a
-        numerical breakdown with the probe's reason.
-        """
-        self.stop.log.stepped(self.attempt, self.steps + 1, bool(converged))
-        refusal, self.refusal = self.refusal, None
-        super().stepped(converged, gradient)
-        if refusal is not None:
-            raise refusal
-
-
 @dataclass(frozen=True, eq=False)
 class _Context:
-    """The fixed parts of one solve, shared by its attempts.
-
-    ``stop`` is the private equation-aware stop of the solve, ``None`` without it.
-    """
+    """The fixed parts of one solve, shared by its attempts."""
 
     sample: FESample
     variance: Family
     options: SolverOptions
     index: IndexContext
-    stop: _Stop | None = None
 
 
 class _Assessments:
@@ -666,12 +386,10 @@ class _Assessments:
     def opening(self, point: IndexPoint) -> Assessment:
         """The assessment of the retry rule's start (module docstring).
 
-        The ``opening`` callback of the exact private pair, also when the private
-        equation-aware stop holds it; for any other assessor, :meth:`__call__` itself.
+        The ``opening`` callback of the exact private pair; for any other assessor,
+        :meth:`__call__` itself.
         """
         assess = self.assess
-        if type(assess) is _EquationStop:
-            assess = assess.assess
         if type(assess) is _OpeningDispatch:
             return self._made(assess.opening, point)
         return self(point)
@@ -830,11 +548,7 @@ def _attempt(
     attempt: int,
     max_iter: int,
 ) -> IndexAttempt:
-    """One attempt from ``origin``: the caller's start, a retained point, or none.
-
-    Under the solve's private equation-aware stop its state is a
-    :class:`_ProbedEvaluator`, a retry's included; otherwise an :class:`IndexEvaluator`.
-    """
+    """One attempt from ``origin``: the caller's start, a retained point, or none."""
     problem = context.index.problem
     if isinstance(origin, IndexPoint):
         coefficients = origin.theta
@@ -842,14 +556,7 @@ def _attempt(
         coefficients = origin.slopes
     else:
         coefficients = np.zeros(problem.n_slopes)
-    stop = context.stop
-    evaluator: IndexEvaluator
-    if stop is None:
-        evaluator = IndexEvaluator(context.index, attempt=attempt, origin=origin)
-    else:
-        evaluator = _ProbedEvaluator(
-            context.index, stop, attempt=attempt, origin=origin
-        )
+    evaluator = IndexEvaluator(context.index, attempt=attempt, origin=origin)
     iteration = run_index_attempt(
         newton.provider,
         context.index.point,
@@ -888,7 +595,10 @@ def _attempts(
     """The first attempt and, if the existing rule allows it, the second.
 
     The statements of :func:`powermean.solve.newton_retry.run_attempts`, read on the
-    operative reason and on whole index points; one budget for both attempts.
+    operative reason and on whole index points; one budget for both attempts. A first
+    point accepted at the secondary level only is retried like one not accepted, and
+    the second point is then kept only when it is accepted with a smaller common error
+    (:func:`~powermean.solve.newton_retry.kept`).
     """
     options, budget = context.options, context.index.admissions
     first = _attempt(context, newton, start, attempt=0, max_iter=options.max_iter)
@@ -898,7 +608,9 @@ def _attempts(
     assessed = assess(origin)
     first = replace(first, assessment=assessed)
     budgets_remain = first.iterations < options.max_iter and budget.used < budget.limit
-    if assessed.accepted or not assessed.finite_error or not budgets_remain:
+    polish = short_of_strict(assessed, options.tol)
+    settled = assessed.accepted and not polish
+    if settled or not assessed.finite_error or not budgets_remain:
         return _Attempts((first,), 0, None, False)
     initial = assess.opening(_opened(first))
     if not improved(assessed, initial):
@@ -907,7 +619,7 @@ def _attempts(
     second = _attempt(context, newton, origin, attempt=1, max_iter=left)
     reassessed = assess(stopped_point(second))
     second = replace(second, assessment=reassessed)
-    no_progress, keep_first = verdict(assessed, reassessed)
+    no_progress, keep_first = (kept if polish else verdict)(assessed, reassessed)
     return _Attempts((first, second), 0 if keep_first else 1, initial, no_progress)
 
 
@@ -942,7 +654,7 @@ def solve(
     Parameters
     ----------
     sample : FESample
-        The accepted immutable final sample, with fixed-effect blocks.
+        The accepted immutable final sample of task M1.10, with fixed-effect blocks.
     variance : PowerVariance or NB2Variance
         The working variance of the sample's request: ``tau`` in ``[1, 2]``, or NB2.
     options : SolverOptions
@@ -952,15 +664,13 @@ def solve(
     absorbed : AbsorbedOptions
         The explicit absorbed options; ``absorbed`` must be ``'index'``.
     trigger : Trigger
-        The caller's trigger, bound to the actual completed outcome of the sample
-        stage; called at most once, after an alarm.
+        The caller's trigger, bound to the actual completed M1.10 outcome; called at
+        most once, after an alarm.
     admit : Admission
         The caller's admission of the trigger call's outcome, the coordinator's own;
         only an outcome it admits is kept, apart from the stopped solve.
     assess : IndexAssessor, optional
         The independent assessment of a whole index point; required with ``retry=1``.
-        The exact private adapter :class:`_EquationStop` also selects the private
-        equation-aware stop for every attempt (module docstring).
     start : IndexStart, optional
         The caller's full start (slopes and a coefficient witness bound to the
         sample's grouping); the automatic start when omitted.
@@ -975,15 +685,13 @@ def solve(
     SpecificationError
         ``newton_provider="sklearn"`` without a verified installed scikit-learn.
     TypeError, ValueError
-        A precondition does not hold, or the adapter's probe log served another
-        solve; nothing is run.
+        A precondition does not hold; nothing is run.
     """
     _check(sample, options, absorbed, (trigger, admit), assess=assess)
-    stop = _started(assess, options)
     call = _IndexCall(
         sample, variance, options, absorbed, trigger, admit, assess, start
     )
-    return _run_index(call, _problem(sample, variance), stop)
+    return _run_index(call, _problem(sample, variance))
 
 
 @dataclass(frozen=True)
@@ -1002,18 +710,23 @@ class _IndexCall:
 
 def _solve_numeric(call: _IndexCall, problem: ProfiledProblem) -> IndexCandidate:
     """Private owned entry to the SAME index loop, start and retry organization."""
-    _check(call.sample, call.options, call.absorbed, (call.trigger, call.admit),
-           assess=call.assess)
-    stop = _started(call.assess, call.options)
-    return _run_index(call, problem, stop)
+    _check(
+        call.sample,
+        call.options,
+        call.absorbed,
+        (call.trigger, call.admit),
+        assess=call.assess,
+    )
+    return _run_index(call, problem)
 
 
-def _run_index(
-    call: _IndexCall, problem: ProfiledProblem, stop: _Stop | None
-) -> IndexCandidate:
+def _run_index(call: _IndexCall, problem: ProfiledProblem) -> IndexCandidate:
     """The single existing index execution body, with its original ordering."""
     sample, variance, options, absorbed = (
-        call.sample, call.variance, call.options, call.absorbed
+        call.sample,
+        call.variance,
+        call.options,
+        call.absorbed,
     )
     trigger, admit, assess, start = call.trigger, call.admit, call.assess, call.start
     if start is not None:
@@ -1040,7 +753,7 @@ def _run_index(
         budget,
         options.gradient_tol,
     )
-    context = _Context(sample, variance, options, index, stop)
+    context = _Context(sample, variance, options, index)
     assessments = None if assess is None else _Assessments(assess, context)
     arrays = NewtonProblem(problem.design, problem.z, problem.weights)
     outcome = _attempts(context, _Newton(provider, arrays), start, assessments)
@@ -1051,7 +764,7 @@ def _run_index(
     timing = Timing(0.0, 0.0)
     if assessments is not None:
         timing = Timing(assessments.wall, assessments.cpu)
-    candidate = IndexCandidate(
+    return IndexCandidate(
         sample=sample,
         variance=variance,
         start=start,
@@ -1070,6 +783,3 @@ def _run_index(
         trigger=record,
         timing=Timing(time.perf_counter() - wall, time.process_time() - cpu),
     )
-    if stop is not None:
-        stop.log.finish(candidate)
-    return candidate

@@ -1,4 +1,8 @@
-"""Detached snapshots of absorbed Newton attempts, iterations, and final work."""
+"""Detached snapshots of absorbed Newton attempts, iterations, and final work.
+
+``design/02_computation.md``, Sections 5.2 and 7; ``plan/evidence/M1.15_contract.txt``,
+items 2, 3 and 7; ``brief/layout_C_ownership.txt`` (P04).
+"""
 
 from __future__ import annotations
 

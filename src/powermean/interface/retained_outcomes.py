@@ -1,6 +1,8 @@
 """Concrete coordinator outcome validation and lowering into detached snapshots.
 
-This module validates concrete
+``design/02_computation.md``, Sections 2 to 4 and 8.4;
+``plan/evidence/M1.15_contract.txt``, items 2, 3, 7 and 9;
+``brief/layout_C_ownership.txt`` (P17).  This module validates concrete
 :class:`~powermean.interface.sample.SampleOutcome` trees and lowers them into
 :class:`~powermean.results.absorbed_trace.RetainedOutcomeSnapshot` records while
 preserving shared and distinct original diagnostic problem identities.
@@ -225,7 +227,8 @@ def _lower_outcome_tree(
             )
             if owned_order is None
             else maps.sample_map._capture_owned_order(
-                outcome.sample, owned_order,
+                outcome.sample,
+                owned_order,
                 input_snapshot=in_snap,
                 partition_map=maps.partition_map,
             )
@@ -257,26 +260,51 @@ def _complete_numeric_outcome(
     graph. Foreign/refused/filtered routes keep the original eager admission.
     """
     outcome, maps = details
-    rounds = tuple(_lower_round(
-        row, problem_map=maps.problem_map, partition_map=maps.partition_map
-    ) for row in outcome.rounds)
+    rounds = tuple(
+        _lower_round(
+            row, problem_map=maps.problem_map, partition_map=maps.partition_map
+        )
+        for row in outcome.rounds
+    )
     rec = outcome.recession
-    recession = None if rec is None else RetainedRecessionInvocation(
-        problem=rec.problem, controls=rec.controls, result=rec.result,
-        problem_map=maps.problem_map, partition_map=maps.partition_map,
+    recession = (
+        None
+        if rec is None
+        else RetainedRecessionInvocation(
+            problem=rec.problem,
+            controls=rec.controls,
+            result=rec.result,
+            problem_map=maps.problem_map,
+            partition_map=maps.partition_map,
+        )
     )
     col = outcome.collinearity
-    collinearity = None if col is None else RetainedCollinearityInvocation(
-        problem=col.problem, controls=col.controls, mode=col.mode,
-        analysis=col.analysis, problem_map=maps.problem_map,
-        partition_map=maps.partition_map,
+    collinearity = (
+        None
+        if col is None
+        else RetainedCollinearityInvocation(
+            problem=col.problem,
+            controls=col.controls,
+            mode=col.mode,
+            analysis=col.analysis,
+            problem_map=maps.problem_map,
+            partition_map=maps.partition_map,
+        )
     )
-    origin = None if outcome.origin is None else _lower_outcome_tree(
-        outcome.origin, maps=maps, input_snapshot=snapshot.input_snapshot,
+    origin = (
+        None
+        if outcome.origin is None
+        else _lower_outcome_tree(
+            outcome.origin,
+            maps=maps,
+            input_snapshot=snapshot.input_snapshot,
+        )
     )
     for name, value in (
-        ("rounds", rounds), ("recession", recession),
-        ("collinearity", collinearity), ("origin", origin),
+        ("rounds", rounds),
+        ("recession", recession),
+        ("collinearity", collinearity),
+        ("origin", origin),
     ):
         object.__setattr__(snapshot, name, value)
     vars(snapshot).pop("_numeric_details", None)
@@ -292,14 +320,20 @@ def admit_sample_outcome(
 ) -> RetainedOutcomeSnapshot:
     """Admit a concrete ``SampleOutcome`` and lower it into a detached snapshot."""
     return _admit_sample_outcome(
-        outcome, context=context, prepared=prepared,
-        sample_snapshot=sample_snapshot, maps=maps,
+        outcome,
+        context=context,
+        prepared=prepared,
+        sample_snapshot=sample_snapshot,
+        maps=maps,
     )
 
 
 def _admit_owned_sample_outcome(
-    outcome: SampleOutcome, *, context: PerFitPreparationContext,
-    order_sample: OrderSample, execution: NumericExecution | None = None,
+    outcome: SampleOutcome,
+    *,
+    context: PerFitPreparationContext,
+    order_sample: OrderSample,
+    execution: NumericExecution | None = None,
 ) -> RetainedOutcomeSnapshot:
     """Consume the fresh private order producer, never a public supplied digest.
 
@@ -308,29 +342,40 @@ def _admit_owned_sample_outcome(
     raw-data identity: any final row change needs a new canonical fingerprint.
     """
     operation = context._operation
-    if (execution is not None and operation is not None
-            and execution.preparation.context is context
-            and execution._sample is not None
-            and execution._sample is outcome.sample
-            and operation.numeric is execution.numeric):
+    if (
+        execution is not None
+        and operation is not None
+        and execution.preparation.context is context
+        and execution._sample is not None
+        and execution._sample is outcome.sample
+        and operation.numeric is execution.numeric
+    ):
         sample = outcome.sample
         assert sample is not None
         maps = operation.maps
         source = context.authenticate_frame(outcome.prepared, sample=sample)
         maps.input_map.register_snapshot(source, prepared=outcome.prepared)
         detached = maps.sample_map._capture_numeric(
-            sample, order_sample, execution.numeric,
-            input_snapshot=source, partition_map=maps.partition_map,
+            sample,
+            order_sample,
+            execution.numeric,
+            input_snapshot=source,
+            partition_map=maps.partition_map,
         )
         result = RetainedOutcomeSnapshot._from_numeric(
-            input_snapshot=source, request=_lower_sample_request(outcome.request),
-            sample=detached, details=(outcome, maps, _complete_numeric_outcome),
+            input_snapshot=source,
+            request=_lower_sample_request(outcome.request),
+            sample=detached,
+            details=(outcome, maps, _complete_numeric_outcome),
         )
         maps.outcome_memo[id(outcome)] = result
         maps._outcome_refs.append(outcome)
         return result
-    owned = (order_sample if context._operation is not None
-             and context._normal_origin is not None else None)
+    owned = (
+        order_sample
+        if context._operation is not None and context._normal_origin is not None
+        else None
+    )
     return _admit_sample_outcome(outcome, context=context, owned_order=owned)
 
 
@@ -347,10 +392,13 @@ def _admit_sample_outcome(
     checked = _validate_outcome_tree(outcome, context=context, prepared=prepared)
     operation_maps = (
         context._operation.maps
-        if context is not None and context._operation is not None else None
+        if context is not None and context._operation is not None
+        else None
     )
-    resolved_maps = maps if maps is not None else (
-        operation_maps if operation_maps is not None else _AdmissionMaps()
+    resolved_maps = (
+        maps
+        if maps is not None
+        else (operation_maps if operation_maps is not None else _AdmissionMaps())
     )
     samp = checked.sample if checked.status == "complete" else None
     in_snap = (

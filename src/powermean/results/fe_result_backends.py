@@ -37,6 +37,10 @@ class FEBackend(Protocol):
         """The detached sample view."""
         ...
 
+    def _indefinite_root(self) -> bool:
+        """Whether the fit is a certified root of indefinite curvature (ruling 78)."""
+        ...
+
     @property
     def provenance(self) -> Provenance:
         """The actual computation record."""
@@ -80,6 +84,10 @@ class FEBackend(Protocol):
 
     def influence(self) -> pd.DataFrame:
         """Serve the actual retained capability."""
+        ...
+
+    def influence_rows(self) -> pd.DataFrame:
+        """The influence by original row, whatever the sampling unit."""
         ...
 
     def fixef(self) -> dict[str, pd.Series[float]]:

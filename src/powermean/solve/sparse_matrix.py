@@ -1,4 +1,7 @@
 """Passive canonical CSC storage shared by explicit and implicit FE geometry.
+
+Design: 02 Computation, Section 7. This is the existing geometry record, separated
+without changing its fields or column-order semantics.
 """
 
 from __future__ import annotations

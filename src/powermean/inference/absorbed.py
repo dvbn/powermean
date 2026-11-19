@@ -1,9 +1,12 @@
 """Same-point observed influence, initial covariance and direct scale of FE points.
 
-Influence from the actual Jacobian; robust and one-way cluster covariance under the
-``"stata"`` preset; frequency weights as replicated rows; the standard errors of the
-coefficient gate.  Internal module: the provider of
-:mod:`powermean.solve.absorbed_certificate`, whose contract
+``design/04_inference_and_effects.md``, Sections 1 to 3 (influence from the actual
+Jacobian; robust and one-way cluster covariance under the ``"stata"`` preset; frequency
+weights as replicated rows); ``design/02_computation.md``, Section 7 (the coefficient
+gate's standard errors); the M1.14 dispatch's covariance reuse boundary and readiness
+Section 3 (``plan/evidence/M1.14_dispatch_conditional.txt``,
+``M1.14_readiness.txt``); decisions D49, D51 and D54.  Task M1.14, private: the
+provider of :mod:`powermean.solve.absorbed_certificate`, whose contract
 (:mod:`powermean.solve.absorbed_certificate_scale`) it imports; nothing of the solve
 stage imports this module.  The evidence it forms owns its arrays from construction.
 
@@ -13,24 +16,24 @@ same-point influence of row ``i`` is ``u_i = b_i (B_i W)``: the slope rows of th
 joint ``H^-1 B' diag(b)``, by gathers in block order, no dense inverse and no
 fabricated ``Influence`` or ``JointEvaluation`` record.
 
-Covariance (:func:`fe_covariance`), the existing convention once, by its
+Covariance (:func:`fe_covariance`), the existing convention once, by its accepted
 primitives: ``N`` the exact frequency total or the rows of positive weight
 (``statistical_count``), never a divisor of the rows; robust: rows ``u`` (``u/sqrt(f)``
 for frequency weights), one stored row padded with a zero row as the convention does,
 ``hc_covariance`` of the source-average rows ``m u`` and the factor ``N/(N - 1)``;
 one cluster: the codes of the request bound to the sample's real ``SamplingUnits``
 (``_active_codes``), ``cluster_covariance`` of ``m u`` and ``G/(G - 1)``.  The
-primitive estimate, its symmetric part, diagnostics and warnings are kept in the
-:class:`~powermean.inference.convention.Covariance` record.  Standard errors are the
+primitive estimate, its D54 symmetric part, diagnostics and warnings are kept in the
+accepted :class:`~powermean.inference.convention.Covariance`.  Standard errors are the
 direct map of the actual ``OrderScale`` (``direct_standard_errors``): representable
-where the full reported covariance need not be; a zero stays zero, a negative
+where the full reported covariance need not be; a zero stays zero (D49), a negative
 variance missing; nothing is floored.  An error of the convention is raised, not
 caught.  No other covariance method, factor or bread is introduced.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -59,7 +62,7 @@ from powermean.inference.vcov import (
     cluster_covariance,
     hc_covariance,
 )
-from powermean.inference.wz_absorbed import joint_scale
+from powermean.inference.wz_absorbed import _WZInformation, joint_scale
 from powermean.inference.wz_binding import unavailable as wz_unavailable
 from powermean.inference.wz_covariance import WZControls
 from powermean.model.rows import _immutable
@@ -131,6 +134,7 @@ class AbsorbedScale:
     request: CovarianceRequest
     preflight: AbsorbedPreflight | None = None
     wz: WZControls | None = None
+    _wz_information: _WZInformation | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         """The request must be a :class:`CovarianceRequest`."""
@@ -150,7 +154,7 @@ class AbsorbedScale:
                 raise wz_unavailable(
                     "current WZ controls and original declared FE source required"
                 )
-            return joint_scale(scale_input, self.wz)
+            return joint_scale(scale_input, self.wz, handoff=self._wz_information)
         geometry = scale_input.geometry
         if self.request.is_default_stata:
             rows, units = geometry.rows, sampling_units(geometry.point.sample)

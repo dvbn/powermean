@@ -1,8 +1,10 @@
 """Detached snapshots of joint separation LP solves, dual checks, and LP attempts.
 
-This module defines :class:`RetainedLPSolve`, :class:`RetainedLPDual`,
-:class:`RetainedLPAttempt`, and :func:`_detach_lp_outcome`.  Each witness inside an LP
-attempt detaches its own ``problem`` without parent substitution.
+``design/02_computation.md``, Sections 2 and 4; ``plan/evidence/M1.15_contract.txt``;
+``brief/layout_C_ownership.txt`` (P08).  This module defines :class:`RetainedLPSolve`,
+:class:`RetainedLPDual`, :class:`RetainedLPAttempt`, and :func:`_detach_lp_outcome`.
+Each witness inside an LP attempt detaches its own ``problem`` without parent
+substitution.
 """
 
 from __future__ import annotations

@@ -29,7 +29,13 @@ from powermean.fe.geometry_checks import GeometryCheck, GeometryInputs, check_ge
 from powermean.fe.geometry_design import NumericalGeometry
 from powermean.fe.geometry_errors import GeometryAdmissionError
 from powermean.fe.geometry_storage import _build_record
-from powermean.fe.groups import Grouping, Labels, _positions, encode_block
+from powermean.fe.groups import (
+    Grouping,
+    Labels,
+    _CancelledLabelPartition,
+    _positions,
+    encode_block,
+)
 from powermean.model.variance import FloatArray, _finite_array
 
 
@@ -89,7 +95,7 @@ def _grouping(geometry: NumericalGeometry, inputs: AdmissionInputs) -> Grouping:
     ):
         raise ValueError("one ordered current label vector per retained block required")
     for labels in (inputs.cancelled, *inputs.retained):
-        if isinstance(labels, np.ndarray):
+        if type(labels) is _CancelledLabelPartition or isinstance(labels, np.ndarray):
             if labels.shape != (layout.n_rows,):
                 raise ValueError("FE labels must have one value per row")
         elif not isinstance(labels, Sequence) or len(labels) != layout.n_rows:
@@ -121,6 +127,24 @@ def _grouping(geometry: NumericalGeometry, inputs: AdmissionInputs) -> Grouping:
                 "retained_binding", "current ordered retained labels/codes differ"
             )
     return Grouping((cancelled, *retained), layout.positions)
+
+
+def _quotient(geometry: NumericalGeometry, work: WorkLog) -> QuotientRank:
+    """The exact quotient of the geometry's structure, charged to ``work``.
+
+    A geometry built on the exact quotient holds that quotient and the work it
+    took: both belong to the same immutable structure, so the quotient is the one
+    :func:`quotient_rank` returns here and its work counts are charged as if it
+    ran. Every other geometry runs it, which decides and raises as before.
+    """
+    held = geometry.exact_quotient
+    if held is None:
+        return quotient_rank(geometry.structure, work)
+    quotient, counts = held
+    for count in counts.counts:
+        work.begin(count.name, count.begun)
+        work.complete(count.name, count.completed)
+    return quotient
 
 
 def _agree(geometry: NumericalGeometry, exact: QuotientRank) -> None:
@@ -160,7 +184,7 @@ def _admit(
         lambda: check_geometry(geometry, bound, max_bytes=budget.prospective_bytes),
     )
     grouping = work.run("label_binding", lambda: _grouping(geometry, inputs))
-    exact = work.run("FE_quotient", lambda: quotient_rank(geometry.structure, work))
+    exact = work.run("FE_quotient", lambda: _quotient(geometry, work))
     _agree(geometry, exact)
     evidence = admit_slopes(
         geometry,
@@ -170,6 +194,7 @@ def _admit(
         controls,
         mode=mode,
         work=work,
+        analysis=inputs.slopes.analysis,
     )
     # Grouping, absorption/residuals and rich analysis records die here. Shared
     # geometry retains original labels/codes; evidence retains only owned values.

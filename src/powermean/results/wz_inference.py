@@ -1,8 +1,8 @@
 """Normal retained WZ recomputation, using original owned sources.
 
-Covariance changes read the uncorrected retained state and never invoke optimization.
-The existing fit-time initial cache remains usable after influence discard; a different
-request truthfully requires retained state.
+Design 04.7 and D49: covariance changes read the uncorrected retained state and
+never invoke optimization. The existing fit-time initial cache remains usable
+after influence discard; a different request truthfully requires retained state.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ from powermean.inference.wz_binding import (
     WZSource,
     capture_rows,
     layout,
+    omitted_slopes,
     reserve_validation,
     unavailable,
 )
@@ -33,7 +34,7 @@ from powermean.results.absorbed_retained import RetainedAbsorbedEnvelope
 from powermean.results.cancelled_inference import _same_request, request_convention
 from powermean.results.cancelled_retained import RetainedCancelledEnvelope
 from powermean.results.retained_inference import InferenceRequest, RetainedInference
-from powermean.solve.absorbed import AbsorbedOptions
+from powermean.solve.m1_options import AbsorbedOptions
 from powermean.solve.options import SolverOptions
 
 
@@ -44,12 +45,14 @@ def joint_wz(
     absorbed: AbsorbedOptions,
     options: SolverOptions,
     *,
+    formula_intercept: int | None = None,
     max_dense_bytes: int | None = None,
 ) -> RetainedInference:
     """Read the retained uncorrected joint point; never recover effects or refit.
 
-    The normal result owns the original formula terms; the envelope owns the
-    current rows, grouping, numerical point and variance. No verified marker or
+    The normal result owns the original formula terms and supplies the literal
+    intercept's original-column identity from its fitted spec; the envelope owns
+    the current rows, grouping, numerical point and variance. No verified marker or
     prior WZ success supplies source admission. Initial requests are served by
     the normal result's exact cache path before entering this recomputation.
     Convention counts and the operator share the freshly admitted actual P.
@@ -75,14 +78,18 @@ def joint_wz(
     if (
         sample.positive_only
         or sample.conditioned
-        or any(v is not None for v in sample.reasons)
+        or omitted_slopes(sample.data.column_names, sample.reasons, formula_intercept)
     ):
         raise unavailable(
-            "unconditioned original three-way design without omitted slopes required"
+            "unconditioned original three-way design without other omitted slopes "
+            "required"
         )
-    source = WZSource(terms, group, sample.data.row_labels)
+    source = WZSource(
+        terms, group, sample.data.row_labels, formula_intercept=formula_intercept
+    )
+    controls = WZControls(source, absorbed, options, bounds)
     cluster = request.clusters[0]
-    panel = layout(source, cluster.name, design.matrix.shape, absorbed, bounds)
+    panel = layout(source, cluster.name, design.matrix.shape, bounds)
     bind_request(source, cluster)
     initial = envelope.initial_scale
     details = None if initial is None else initial.details
@@ -98,6 +105,7 @@ def joint_wz(
         [panel.pairs],
     )
     applied = convention(request.ssc, counts, inherited=inherited)
+    coordinates = controls.joint_coordinates(panel)
     with np.errstate(over="raise", invalid="raise", under="raise"):
         mu = np.exp(point.q)
     rows = capture_rows(
@@ -107,13 +115,14 @@ def joint_wz(
         mu,
         sample.active_names,
         route="joint_retained_current",
+        coordinates=coordinates,
     )
     result = evaluate(
         rows,
         options,
         bounds,
         ssc=applied.convention.preset or "custom",
-        plan=panel.plan,
+        plan=coordinates.plan,
     )
     errors, matrix, failure = reported(result, order)
     return RetainedInference(

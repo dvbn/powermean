@@ -9,7 +9,6 @@ from types import ModuleType
 SOURCE_FILES = (
     "solve/iols/__init__.py",
     "solve/iols/_numeric.py",
-    "solve/iols/fe.py",
     "solve/iols/kernel_records.py",
     "solve/iols/kernel_state.py",
     "solve/iols/kernel_grid.py",

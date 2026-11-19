@@ -1,11 +1,15 @@
 """Owned, immutable arrays of the data records.
 
-A real array-like becomes an owned array of finite doubles in C order, in bytes of its
-own, so that no caller can set its write flag again (``ndarray.setflags(write=True)``
-raises ``ValueError``), and a later change of the input does not reach the record.  The
-checks are made in this order: real-valued, the number of dimensions, finite.  The
-storage is :func:`powermean.model.rows._immutable`, which forms the same bytes as
-``np.frombuffer(array.tobytes(order="C"), ...)``.
+Port of ``frozen_array`` of ``_arrays.py`` of expreg (source S7 of
+``design/06_reuse_map.md``): a real array-like becomes an owned array of finite
+doubles in C order, in bytes of its own, so that no caller can set its write flag
+again (``ndarray.setflags(write=True)`` raises ``ValueError``), and a later change
+of the input does not reach the record.  The checks and their messages are S7's, in
+S7's order: real-valued, the number of dimensions, finite.  The storage is the
+accepted :func:`powermean.model.rows._immutable` of task M0.5, which forms the same
+bytes as S7's ``np.frombuffer(array.tobytes(order="C"), ...)``.  S7's
+``positive_float`` served its certificate thresholds, which the package does not
+carry (``PROVENANCE.md``, Section 13), and is not ported.
 """
 
 from __future__ import annotations
@@ -20,7 +24,7 @@ from powermean.model.variance import FloatArray
 def frozen_array(
     value: ArrayLike, *, ndim: int | None = None, name: str = "array"
 ) -> FloatArray:
-    """An owned read-only copy of a real array of finite doubles.
+    """An owned read-only copy of a real array of finite doubles (S7 ``frozen_array``).
 
     Parameters
     ----------

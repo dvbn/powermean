@@ -39,8 +39,7 @@ def _consume_evaluation_budget(
     alias_exhausted: bool = False,
 ) -> bool:
     if step.phase == 1:
-        step.phase2_evaluations += 1
-        if step.phase2_evaluations > int(context.control.max_phase2_evaluations):
+        if step.phase2_evaluations >= int(context.control.max_phase2_evaluations):
             attempt.criterion = np.nan
             step.failure_reason = (
                 KERNEL_FAILURE_PHASE2_BUDGET_EXHAUSTED
@@ -49,6 +48,7 @@ def _consume_evaluation_budget(
             )
             step.phase2_budget_exhausted = True
             return False
+        step.phase2_evaluations += 1
     else:
         outer.phase1_evaluations += 1
     return True
@@ -60,9 +60,10 @@ def _record_direct_step_score(
     attempt: _AttemptState,
     beta_phi: FloatArray,
 ) -> None:
-    step_score_norm = float(np.linalg.norm(beta_phi - outer.beta)) * (
-        1.0 + float(step.param)
-    )
+    with np.errstate(over="ignore", invalid="ignore"):  # a non-finite norm is skipped
+        step_score_norm = float(np.linalg.norm(beta_phi - outer.beta)) * (
+            1.0 + float(step.param)
+        )
     if np.isfinite(step_score_norm) and step_score_norm < outer.best_score_norm:
         outer.best_score_norm = step_score_norm
         outer.best_score_rho = float(step.param)
@@ -210,7 +211,9 @@ def _update_qhat_and_kappa_monitors(
             d1 = np.abs(attempt.beta_path[-1] - attempt.beta_path[-2])
             d2 = np.abs(attempt.beta_path[-2] - attempt.beta_path[-3])
             d3 = np.abs(attempt.beta_path[-3] - attempt.beta_path[-4])
-            qhat = np.nanmean(np.log(d1 / d2) / np.log(d2 / d3))
+            ratios = np.log(d1 / d2) / np.log(d2 / d3)
+            # nanmean warns through warnings.warn on an all-NaN slice; its value is NaN.
+            qhat = np.nan if np.isnan(ratios).all() else np.nanmean(ratios)
         step.qhat_last = float(qhat)
         if np.isinf(np.abs(qhat)) and attempt.criterion > step.eps_current * 10.0:
             step.qhat_invalid_count += 1

@@ -1,9 +1,12 @@
 """Detached snapshots of FE effect equations, inner evidence, & certificate.
 
-This module detaches ``EffectEquations``, ``InnerEvidence``, ``CoefficientCheck``, and
-``FEPointCertificate`` without re-encoding groupings, and re-exports the passive
-geometry/basis/row/measures snapshots from :mod:`powermean.results.absorbed_geometry`
-and :mod:`powermean.results.absorbed_geometry_records`.
+``design/02_computation.md``, Section 7; ``design/03_fixed_effects.md``, Sections 2 and
+4; ``plan/evidence/M1.15_contract.txt``, items 4, 8 and 9;
+decisions D49, D51, D54 and D55.  This module detaches ``EffectEquations``,
+``InnerEvidence``, ``CoefficientCheck``, and ``FEPointCertificate`` without re-encoding
+groupings, and re-exports the passive geometry/basis/row/measures snapshots from
+:mod:`powermean.results.absorbed_geometry` and
+:mod:`powermean.results.absorbed_geometry_records`.
 """
 
 from __future__ import annotations
@@ -31,8 +34,8 @@ from powermean.results.absorbed_geometry import (
 )
 from powermean.results.absorbed_geometry_records import (
     RetainedMeasuresSnapshot,
-    _OperationalBasisSnapshot,
     _capture_operational_basis,
+    _OperationalBasisSnapshot,
     _owned_factor_record,
     snapshot_measures,
 )
@@ -58,12 +61,12 @@ from powermean.results.absorbed_sample import (
 from powermean.results.owned import _optional, owned_array
 from powermean.results.retained_inputs import PointKey, SampleKey, _tuple_arrays
 from powermean.solve.absorbed_certificate import FEGate, FEPointCertificate, Level
+from powermean.solve.absorbed_certificate_geometry import FEGeometry
 from powermean.solve.absorbed_certificate_inner import (
     InnerCheck,
     InnerEvidence,
 )
 from powermean.solve.absorbed_certificate_point import WorkStep
-from powermean.solve.absorbed_certificate_geometry import FEGeometry
 from powermean.solve.assessment import CertificateControls
 from powermean.solve.reported import CoefficientCheck
 
@@ -235,7 +238,7 @@ class RetainedCertificateSnapshot:
 
     @property
     def degenerate(self) -> bool:
-        """Return True if a reported standard error is zero."""
+        """Return True if a reported standard error is zero (D49)."""
         return self._coefficients is not None and self._coefficients.degenerate
 
     @property
@@ -285,21 +288,39 @@ class _GeometryData:
         hessian = snapshot_sparse_matrix(geometry.hessian)
         assert hessian is not None
         return cls(
-            geometry.support, float(geometry.norm), str(geometry.refusal),
-            owned_array(geometry.design), owned_array(geometry.moment), hessian,
-            _optional(geometry.scale), snapshot_sparse_matrix(geometry.ordinary),
+            geometry.support,
+            float(geometry.norm),
+            str(geometry.refusal),
+            owned_array(geometry.design),
+            owned_array(geometry.moment),
+            hessian,
+            _optional(geometry.scale),
+            snapshot_sparse_matrix(geometry.ordinary),
             snapshot_sparse_matrix(geometry.curvature),
         )
 
     def materialize(
-        self, point: RetainedPointSnapshot, rows: RetainedRowsSnapshot,
+        self,
+        point: RetainedPointSnapshot,
+        rows: RetainedRowsSnapshot,
         basis: RetainedBasisSnapshot,
     ) -> RetainedGeometrySnapshot:
         """Assemble canonical links from already owned values, without arithmetic."""
         return RetainedGeometrySnapshot(
-            point.sample_key, point.key, point, rows, basis, self.support,
-            self.norm, self.refusal, self.design, self.moment, self.hessian,
-            self.scale, self.ordinary, self.curvature,
+            point.sample_key,
+            point.key,
+            point,
+            rows,
+            basis,
+            self.support,
+            self.norm,
+            self.refusal,
+            self.design,
+            self.moment,
+            self.hessian,
+            self.scale,
+            self.ordinary,
+            self.curvature,
         )
 
 
@@ -348,25 +369,43 @@ class _OperationalCertificate:
         return replace(
             self,
             rows=None if self.rows is None else self.rows.as_discarded(),
-            measures=(None if self.measures is None
-                      else self.measures.without_slope_map()),
+            measures=(
+                None if self.measures is None else self.measures.without_slope_map()
+            ),
         )
 
     def materialize(self) -> RetainedCertificateSnapshot:
         """Create the canonical rich graph from detached values on demand."""
-        basis = (self.basis.materialize()
-                 if isinstance(self.basis, _OperationalBasisSnapshot) else self.basis)
+        basis = (
+            self.basis.materialize()
+            if isinstance(self.basis, _OperationalBasisSnapshot)
+            else self.basis
+        )
         geometry = (
-            None if self.geometry is None or self.rows is None else
-            self.geometry.materialize(self.point, self.rows, basis)
-            if isinstance(self.geometry, _GeometryData) else
-            self.geometry.with_rows(self.rows)
+            None
+            if self.geometry is None or self.rows is None
+            else self.geometry.materialize(self.point, self.rows, basis)
+            if isinstance(self.geometry, _GeometryData)
+            else self.geometry.with_rows(self.rows)
         )
         return RetainedCertificateSnapshot(
-            self.sample_key, self.point_key, self.controls, self.point, basis,
-            self.rows, self.effects, self.inner, geometry, self.measures,
-            self.error_messages, self.work, self.strict, self.secondary,
-            self._coefficients, self.not_applicable, self.require_positive_definite,
+            self.sample_key,
+            self.point_key,
+            self.controls,
+            self.point,
+            basis,
+            self.rows,
+            self.effects,
+            self.inner,
+            geometry,
+            self.measures,
+            self.error_messages,
+            self.work,
+            self.strict,
+            self.secondary,
+            self._coefficients,
+            self.not_applicable,
+            self.require_positive_definite,
             self.score_metric,
         )
 
@@ -394,16 +433,22 @@ def _capture_certificate(
     # view privately and rematerializes it outward; the rows own their own response.
     grp_snap = sample_snapshot._final_grouping
     operational = (
-        None if grp_snap is None else _capture_operational_basis(
-            certificate.basis, partition_key=sample_snapshot.partition_key,
+        None
+        if grp_snap is None
+        else _capture_operational_basis(
+            certificate.basis,
+            partition_key=sample_snapshot.partition_key,
             grouping_snapshot=grp_snap,
         )
     )
     basis_snap = (
         snapshot_basis(
-            certificate.basis, partition_key=sample_snapshot.partition_key,
+            certificate.basis,
+            partition_key=sample_snapshot.partition_key,
             grouping_snapshot=grp_snap,
-        ) if operational is None else operational
+        )
+        if operational is None
+        else operational
     )
     rows_snap = (
         None
@@ -437,7 +482,8 @@ def _capture_certificate(
         None
         if certificate.geometry is None or rows_snap is None
         else _GeometryData.capture(certificate.geometry)
-        if operational is not None else snapshot_geometry(
+        if operational is not None
+        else snapshot_geometry(
             certificate.geometry,
             point_snapshot=pt_snap,
             rows_snapshot=rows_snap,
@@ -504,12 +550,19 @@ def snapshot_certificate(
 ) -> RetainedCertificateSnapshot:
     """Return the canonical detached certificate for an explicit rich request."""
     captured = _capture_certificate(
-        certificate, sample_snapshot=sample_snapshot, selected_point=selected_point,
-        keep_slope_map=keep_slope_map, point_map=point_map,
-        sample_map=sample_map, grouping_map=grouping_map,
+        certificate,
+        sample_snapshot=sample_snapshot,
+        selected_point=selected_point,
+        keep_slope_map=keep_slope_map,
+        point_map=point_map,
+        sample_map=sample_map,
+        grouping_map=grouping_map,
     )
-    return (captured.materialize() if isinstance(captured, _OperationalCertificate)
-            else captured)
+    return (
+        captured.materialize()
+        if isinstance(captured, _OperationalCertificate)
+        else captured
+    )
 
 
 __all__ = [

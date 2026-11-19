@@ -1,7 +1,9 @@
 """Detached inner state snapshots: recoveries, weights, index starts, and Schur records.
 
-This module defines :func:`_owned_normalization`, :class:`RetainedRecovery`,
-:func:`_owned_recovery`, :class:`RetainedPreparedWeights`, :class:`RetainedIndexStart`,
+``design/02_computation.md``, Sections 5.2 and 7; ``plan/evidence/M1.15_contract.txt``;
+``brief/layout_C_ownership.txt`` (P03).  This module defines
+:func:`_owned_normalization`, :class:`RetainedRecovery`, :func:`_owned_recovery`,
+:class:`RetainedPreparedWeights`, :class:`RetainedIndexStart`,
 :class:`RetainedLocalInitializer` (all 14 fields including ``implementation``),
 :func:`_snapshot_local_initializer`, :class:`RetainedAbsorbedSchur`, and
 :func:`_owned_absorbed_schur`, and re-exports profile/absorption state records from
@@ -174,9 +176,19 @@ class RetainedPreparedWeights:
         grouping: Grouping | RetainedGroupingSnapshot,
         weights: FloatArray,
         totals: tuple[FloatArray, ...],
+        *,
+        _view: bool = False,
     ) -> None:
-        """Detach ``grouping`` and store owned copies of ``weights`` and ``totals``."""
-        object.__setattr__(self, "_grouping", detach_grouping(grouping))
+        """Detach ``grouping`` and store owned copies of ``weights`` and ``totals``.
+
+        ``_view`` as :class:`~powermean.results.absorbed_state_records.
+        RetainedAbsorptionState` takes it: an internally owned snapshot stored as given.
+        """
+        if _view:
+            assert type(grouping) is RetainedGroupingSnapshot
+        object.__setattr__(
+            self, "_grouping", grouping if _view else detach_grouping(grouping)
+        )
         object.__setattr__(self, "_weights", owned_array(weights))
         object.__setattr__(self, "_totals", _tuple_arrays(totals))
 
@@ -187,8 +199,11 @@ class RetainedPreparedWeights:
         *,
         grouping_snapshot: RetainedGroupingSnapshot | None = None,
         grouping_map: GroupingIdentityMap | None = None,
+        view: RetainedGroupingSnapshot | None = None,
     ) -> RetainedPreparedWeights:
-        """Detach a ``PreparedWeights`` record."""
+        """Detach a ``PreparedWeights`` record; ``view`` as ``from_state`` takes it."""
+        if view is not None:
+            return cls(view, pw.weights, pw.totals, _view=True)
         grp = _resolve_state_grouping(
             pw.grouping,
             grouping_snapshot=grouping_snapshot,
@@ -253,7 +268,7 @@ class RetainedIndexStart:
 
 @dataclass(frozen=True)
 class RetainedLocalInitializer:
-    """Detached snapshot of all 14 fields of ``LocalInitializer``."""
+    """Detached snapshot of all 14 fields of ``LocalInitializer`` (decision D75)."""
 
     _theta: FloatArray
     _base: FloatArray

@@ -222,7 +222,7 @@ class CovarianceRequest:
 
     @property
     def is_default_stata(self) -> bool:
-        """Whether this request uses the default observed Stata path."""
+        """Whether this request uses the default M0/M1.14 observed Stata path."""
         return (
             self.kind in ("robust", "cluster")
             and len(self.clusters) <= 1

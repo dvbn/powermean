@@ -1,11 +1,14 @@
-"""Sample construction, steps 1 to 4: the order-neutral base.
+"""Sample construction, steps 1 to 4 of the design: the order-neutral base.
 
-The interface evaluates the formula on every input row and feeds this module arrays,
-codes and records (:class:`~powermean.data.raw.RawInputs`); nothing here reads pandas or
-Formulaic.  Every input row has the stable positional identifier ``0 .. n_input - 1``
-before any step, every later selection is composed through those positions, and user
-labels are identity metadata that the interface keeps apart.  The steps run in this
-order, and a row excluded at an earlier step keeps that reason:
+``design/02_computation.md``, Section 2, steps 1 to 4, and Section 1, rule 4;
+``DESIGN.md``, Section 6.1; ``design/01_statistical_core.md``, Section 3.2; decisions
+D16, D41, D51 and D55.  The interface evaluates the formula on every input row and
+feeds this module arrays, codes and records (:class:`~powermean.data.raw.RawInputs`);
+nothing here reads pandas or Formulaic.  Every input row has the stable positional
+identifier ``0 .. n_input - 1`` before any step, every later selection is composed
+through those positions, and user labels are identity metadata that the interface keeps
+apart.  The steps run in the order of Section 2, and a row excluded at an earlier step
+keeps that reason:
 
 1. ``subset``: a row whose subset value is false leaves with the reason ``"subset"``,
    whatever else is wrong with it.
@@ -38,13 +41,14 @@ non-finite value leaves; a value that breaks that promise is the interface's err
 not a step of the sample.
 
 :class:`SampleBase`, built once by :func:`build_sample`, holds the raw inputs (the raw
-outcome, the unmultiplied offset or exposure, the trained design and the original weight
-objects), the masks of steps 1, 2 and 4, and one code per input row.
+outcome, the unmultiplied offset or exposure, the trained design and the original
+weight objects), the masks of steps 1, 2 and 4, and one code per input row.
 :meth:`SampleBase.for_order` derives the sample and the problem of one mean order
 (:func:`powermean.data.retained.derive_order`) without changing the base or training
-anything again.  The messages are ``sample.negative_outcome`` and ``sample.empty`` (no
-complete row), with the number of input rows, here; ``sample.negative_weight`` for each
-order.  All arrays are owned and read-only; the inputs are not modified.
+anything again.  The messages are the accepted ones: ``sample.negative_outcome`` and
+``sample.empty`` (no complete row), with the number of input rows, here;
+``sample.negative_weight`` for each order.  All arrays are owned and read-only; the
+inputs are not modified.
 """
 
 from __future__ import annotations

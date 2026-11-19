@@ -1,6 +1,8 @@
 """The reported scale of the certificate, from the covariance of a fresh evaluation.
 
-The certificate compares the Newton correction of a candidate
+``design/02_computation.md``, Section 7 (the coefficient correction in units of its
+standard error); ``design/04_inference_and_effects.md``, Sections 1 to 3; decisions D49
+and D51.  The certificate of task M0.11 compares the Newton correction of a candidate
 with the standard errors at that candidate, which a later stage supplies through a
 :class:`~powermean.solve.reported.ReportedScaleProvider`; the solve stage does not
 import this one, and this module imports its contract.
@@ -13,7 +15,7 @@ one cluster dimension with the factors of the ``"stata"`` preset
 (:mod:`powermean.inference.convention`), and the standard errors of the reported
 coefficients for its map: the dense ``M`` (``sqrt(diag(M V M'))`` of
 :func:`~powermean.inference.convention.reported_covariance`, the identity by default)
-or the direct map of the
+or, since task M0.22, the direct map of the accepted
 :class:`~powermean.model.order_scale.OrderScale` (:func:`direct_standard_errors`:
 the standard errors ``s_j / d_j / |omega|``, each with exact exponents, so that no
 intermediate of a mixed-scale candidate overflows or underflows on the way to a
@@ -30,7 +32,7 @@ of another candidate is ever returned.
 Zero standard errors at an exact root, as for a saturated model whose rows have zero
 scores, are returned as computed, with the zero-covariance diagnostics of the
 primitive; the certificate passes a zero correction over them and flags inference as
-degenerate.  A negative variance on the reported scale gives a missing standard
+degenerate (D49).  A negative variance on the reported scale gives a missing standard
 error (NaN), which the certificate never passes; nothing is floored or replaced, and an
 error of the covariance (an unrepresentable value, invalid frequency counts or cluster
 codes, fewer than two observations or clusters) is raised, not caught.  The caller
@@ -66,14 +68,14 @@ def direct_standard_errors(covariance: Covariance, order: OrderScale) -> FloatAr
     covariance : Covariance
         The covariance ``V`` of the solver's coordinates.
     order : OrderScale
-        The order scale of those coordinates.
+        The accepted order scale of those coordinates.
 
     Returns
     -------
     array
         ``sqrt(V_jj)`` mapped by ``1 / (d_j |omega|)`` with exact exponents
         (``OrderScale.standard_errors``), NaN where a variance of ``V`` is negative
-        and zero where it is zero.  No dense map is materialized, and the full
+        and zero where it is zero (D49).  No dense map is materialized, and the full
         reported covariance, which the result forms by the same direct map
         (``powermean.results.covariance.report``), is not formed here: a standard
         error is representable where the variance that squares it may not be.

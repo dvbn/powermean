@@ -19,7 +19,10 @@ from powermean.data.request_values import OMITTED, Omitted
 from powermean.errors import SpecificationError
 from powermean.inference.bread import BREADS, Bread
 from powermean.inference.ssc import resolve_convention
-from powermean.interface.cancelled_selection import CancelledFitControls
+from powermean.interface.cancelled_selection import (
+    CancelledFitControls,
+    default_cancelled_controls,
+)
 from powermean.interface.sample_records import SampleRequest
 from powermean.model.variance import (
     CancelledFamily,
@@ -32,7 +35,7 @@ from powermean.solve.cancelled_records import (
     RootOptions,
     resolve_root_options,
 )
-from powermean.solve.absorbed import ABSORBED_DOMAINS, AbsorbedOptions
+from powermean.solve.m1_options import ABSORBED_DOMAINS, AbsorbedOptions
 from powermean.solve.options import (
     OPTION_NAMES,
     SolverOptions,
@@ -85,6 +88,9 @@ class ResolvedFESolverOptions:
     cancelled_controls: CancelledFitControls | None
     sample_request: SampleRequest | None
     max_dense_bytes: int | None = None
+    # Whether the caller's root options state ``merit_metric``: a mapping with that
+    # key, or a RootOptions record, which states every field.
+    merit_metric_given: bool = False
 
 
 def _unknown(kind: str, key: object, valid: Sequence[str]) -> SpecificationError:
@@ -112,7 +118,7 @@ def _unimplemented(feature: str) -> SpecificationError:
 
 
 def check_deferred_vcov(vcov: object, cluster: object = None) -> None:
-    """Refuse reserved HAC and Conley covariance requests before solve.
+    """Refuse reserved HAC and Conley covariance requests before solve (D78).
 
     The one check of :func:`powermean.results.retained_hc.deferred_vcov`, which the
     requests on a result share.
@@ -229,8 +235,25 @@ def _cov_string(
     raise _invalid("vcov", value, "robust, HC0..HC5/HC4m, or a cluster mapping")
 
 
+def refuse_hc_with_wz(value: Mapping[object, object]) -> None:
+    """Refuse a named HC method written together with ``"adjustment": "wz"``.
+
+    The WZ adjusted covariance is the pair-level form of the leverage correction
+    that HC2 applies by row (the same full-design hat); the two are not stacked
+    (ruling 63, point 6).
+    """
+    method = value.get("vcov", value.get("method"))
+    if value.get("adjustment") == "wz" and method in HC_METHODS:
+        raise _conflicting(
+            f"vcov={method!r}",
+            "adjustment='wz' (the WZ adjustment is itself the pair-level leverage "
+            "correction)",
+        )
+
+
 def _cov_mapping(value: Mapping[object, object]) -> ClusterRequest:
     """Validate all mapping keys before constructing the actual request."""
+    refuse_hc_with_wz(value)
     for key in value:
         if key not in ("cluster", "multiway", "psd", "adjustment"):
             raise _unknown(
@@ -294,7 +317,7 @@ def resolve_fe_vcov(
 def wz_coefficient_vcov(
     request: FEVcovRequest, *, explicit: bool, pair_name: str
 ) -> ClusterRequest:
-    """Settle WZ's default before constructing the current-point assessor.
+    """D25: settle WZ's default before constructing the current-point assessor.
 
     Explicit adjustment='none' remains ordinary. A declared other sampling unit
     is refused rather than silently replaced by the published pair unit.
@@ -342,8 +365,12 @@ def _merged(
     return base
 
 
+# The organization of a fit whose call names none (the owner's rulings 59 and 61).
+DEFAULT_ABSORBED = "profiled"
+
+
 def _absorbed_options(raw: dict[str, object]) -> AbsorbedOptions:
-    """Require the fit's explicit organization, never choose one."""
+    """The fit's organization: the call's, or ``DEFAULT_ABSORBED``."""
     nested = raw.get("absorbed_options")
     if isinstance(nested, AbsorbedOptions):
         values: dict[str, object] = dict(nested.to_dict())
@@ -354,8 +381,7 @@ def _absorbed_options(raw: dict[str, object]) -> AbsorbedOptions:
             else _option_mapping(nested, tuple(ABSORBED_DOMAINS), "absorbed_options")
         )
     values = _merged(values, raw, tuple(ABSORBED_DOMAINS))
-    if "absorbed" not in values:
-        raise _invalid("absorbed", None, "explicit 'index' or 'profiled' at fit")
+    values.setdefault("absorbed", DEFAULT_ABSORBED)
     return AbsorbedOptions.from_dict(values)
 
 
@@ -394,14 +420,16 @@ def resolve_fe_solver_options(
     cancel: str | Literal[True] | None,
     selected_root: bool = False,
 ) -> ResolvedFESolverOptions:
-    """Resolve explicit FE organization and existing numerical control records.
+    """Resolve the FE organization and the numerical control records.
 
-    Callers supply SampleRequest for a joint fit and actual
-    CancelledFitControls for cancellation. The optional joint byte limit
+    A call may supply a SampleRequest for a joint fit and CancelledFitControls for
+    cancellation; what it omits takes the package's defaults (``DEFAULT_ABSORBED``,
+    :meth:`SampleRequest.default`, :func:`default_cancelled_controls`). An omitted
+    ``solver_options`` is an empty mapping. The optional joint D13 byte limit
     applies to WZ numeric-buffer reservations, including later covariance calls.
     A joint fit outside ``tau in [1, 2]`` (``selected_root``) reads the existing
     ``root_options`` key, a :class:`RootOptions` or its mapping, with the defaults
-    where omitted; any other joint fit refuses it.
+    of ``design/02``, Section 5.7, where omitted; any other joint fit refuses it.
     """
     allowed = tuple(
         set(OPTION_NAMES)
@@ -424,15 +452,19 @@ def resolve_fe_solver_options(
     if cancel is not None:
         if "max_dense_bytes" in raw:
             raise _conflicting("max_dense_bytes", "cancel")
+        if "controls" not in raw:
+            controls = default_cancelled_controls()
         if not isinstance(controls, CancelledFitControls):
-            raise _invalid("controls", controls, "explicit CancelledFitControls")
+            raise _invalid("controls", controls, "CancelledFitControls")
         if sample_request is not None:
             raise _conflicting("sample_request", "cancel")
     else:
         if controls is not None:
             raise _conflicting("controls", "joint")
-        if not isinstance(sample_request, SampleRequest):
-            raise _invalid("sample_request", sample_request, "explicit SampleRequest")
+        # An omitted request stays absent: the joint dispatch builds the default
+        # one, where the prepared outcome domain and the estimator are known.
+        if "sample_request" in raw and not isinstance(sample_request, SampleRequest):
+            raise _invalid("sample_request", sample_request, "a SampleRequest")
     root = raw.get("root_options")
     if root is not None and not isinstance(root, (RootOptions, Mapping)):
         raise _invalid("root_options", root, "RootOptions or a mapping")
@@ -447,6 +479,8 @@ def resolve_fe_solver_options(
         resolved,
         True,
         controls,
-        sample_request,
+        cast("SampleRequest | None", sample_request),
         max_dense_bytes,
+        isinstance(root, RootOptions)
+        or (isinstance(root, Mapping) and "merit_metric" in root),
     )

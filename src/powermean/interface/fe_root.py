@@ -1,8 +1,10 @@
-"""The joint FE fit outside ``tau in [1, 2]``: initializer, root solve, audit.
+"""The private joint FE fit outside ``tau in [1, 2]``: initializer, root solve, audit.
 
-Outside ``[1, 2]`` the existence of a finite root is not characterized: rank checks
-only, the solver and the certificate decide, with a ``CoverageWarning``.  This module
-is the interface layer of
+``design/02_computation.md``, Sections 4 (outside ``[1, 2]`` the existence of a
+finite root is not characterized: rank checks only, the solver and the certificate
+decide, ``CoverageWarning``), 5.3, 6 and 7; ``DESIGN.md``, Sections 3.4 and 6.3;
+decisions D51 and D57; the human approval of 31 October 2026 of the nearest convex
+start on the same sample.  The interface layer of
 :func:`~powermean.solve.absorbed_root.solve_absorbed_root`, called by the normal joint
 FE dispatch (:mod:`powermean.interface.fe_dispatch`) for a power variance outside
 ``[1, 2]`` at ``omega != 0``.
@@ -15,7 +17,7 @@ the authoritative sample of the fit and of its initializer alike.
 
 The initializer (:func:`convex_runner`).  The nearest convex member of the family on
 that very sample object, by the organization the fit requested and its unchanged
-solver, options, automatic start and internal within-fit assessment handoff, audited
+solver, options, automatic start and private within-fit assessment handoff, audited
 as the convex joint route audits its candidate.  Its trigger
 (:class:`SameSampleTrigger`) is the coordinator's recorded recomposition call of the
 fit's own outcome with the family's TIGHTER controls: the rank-only request of the
@@ -50,7 +52,7 @@ from powermean.solve.absorbed_certificate import CandidateAudit, audit_root_cand
 from powermean.solve.absorbed_certificate_scale import FEScaleProvider
 from powermean.solve.absorbed_root import ConvexFit, ConvexRunner, solve_absorbed_root
 from powermean.solve.cancelled_records import RootOptions
-from powermean.solve.absorbed import AbsorbedOptions
+from powermean.solve.m1_options import AbsorbedOptions
 from powermean.solve.newton_absorbed import IndexCandidate
 from powermean.solve.newton_profiled import ProfiledCandidate
 from powermean.solve.options import SolverOptions

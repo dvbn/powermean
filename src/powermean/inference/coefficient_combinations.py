@@ -1,13 +1,13 @@
-"""On-demand coefficient inference.
+"""On-demand coefficient inference, design/04 Sections 3, 6 and 7.
 
 The context owns reported beta, the already scaled full V and the active normal/t
 reference. These functions never recover rows, fit, correct beta or repair V.
-Joint tests follow the rank-aware policy of
+Joint tests follow the approved rank-aware policy of
 :mod:`powermean.inference.restriction_rank`: redundant restrictions count once
 with the documented machine-precision rank rule shared by the generalized inverse
 and the degrees of freedom; a discrepancy with a component outside the covariance
-range has no p-value; empty or inconsistent requests refuse. An exact all-zero
-covariance has its own status; negative or undefined covariance is missing.
+range has no p-value; empty or inconsistent requests refuse. Exact all-zero
+covariance follows D49; negative or undefined covariance is missing.
 """
 
 from __future__ import annotations
@@ -23,6 +23,10 @@ from powermean.data.request_values import invalid
 from powermean.effects.targets import (
     Inference,
     ReportingContext,
+    _bilinear,
+    _has_tiny_operand,
+    _target_support,
+    _target_variance,
     reference_values,
 )
 from powermean.inference.restriction_rank import (
@@ -135,14 +139,8 @@ def scalar_estimate(
 def _variance(context: ReportingContext, gradient: tuple[float, ...]) -> float:
     if len(gradient) != len(context.names):
         raise ValueError("a gradient must use the full reported coefficient basis")
-    weights = np.asarray(gradient, dtype=np.float64)
-    active = np.flatnonzero(weights)
-    selected = weights[active]
-    covariance = np.asarray(context.covariance, dtype=np.float64).reshape(
-        (len(context.names), len(context.names))
-    )
-    with np.errstate(over="ignore", invalid="ignore"):
-        return float(selected @ covariance[np.ix_(active, active)] @ selected)
+    active, selected = _target_support(gradient)
+    return _target_variance(context, active, selected)
 
 
 def restrictions(
@@ -242,17 +240,25 @@ def _restriction_moments(
     beta = np.asarray(context.beta, dtype=np.float64)
     matrix = np.asarray(context.covariance, dtype=np.float64)
     active = [np.flatnonzero(row) for row in weights]
+    selected = [row[support] for row, support in zip(weights, active, strict=True)]
+    tiny_weights = [_has_tiny_operand(row) for row in selected]
+    tiny_matrix = _has_tiny_operand(matrix)
     difference = np.empty(len(rows), dtype=np.float64)
     covariance = np.empty((len(rows), len(rows)), dtype=np.float64)
     with np.errstate(over="ignore", invalid="ignore"):
         for j, support in enumerate(active):
-            difference[j] = weights[j, support] @ beta[support] - rhs[j]
+            difference[j] = selected[j] @ beta[support] - rhs[j]
             for k in range(j, len(rows)):
-                other = active[k]
-                value = (
-                    weights[j, support]
-                    @ matrix[np.ix_(support, other)]
-                    @ weights[k, other]
+                block = matrix[np.ix_(support, active[k])]
+                value = _bilinear(
+                    selected[j],
+                    block,
+                    selected[k],
+                    may_underflow=(
+                        tiny_weights[j]
+                        or tiny_weights[k]
+                        or (tiny_matrix and _has_tiny_operand(block))
+                    ),
                 )
                 covariance[j, k] = covariance[k, j] = value
     return difference, covariance
@@ -265,7 +271,7 @@ def _quadratic(
     row_null: FloatArray,
     rows: FloatArray,
 ) -> _Quadratic:
-    """Status order: undefined, exact zero, indefinite, outside range, ok."""
+    """Status order: undefined, exact zero (D49), indefinite, outside range, ok."""
     if not (np.isfinite(difference).all() and np.isfinite(covariance).all()):
         return _Quadratic(math.nan, 0, math.nan, "missing", UNDEFINED)
     if not np.any(covariance):

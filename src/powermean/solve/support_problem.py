@@ -1,6 +1,8 @@
 """The current sample of a support diagnostic: validation, binding and index storage.
 
-Internal module: ``powermean`` exports nothing of it.
+``design/02_computation.md``, Sections 2 and 4; ``design/01_statistical_core.md``,
+Section 8, item 1; ``plan/evidence/M1.7_contract.txt``, Sections A and B; decision
+D51.  Task M1.7, private: ``powermean`` exports nothing of it.
 
 The sample.  :class:`SupportProblem` is the joint transformed problem on the accepted
 current rows: ``Z = Y^omega``, the slopes ``X``, the accepted grouping of the estimated
@@ -8,7 +10,7 @@ blocks (``F``, never formed), the original positions, the positive statistical w
 and the finite offset.  Weights and offset never enter the cone of ``B = [X, F]``; they
 are validated and kept so that every witness and result is bound to its exact sample
 (:func:`same_sample`).  Only ``PowerVariance`` with ``1 <= tau < 2`` and
-``NB2Variance`` have this characterized cone: another family, ``tau = 2``
+``NB2Variance`` have this characterized cone: another family, ``tau = 2`` (task M1.8)
 or ``omega = 0`` is refused, so nothing dispatches here silently.  Nothing is deleted.
 
 Positions.  The original positions are distinct nonnegative integers, the grouping's
@@ -25,7 +27,7 @@ import numpy as np
 from numpy.typing import ArrayLike
 
 from powermean.data.accounting import frozen_index
-from powermean.fe.groups import Grouping
+from powermean.fe.groups import Grouping, _distinct_integers
 from powermean.fe.reductions import immutable_array
 from powermean.model.order import IndexArray
 from powermean.model.variance import FloatArray, NB2Variance, PowerVariance
@@ -86,7 +88,7 @@ def _positions(value: ArrayLike, n: int, grouping: Grouping | None) -> IndexArra
     found = np.asarray(value)
     if found.dtype.kind not in "iu" or found.shape != (n,):
         raise ValueError("positions must be an integer vector, one per row")
-    if (found < 0).any() or np.unique(found).size != n:
+    if (found < 0).any() or not _distinct_integers(found):
         raise ValueError("positions must be distinct nonnegative integers")
     if int(found.max()) > LARGEST_POSITION:
         raise ValueError("positions must be representable as np.intp")

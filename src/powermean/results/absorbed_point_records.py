@@ -1,8 +1,10 @@
 """Detached point, linear normalization, and fresh equation snapshot records.
 
-This leaf module defines :data:`Family`, :data:`ReferenceTuple`,
-:func:`_owned_references`, :class:`RetainedLinearNormalization`,
-:class:`RetainedFreshEquations`, and :class:`RetainedPointSnapshot`.
+``design/02_computation.md``, Sections 5.2 and 7; ``plan/evidence/M1.15_contract.txt``,
+items 2, 3 and 7; ``brief/layout_C_ownership.txt`` (P05).  This leaf module defines
+:data:`Family`, :data:`ReferenceTuple`, :func:`_owned_references`,
+:class:`RetainedLinearNormalization`, :class:`RetainedFreshEquations`, and
+:class:`RetainedPointSnapshot`.
 """
 
 from __future__ import annotations
@@ -10,7 +12,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from powermean.fe.connectivity import IndicatorRank
 from powermean.fe.profile_nb2 import ScalarWork
 from powermean.model.order import IndexArray
 from powermean.model.variance import FloatArray, NB2Variance, PowerVariance
@@ -55,7 +56,6 @@ class RetainedLinearNormalization:
     _shifts: tuple[FloatArray, ...]
     _index: FloatArray
     gap: float
-    rank: IndicatorRank
 
     def __post_init__(self) -> None:
         """Own all stored numeric arrays."""

@@ -1,6 +1,8 @@
 """Fresh checks of the GPML recession programs: original-proposal witnesses and duals.
 
-Internal module.  Everything is recomputed from the
+``design/02_computation.md``, Section 4; ``plan/evidence/M1.8_contract.txt``,
+Section 3, with the original-proposal replay of ``plan/evidence/M1.8_brief.txt``
+(revision A); decision D51.  Task M1.8, private.  Everything is recomputed from the
 bound current sample (:func:`powermean.solve.support_gamma_lp.prepare`), never taken
 from the optimizer's sparse product; every product, sum and quotient is range-checked,
 so that an unrepresentable quantity fails as ``range`` instead of manufacturing an
@@ -66,10 +68,12 @@ from powermean.model.variance import FloatArray
 from powermean.solve.support_gamma_lp import (
     Effects,
     LPData,
+    LPReport,
     Marginal,
     RawCheck,
     Stage,
     dot,
+    expand,
     own,
     prepare,
     ratio,
@@ -79,6 +83,7 @@ from powermean.solve.support_gamma_lp import (
     split,
     sums,
     total,
+    usable,
 )
 from powermean.solve.support_gamma_problem import GammaProblem
 from powermean.solve.support_lp import LPControls
@@ -99,7 +104,7 @@ def _proposal(
 ) -> tuple[FloatArray, float]:
     """An owned read-only ``v`` and the reported objective; ``ValueError`` if bad."""
     v = immutable_array(boxed)
-    k = problem.n_parameters
+    k = problem.n_coordinates
     if not k or v.shape != (k,) or not np.isfinite(v).all():
         raise ValueError("a proposal needs one finite coordinate per parameter")
     if isinstance(reported, bool) or not isinstance(reported, float | int):
@@ -367,6 +372,76 @@ def _slopes(
     return _with_box(_identities(*first, m), (lower, upper))
 
 
+def _zero_box_dual(
+    problem: GammaProblem, controls: LPControls, stage: Stage, report: LPReport
+) -> Multipliers | None:
+    """Admit a usable zero point, zero objective and zero bound marginals."""
+    equalities = int(stage == "zero_sum")
+    point, marginals = report.point, report.marginals
+    if (
+        report.stage != stage
+        or report.controls != controls
+        or report.rows != problem.positive.size + equalities
+        or report.failure
+        or not usable(report)
+        or report.reported != 0.0
+        or point is None
+        or point.shape != (problem.n_slopes,)
+        or np.any(point)
+        or marginals is None
+    ):
+        return None
+    inequality, equality, lower, upper = marginals
+    if np.any(lower) or np.any(upper):
+        return None
+    nu = float(equality[0]) if equalities else 0.0
+    multipliers = Multipliers(-inequality, nu, lower, upper)
+    return None if _signs(multipliers) else multipliers
+
+
+def _raw_columns(x: FloatArray, w: FloatArray, codes: IndexArray) -> Pair:
+    """The checked row-order sums used by the full original-column verifier."""
+    values, magnitudes = _pair(checked_product(x, w[:, None]), codes, 1)
+    return values[0], magnitudes[0]
+
+
+def calibrated_duals_pass(
+    problem: GammaProblem,
+    data: LPData,
+    controls: LPControls,
+    reports: tuple[LPReport, LPReport],
+) -> bool:
+    """Check local proposals using a single fresh preparation of this ordinary call.
+
+    Zero coefficients give exactly zero activities, equality and primal objective.
+    The mapped direction is null. With exactly zero bound marginals the dual bound
+    and gap are zero, and stationarity is the cone identity. Verify that identity
+    for each actual dual against the original, unscaled rows and its own objective.
+    """
+    if problem.grouping is not None or problem.coordinates is not None:
+        return False
+    first = _zero_box_dual(problem, controls, "negative", reports[0])
+    second = _zero_box_dual(problem, controls, "zero_sum", reports[1])
+    if first is None or second is None:
+        return False
+    xp = problem.design[problem.positive]
+    on_p = single(xp.shape[0])
+    try:
+        full = _raw_columns(problem.design, data.weights, single(problem.n_rows))
+        negative_positive = _raw_columns(xp, -data.positive_weights, on_p)
+        for objective_columns, multipliers in (
+            (full, first),
+            (negative_positive, second),
+        ):
+            cone = _raw_columns(xp, multipliers.cone, on_p)
+            residual = _identities(objective_columns, cone, full, multipliers)
+            if not _sums(*residual).passing(controls.tolerance):
+                return False
+    except FloatingPointError:
+        return False
+    return True
+
+
 def _levels(
     problem: GammaProblem, data: LPData, stage: Stage, m: Multipliers, start: int
 ) -> list[Identities]:
@@ -445,7 +520,7 @@ class GammaDual:
 
 def _marginals(problem: GammaProblem, stage: Stage, given: Marginal) -> Marginal:
     """Owned finite marginals of the program's shapes; ``ValueError`` otherwise."""
-    k, equalities = problem.n_parameters, 1 if stage == "zero_sum" else 0
+    k, equalities = problem.n_coordinates, 1 if stage == "zero_sum" else 0
     shapes = [(problem.positive.size,), (equalities,), (k,), (k,)]
     owned = [immutable_array(m) for m in given]
     finite = all(np.isfinite(m).all() for m in owned)
@@ -489,7 +564,12 @@ def dual_check(
     if check.failure or check.values is None:
         return replace(record, check=check, failure=(check.failure,))
     nu = float(owned[1][0]) if stage == "zero_sum" else 0.0
-    m = Multipliers(immutable_array(-owned[0]), nu, owned[2], owned[3])
+    m = Multipliers(
+        immutable_array(-owned[0]),
+        nu,
+        expand(problem, owned[2]),
+        expand(problem, owned[3]),
+    )
     signs = _signs(m)
     record = replace(record, check=check, multipliers=m, failure=(*signs, "range"))
     scale = check.values.scale

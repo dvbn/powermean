@@ -1,38 +1,44 @@
 """Checked arithmetic of the power-family profile: inputs, log sums, steps, equations.
 
-Exact block updates with log-sum-exp; the controls ``profile_tol`` 2e-11 and
-``profile_max_sweeps`` 20000 are taken as explicit arguments by
-:mod:`powermean.fe.profile`.  This module holds the primitives only.  The state, the
-sweeps, the budget and the statuses are :mod:`powermean.fe.profile`.  The shared
-checked record, the variance-neutral reconstruction and the fresh equations admit the
-exact NB2 family, with the power factory :func:`prepare_profile`, the power log inputs
-and the power loop kept power-only by explicit refusals; the NB2 factory and solver
-are :mod:`powermean.fe.profile_nb2`.
+``design/02_computation.md``, Section 5.2 (exact block updates with log-sum-exp) and
+Section 5.7 (``profile_tol`` 2e-11, ``profile_max_sweeps`` 20000, unchanged and taken
+as explicit arguments by :mod:`powermean.fe.profile`);
+``design/01_statistical_core.md``, Sections 3.1 and 4.1; ``design/06_reuse_map.md``,
+``fe/profile`` (an ADAPTATION of S1
+``fe_direct.ProfileLinearLoss``, lines 49 to 125, not a port); the adopted contract
+``plan/evidence/M1.5_contract.txt``, Sections 1 to 3; decision D51.  Task M1.5: the
+primitives only.  The state, the sweeps, the budget and the statuses are
+:mod:`powermean.fe.profile`.  Task M1.6 (``plan/evidence/M1.6_contract.txt``, the
+engineering clarification) admits the exact NB2 family into the shared checked
+record and the variance-neutral reconstruction and fresh equations, with the power
+factory :func:`prepare_profile`, the power log inputs and the power loop kept
+power-only by explicit refusals; the NB2 factory and solver are
+:mod:`powermean.fe.profile_nb2`.
 
 Notation.  ``Z >= 0`` is the already-transformed outcome, ``b`` the finite base index
 (``X gamma + omega o``, the transformed offset included: no omega, outcome power,
 exposure or slope enters here), ``a >= 0`` the raw observation weights, ``tau`` the
-power of the exact :class:`~powermean.model.variance.PowerVariance` (its internal
-domain ``[0, 3]`` inherited, no profiler-only restriction), block ``k`` of the
+power of the exact :class:`~powermean.model.variance.PowerVariance` (its private domain
+``[0, 3]`` inherited, no profiler-only restriction), block ``k`` of the accepted
 grouping has codes ``c_k`` and ``L_k`` levels, ``alpha_k`` is its coefficient vector,
 and the authoritative index is the ordered reconstruction
 
     q = ((b + alpha_1[c_1]) + alpha_2[c_2]) + ...     every row, zero weights included.
 
-Block update, at the CURRENT ``q``, for each level ``g``:
+Block update (contract, Section 2), at the CURRENT ``q``, for each level ``g``:
 
     A_g = LSE(log a_i + log Z_i + (1 - tau) q_i : a_i > 0, Z_i > 0)
     B_g = LSE(log a_i + (2 - tau) q_i : a_i > 0)
     alpha_k,g <- fl(alpha_k,g + (A_g - B_g))             an INCREMENT
 
-The replacement formula ``alpha_k,g = A_g - B_g`` uses the index
+The design's replacement formula writes ``alpha_k,g = A_g - B_g`` with the index
 WITHOUT block ``k``; the two agree algebraically, and only the increment is formed
 here.  Each raw weight enters both sums once; it is not a curvature weight.  Absent
 terms (a zero weight, a zero outcome in ``A``) are negative infinity, an exact zero
-term, never a floor.  ``LSE`` is the reduction
+term, never a floor.  ``LSE`` is the accepted S6 reduction
 :func:`powermean.fe.reductions.group_logsumexp`: the maximum of the level taken out,
 the exponentials of the differences summed in row order, the log of the sum added
-back.  The maximum term of
+back; on this domain it is the arithmetic of S1 ``_log_sums``.  The maximum term of
 every level is ``exp(0) = 1``, so the sum is finite and positive: a smaller normalized
 exponential that underflows to zero, or a shifted difference that overflows to
 negative infinity from two finite ordered logs, is a vanishing tail of a present
@@ -55,14 +61,25 @@ whose sums the deterministic reduction then shares, not an ownership claim; othe
 inputs, a record that is not plain NumPy data or a replaced reduction run the call
 as :func:`block_step` does.  :func:`block_step` itself is unchanged.
 
-Fresh equations, at one authoritative ``q`` on the rows of
-positive weight, through the unchanged row kernel
+Fresh equations (contract, Section 3), at one authoritative ``q`` on the rows of
+positive weight, through the unchanged M0 row kernel
 :func:`powermean.model.rows.evaluate_rows`:
 
-    r_i = Z_i exp((1 - tau) q_i) - exp((2 - tau) q_i)     the kernel score, its branches
-    d_g = sum a_i,   S_g = sum a_i r_i,   e_g = S_g / d_g  in row order, per level
+    r_i = Z_i exp((1 - tau) q_i) - exp((2 - tau) q_i)     the M0 score, its branches
+    d_g = sum a_i,   S_g = sum a_i r_i,   e_g = S_g / (u d_g)  in row order, per level
 
-Two reuse qualifications: (a) this full ``q`` includes
+Unit.  The score ``r_i`` is homogeneous of degree ``2 - tau`` in the unit of the
+outcome, and every rule of the package compares ``e_g`` with a pure number
+(``profile_tol``, the native tolerance, the certificate's ``tol``).  The level mean is
+therefore read in the unit of the averaged score,
+``u = mean(Z) ** (2 - tau)`` (:func:`~powermean.model.variance.score_unit`, the weighted
+mean of the rows; 1 at ``tau = 2`` and for NB2), so that the equations, and every
+decision taken from them, are the same whatever the unit of the outcome (owner's ruling
+68).  Before this the level mean was compared in the outcome's unit: at ``tau = 1`` a
+profile whose outcome was multiplied by 1,024 stalled above ``profile_tol`` at the
+rounding floor of its sums and spent its sweeps.
+
+Two reuse qualifications, stated by the contract review: (a) this full ``q`` includes
 the rows of zero weight, which :class:`powermean.systems.joint.JointSystem` leaves out
 of its index arithmetic; the two range domains are not claimed identical, and the
 rows of zero weight enter no sum and no equation here; (b) ``evaluate_rows`` also
@@ -70,27 +87,31 @@ forms both curvatures and refuses when any of its outputs is not representable, 
 an equation check can refuse by the range of a quantity it does not use.  That is a
 conservative refusal of this caller, not a score-only representability promise.
 
-Required-quantity guards, distinct from ordinary rounding: the row kernel lets a
-genuine final underflow return a zero score, and this caller does not change that
-kernel; but for THIS check a zero is insufficient evidence of a zero equation.  An
-active score that is exactly zero where ``Z = 0`` or ``log Z != q`` (the nonzero
-branches of the kernel), a product
+Required-quantity guards, distinct from ordinary rounding: M0 lets a genuine final
+underflow return a zero score, and this caller does not change that kernel; but for
+THIS check a zero is insufficient evidence of a zero equation.  An active score that
+is exactly zero where ``Z = 0`` or ``log Z != q`` (the nonzero M0 branches), a product
 ``a_i r_i`` that is zero while both factors are nonzero, a quotient ``S_g / d_g`` that
 is zero while ``S_g`` is nonzero, and any nonfinite product, sum or quotient refuse.
-A zero score on the kernel's ``log Z == q`` branch, a nonzero subnormal and an exact
+A zero score on M0's ``log Z == q`` branch, a nonzero subnormal and an exact
 cancellation zero pass: no generic inexact-underflow trap is imposed, and nothing is
-pre-normalized.  These guards do not promise that every finite mathematical profile
-is computable, and they add no row-kernel behavior, tolerance or accuracy bound.
+pre-normalized. When the finite positive score unit times a level total would
+overflow or enter the subnormal range, the final quotient uses the exact product
+of the two stored doubles. These guards do not promise that every finite mathematical
+profile is computable, and they add no M0 row behavior, tolerance or accuracy bound.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from fractions import Fraction
+from typing import TYPE_CHECKING, cast
 
 import numpy as np
 from numpy.typing import ArrayLike
 
+from powermean.fe import reductions as _reductions
 from powermean.fe.absorb_numeric import (
     PreparedWeights,
     checked_difference,
@@ -98,15 +119,26 @@ from powermean.fe.absorb_numeric import (
     prepare_weights,
 )
 from powermean.fe.groups import Block, Grouping
-from powermean.fe import reductions as _reductions
 from powermean.fe.reductions import group_logsumexp, group_sum, immutable_array
 from powermean.model.order import IndexArray
-from powermean.model.rows import RowEvaluation, evaluate_criterion, evaluate_rows
-from powermean.model.variance import FloatArray, NB2Variance, PowerVariance
+from powermean.model.rows import (
+    RowEvaluation,
+    _poisson_log_rows,
+    evaluate_criterion,
+    evaluate_rows,
+)
+from powermean.model.variance import (
+    FloatArray,
+    NB2Variance,
+    PowerVariance,
+    score_unit,
+)
 
 Coefficients = tuple[FloatArray, ...]
 ProfileSum = Callable[[FloatArray, IndexArray, int, int], FloatArray]
-ProfileInput = Callable[[FloatArray], Callable[[IndexArray, int, int], FloatArray] | None]
+ProfileInput = Callable[
+    [FloatArray], Callable[[IndexArray, int, int], FloatArray] | None
+]
 ProfileReductions = tuple[ProfileSum, ProfileSum, ProfileInput]
 BoolArray = np.ndarray[tuple[int], np.dtype[np.bool_]]
 RowCacheSlot = tuple[FloatArray, RowEvaluation | None, FloatArray | None]
@@ -164,11 +196,12 @@ def _support(grouping: Grouping, supported: BoolArray) -> None:
 
 def _immutable_backing(array: np.ndarray) -> bool:
     """Whether ``array`` is a read-only C-contiguous array backed by full ``bytes``."""
+    # NumPy's base annotation omits buffers such as the immutable byte owner.
     return (
         not array.flags.writeable
         and array.flags.c_contiguous
-        and type(array.base) is bytes
-        and len(array.base) == array.nbytes
+        and type(cast("object", array.base)) is bytes
+        and len(cast("bytes", array.base)) == array.nbytes
     )
 
 
@@ -210,15 +243,14 @@ def _init_problem_caches(
             "_nb2_means",
         ):
             object.__setattr__(problem, attr, getattr(shared, attr))
+        object.__setattr__(problem, "_equation_divisors", _equation_divisors(shared))
         return
     active: BoolArray = _immutable_bool(problem.prepared.weights > 0)
     all_active = bool(active.all())
     eligible_a: BoolArray = _immutable_bool(active & (problem.z > 0))
     all_eligible_a = bool(eligible_a.all())
     with np.errstate(over="ignore", invalid="ignore", under="ignore"):
-        log_wz: FloatArray = immutable_array(
-            problem.log_weights + problem.log_outcomes
-        )
+        log_wz: FloatArray = immutable_array(problem.log_weights + problem.log_outcomes)
     variance = problem.variance
     inv_num: dict[int, NumeratorSums | None] | None = None
     inv_den: dict[int, NumeratorSums | None] | None = None
@@ -236,6 +268,7 @@ def _init_problem_caches(
     object.__setattr__(problem, "_inv_num", inv_num)
     object.__setattr__(problem, "_inv_den", inv_den)
     object.__setattr__(problem, "_nb2_means", {})
+    object.__setattr__(problem, "_equation_divisors", _equation_divisors(problem))
 
 
 def _build_profile_problem(
@@ -261,14 +294,33 @@ def _build_profile_problem(
     return problem
 
 
+if TYPE_CHECKING:
+
+    class _ProfileProblemCaches:
+        """Instance state set by _init_problem_caches, not dataclass fields."""
+
+        _active_mask: BoolArray
+        _all_active: bool
+        _eligible_a: BoolArray
+        _all_eligible_a: bool
+        _log_wz: FloatArray
+        _last_eval: list[RowCacheSlot | None]
+        _inv_num: dict[int, NumeratorSums | None] | None
+        _inv_den: dict[int, NumeratorSums | None] | None
+        _nb2_means: dict[int, FloatArray]
+        _equation_divisors: tuple[FloatArray | _ExceptionalTotals, ...]
+else:
+    _ProfileProblemCaches = object
+
+
 @dataclass(frozen=True, eq=False)
-class ProfileProblem:
+class ProfileProblem(_ProfileProblemCaches):
     """One profiling problem: weights with totals, outcomes, base index, variance.
 
     Attributes
     ----------
     prepared : PreparedWeights
-        The raw weights and the level totals ``d_g`` of the grouping
+        The raw weights and the level totals ``d_g`` of the accepted grouping
         (:func:`powermean.fe.absorb_numeric.prepare_weights`): finite nonnegative
         weights, a finite positive total at every level.
     z : array of float
@@ -276,9 +328,9 @@ class ProfileProblem:
     base : array of float
         The base index ``b``, finite, read-only and owned.
     variance : PowerVariance or NB2Variance
-        The exact built-in family, by exact type (the exact
-        :class:`~powermean.model.variance.NB2Variance` is admitted; a subclass or
-        another object is refused).  The power sums, step and loop of this module and of
+        The exact built-in family, by exact type (task M1.6 admits the exact
+        :class:`~powermean.model.variance.NB2Variance`; a subclass or another object
+        is refused).  The power sums, step and loop of this module and of
         :mod:`powermean.fe.profile` are power-only and refuse an NB2 problem; the
         NB2 factory and solver are :mod:`powermean.fe.profile_nb2`.
     log_weights, log_outcomes : array of float
@@ -453,9 +505,10 @@ def log_inputs(problem: ProfileProblem, q: FloatArray) -> tuple[FloatArray, Floa
     outcome in ``v_A``.  Every eligible term must be finite, and a required exponent
     product ``(1 - tau) q`` or ``(2 - tau) q`` of two nonzero factors that rounded to
     zero on an eligible row is a lost quantity (``FloatingPointError`` in both cases;
-    exact-zero factors, a zero index and nonzero subnormal products pass).  Power
-    only: an NB2 problem is refused with ``ValueError``, since ``tau`` has no meaning
-    there.
+    exact-zero factors, a zero index and nonzero subnormal products pass); the products
+    are formed as S1 forms ``la`` and ``lb``, so that at unit weights the terms are
+    those of the source bit for bit.  Power only: an NB2 problem is refused with
+    ``ValueError`` (task M1.6), since ``tau`` has no meaning there.
     """
     if type(problem.variance) is not PowerVariance:
         raise ValueError(VARIANCE)
@@ -493,11 +546,11 @@ def log_inputs(problem: ProfileProblem, q: FloatArray) -> tuple[FloatArray, Floa
     )
     if not (finite_a and finite_b):
         raise FloatingPointError("a log input of the block sums is not finite")
-    # The required exponent products: a product of two nonzero factors that rounded
-    # to zero on an eligible row is a lost quantity, not the permitted tail of a level
-    # sum; a zero factor (tau = 1 in A, tau = 2 in B), a zero index and a nonzero
-    # subnormal product are not.  Exact unit factors (+1.0 and -1.0) never round a
-    # nonzero IEEE 754 binary64 value to zero.
+    # The required exponent products (contract, Section 2): a product of two nonzero
+    # factors that rounded to zero on an eligible row is a lost quantity, not the
+    # permitted tail of a level sum; a zero factor (tau = 1 in A, tau = 2 in B), a
+    # zero index and a nonzero subnormal product are not.  Exact unit factors (+1.0
+    # and -1.0) never round a nonzero IEEE 754 binary64 value to zero.
     for factor, product, eligible, all_eligible in (
         (1 - tau, product_a, eligible_a, all_eligible_a),
         (2 - tau, product_b, eligible_b, all_eligible_b),
@@ -516,8 +569,8 @@ def log_inputs(problem: ProfileProblem, q: FloatArray) -> tuple[FloatArray, Floa
 def level_log_sums(values: FloatArray, codes: IndexArray, n_levels: int) -> FloatArray:
     """``L_g = m_g + log sum_i exp(v_i - m_g)`` per level, each finite.
 
-    The reduction :func:`~powermean.fe.reductions.group_logsumexp`: the maximum
-    shift, tails that underflow to zero
+    The accepted reduction :func:`~powermean.fe.reductions.group_logsumexp` (S6; S1
+    ``_log_sums`` on this domain): the maximum shift, tails that underflow to zero
     allowed, an invalid difference refused.  A level whose sum is not finite, or
     without a finite term, refuses with ``FloatingPointError``.
     """
@@ -528,21 +581,30 @@ def level_log_sums(values: FloatArray, codes: IndexArray, n_levels: int) -> Floa
 
 
 def block_step(
-    problem: ProfileProblem, q: FloatArray, block: int,
-    *, _sums: ProfileSum | None = None,
+    problem: ProfileProblem,
+    q: FloatArray,
+    block: int,
+    *,
+    _sums: ProfileSum | None = None,
 ) -> FloatArray:
     """``A_g - B_g`` for every level of ``block`` at the current index ``q``.
 
-    The increment is to be ADDED to the block's current coefficients, since ``q``
-    already contains them.  ``FloatingPointError`` when a log input, a level sum or
-    the difference is not finite.
+    The increment of the contract, Section 2: to be ADDED to the block's current
+    coefficients, since ``q`` already contains them.  ``FloatingPointError`` when a
+    log input, a level sum or the difference is not finite.
     """
     numerator, denominator = log_inputs(problem, q)
     encoded = problem.grouping.blocks[block]
-    a = (level_log_sums(numerator, encoded.codes, encoded.n_levels) if _sums is None
-         else _sums(numerator, encoded.codes, encoded.n_levels, block))
-    b = (level_log_sums(denominator, encoded.codes, encoded.n_levels) if _sums is None
-         else _sums(denominator, encoded.codes, encoded.n_levels, block))
+    a = (
+        level_log_sums(numerator, encoded.codes, encoded.n_levels)
+        if _sums is None
+        else _sums(numerator, encoded.codes, encoded.n_levels, block)
+    )
+    b = (
+        level_log_sums(denominator, encoded.codes, encoded.n_levels)
+        if _sums is None
+        else _sums(denominator, encoded.codes, encoded.n_levels, block)
+    )
     return checked_difference(a, b, "block step")
 
 
@@ -561,31 +623,48 @@ def _profile_reductions() -> ProfileReductions | None:
         return None
     sums, logs, inputs = _PREPARED_REDUCTIONS()
 
-    def grouped(values, codes, count, slot):
+    def grouped(
+        values: FloatArray, codes: IndexArray, count: int, slot: int
+    ) -> FloatArray:
         if group_sum is _GROUP_SUM and _reductions.group_sum is _GROUP_SUM:
             return sums(values, codes, count, slot)
         return group_sum(values, codes, count)
 
-    def logged(values, codes, count, slot):
-        if (level_log_sums is _LEVEL_LOG_SUMS
-                and group_logsumexp is _GROUP_LOGSUMEXP
-                and _reductions.group_logsumexp is _GROUP_LOGSUMEXP):
+    def logged(
+        values: FloatArray, codes: IndexArray, count: int, slot: int
+    ) -> FloatArray:
+        if (
+            level_log_sums is _LEVEL_LOG_SUMS
+            and group_logsumexp is _GROUP_LOGSUMEXP
+            and _reductions.group_logsumexp is _GROUP_LOGSUMEXP
+        ):
             try:
-                prepared = (inputs(values, logarithmic=True)
-                            if log_inputs is _LOG_INPUTS else None)
+                prepared = (
+                    inputs(values, logarithmic=True)
+                    if log_inputs is _LOG_INPUTS
+                    else None
+                )
             except MemoryError:
                 prepared = None
-            found = (logs(values, codes, count, slot) if prepared is None
-                     else prepared(codes, count, slot))
+            found = (
+                logs(values, codes, count, slot)
+                if prepared is None
+                else prepared(codes, count, slot)
+            )
             if not np.isfinite(found).all():
                 raise FloatingPointError("a level log sum is not finite")
             return found
         return level_log_sums(values, codes, count)
 
-    def channel(values):
+    def channel(
+        values: FloatArray,
+    ) -> Callable[[IndexArray, int, int], FloatArray] | None:
         try:
-            if (required_product is _REQUIRED_PRODUCT and group_sum is _GROUP_SUM
-                    and _reductions.group_sum is _GROUP_SUM):
+            if (
+                required_product is _REQUIRED_PRODUCT
+                and group_sum is _GROUP_SUM
+                and _reductions.group_sum is _GROUP_SUM
+            ):
                 return inputs(values)
         except MemoryError:
             pass
@@ -662,8 +741,12 @@ def _same_inputs(held: NumeratorSums, values: FloatArray, encoded: Block) -> boo
 
 
 def invariant_block_step(
-    problem: ProfileProblem, q: FloatArray, block: int, held: NumeratorSums | None,
-    *, _sums: ProfileSum | None = None,
+    problem: ProfileProblem,
+    q: FloatArray,
+    block: int,
+    held: NumeratorSums | None,
+    *,
+    _sums: ProfileSum | None = None,
 ) -> tuple[FloatArray, NumeratorSums | None]:
     """:func:`block_step`, with the numerator sums of ``held`` where its inputs recur.
 
@@ -691,8 +774,11 @@ def invariant_block_step(
     ):
         a = held.sums
     else:
-        a = (level_log_sums(numerator, encoded.codes, encoded.n_levels) if _sums is None
-             else _sums(numerator, encoded.codes, encoded.n_levels, block))
+        a = (
+            level_log_sums(numerator, encoded.codes, encoded.n_levels)
+            if _sums is None
+            else _sums(numerator, encoded.codes, encoded.n_levels, block)
+        )
         held = None
         if _plain(numerator, encoded):
             codes = (
@@ -701,14 +787,21 @@ def invariant_block_step(
                 else encoded.codes.copy()
             )
             held = NumeratorSums(numerator.copy(), codes, encoded.n_levels, a)
-    b = (level_log_sums(denominator, encoded.codes, encoded.n_levels) if _sums is None
-         else _sums(denominator, encoded.codes, encoded.n_levels, block))
+    b = (
+        level_log_sums(denominator, encoded.codes, encoded.n_levels)
+        if _sums is None
+        else _sums(denominator, encoded.codes, encoded.n_levels, block)
+    )
     return checked_difference(a, b, "block step"), held
 
 
 def invariant_denominator_block_step(
-    problem: ProfileProblem, q: FloatArray, block: int, held: NumeratorSums | None,
-    *, _sums: ProfileSum | None = None,
+    problem: ProfileProblem,
+    q: FloatArray,
+    block: int,
+    held: NumeratorSums | None,
+    *,
+    _sums: ProfileSum | None = None,
 ) -> tuple[FloatArray, NumeratorSums | None]:
     """:func:`block_step`, with the denominator sums of ``held`` where inputs recur.
 
@@ -720,8 +813,11 @@ def invariant_denominator_block_step(
     """
     numerator, denominator = log_inputs(problem, q)
     encoded = problem.grouping.blocks[block]
-    a = (level_log_sums(numerator, encoded.codes, encoded.n_levels) if _sums is None
-         else _sums(numerator, encoded.codes, encoded.n_levels, block))
+    a = (
+        level_log_sums(numerator, encoded.codes, encoded.n_levels)
+        if _sums is None
+        else _sums(numerator, encoded.codes, encoded.n_levels, block)
+    )
     if (
         held is not None
         and _plain(denominator, encoded)
@@ -729,8 +825,11 @@ def invariant_denominator_block_step(
     ):
         b = held.sums
     else:
-        b = (level_log_sums(denominator, encoded.codes, encoded.n_levels) if _sums is None
-             else _sums(denominator, encoded.codes, encoded.n_levels, block))
+        b = (
+            level_log_sums(denominator, encoded.codes, encoded.n_levels)
+            if _sums is None
+            else _sums(denominator, encoded.codes, encoded.n_levels, block)
+        )
         held = None
         if _plain(denominator, encoded):
             codes = (
@@ -765,13 +864,37 @@ def _representable(operation: Callable[[], FloatArray], what: str) -> FloatArray
 
 def _same_q(a: FloatArray, b: FloatArray) -> bool:
     """Whether two float64 vectors share the exact same IEEE 754 bit pattern."""
-    if (
-        _immutable_backing(a)
-        and _immutable_backing(b)
-        and (a is b or a.base is b.base)
-    ):
+    if _immutable_backing(a) and _immutable_backing(b) and (a is b or a.base is b.base):
         return True
     return bool(np.array_equal(a.view(np.uint64), b.view(np.uint64)))
+
+
+def _profile_rows(problem: ProfileProblem, q: FloatArray) -> RowEvaluation:
+    """Reuse the validated log outcomes for the exact Poisson working variance."""
+    if (
+        type(problem.variance) is PowerVariance
+        and problem.variance.tau == 1
+        and np.geterr()["under"] == "ignore"
+        and np.isfinite(q).all()
+    ):
+        return _poisson_log_rows(problem.log_outcomes, q)
+    return evaluate_rows(problem.z, q, variance=problem.variance)
+
+
+def _criterion_with_rows(
+    problem: ProfileProblem, q: FloatArray, rows: RowEvaluation | None
+) -> FloatArray:
+    """Use the already checked mean at the same Poisson index."""
+    if (
+        rows is not None
+        and type(problem.variance) is PowerVariance
+        and problem.variance.tau == 1
+    ):
+        with np.errstate(over="ignore", under="ignore", invalid="ignore"):
+            values = rows.fisher_curvature - problem.z * q
+        if np.isfinite(values).all():
+            return immutable_array(values)
+    return evaluate_criterion(problem.z, q, variance=problem.variance)
 
 
 def _cached_rows(problem: ProfileProblem, q: FloatArray) -> RowEvaluation:
@@ -788,10 +911,10 @@ def _cached_rows(problem: ProfileProblem, q: FloatArray) -> RowEvaluation:
         if slot is not None and _same_q(q, slot[0]):
             if slot[1] is not None:
                 return slot[1]
-            rows = evaluate_rows(problem.z, q, variance=problem.variance)
+            rows = _profile_rows(problem, q)
             problem._last_eval[0] = (slot[0], rows, slot[2])
             return rows
-        rows = evaluate_rows(problem.z, q, variance=problem.variance)
+        rows = _profile_rows(problem, q)
         key = immutable_array(q)
         problem._last_eval[0] = (key, rows, None)
         return rows
@@ -812,7 +935,7 @@ def _cached_criterion(problem: ProfileProblem, q: FloatArray) -> FloatArray:
         if slot is not None and _same_q(q, slot[0]):
             if slot[2] is not None:
                 return _detached_float(slot[2])
-            values = evaluate_criterion(problem.z, q, variance=problem.variance)
+            values = _criterion_with_rows(problem, q, slot[1])
             problem._last_eval[0] = (slot[0], slot[1], values)
             return _detached_float(values)
         values = evaluate_criterion(problem.z, q, variance=problem.variance)
@@ -823,12 +946,12 @@ def _cached_criterion(problem: ProfileProblem, q: FloatArray) -> FloatArray:
 
 
 def active_scores(problem: ProfileProblem, q: FloatArray) -> FloatArray:
-    """The row scores ``r_i`` on the rows of positive weight, with the score guard.
+    """The M0 scores ``r_i`` on the rows of positive weight, with the score guard.
 
     :func:`~powermean.model.rows.evaluate_rows`, unchanged, on the active rows at the
     index ``q``; it may refuse by the range of any of its outputs (qualification (b)
-    of the module).  A score that is exactly zero off the kernel's ``log Z == q``
-    branch is a lost required quantity and refuses with ``FloatingPointError``.
+    of the module).  A score that is exactly zero off M0's ``log Z == q`` branch is a
+    lost required quantity and refuses with ``FloatingPointError``.
     """
     plain_problem = type(problem) is ProfileProblem
     if (
@@ -848,7 +971,9 @@ def active_scores(problem: ProfileProblem, q: FloatArray) -> FloatArray:
 
 
 def _checked_active_score(
-    z: FloatArray, index: FloatArray, score: FloatArray,
+    z: FloatArray,
+    index: FloatArray,
+    score: FloatArray,
 ) -> FloatArray:
     """Keep the required-zero predicate on either fresh source of the same rows."""
     zero_score = score == 0
@@ -910,15 +1035,19 @@ class EquationCheck:
 
 
 def fresh_equations(
-    problem: ProfileProblem, q: FloatArray, *, _sums: ProfileSum | None = None,
+    problem: ProfileProblem,
+    q: FloatArray,
+    *,
+    _sums: ProfileSum | None = None,
     _inputs: ProfileInput | None = None,
 ) -> EquationCheck:
-    """All ``e_g = S_g / d_g`` of every ORIGINAL block at the one index ``q``.
+    """All ``e_g = S_g / (u d_g)`` of every ORIGINAL block at the one index ``q``.
 
     The scores of :func:`active_scores`, the products of :func:`required_product`,
     the row-order level sums of the accepted :func:`~powermean.fe.reductions
     .group_sum` (overflow and invalid refused) and the quotients of
-    :func:`required_quotient` by the prepared raw totals.  A refusal anywhere raises
+    :func:`required_quotient` by the prepared raw totals times the unit ``u`` of the
+    score (module, fresh equations).  A refusal anywhere raises
     ``FloatingPointError`` and no check exists for that index; nothing is replaced
     by zero or by a passing value.
     """
@@ -926,7 +1055,9 @@ def fresh_equations(
 
 
 def _fresh_equations_from_rows(
-    problem: ProfileProblem, q: FloatArray, rows: RowEvaluation,
+    problem: ProfileProblem,
+    q: FloatArray,
+    rows: RowEvaluation,
 ) -> EquationCheck:
     """Consume this certificate invocation's fresh rows at its admitted all-active q.
 
@@ -937,9 +1068,83 @@ def _fresh_equations_from_rows(
     return _equations(problem, q, rows, None)
 
 
+@dataclass(frozen=True, slots=True)
+class _ExceptionalTotals:
+    """Vector divisors for ordinary levels and exact binary products for the others."""
+
+    divisors: FloatArray
+    exact: tuple[tuple[int, Fraction], ...]
+
+    def divide(self, sums: FloatArray) -> FloatArray:
+        # Exceptional positions have divisor 1, which preserves their signed sum
+        # (including a signed zero) until the final, once-rounded division below.
+        result = required_quotient(sums, self.divisors)
+        for level, denominator in self.exact:
+            value = float(sums[level])
+            if value != 0.0:
+                try:
+                    result[level] = float(Fraction(value) / denominator)
+                except OverflowError as error:
+                    raise FloatingPointError(
+                        "level equation: overflow in division"
+                    ) from error
+                if result[level] == 0.0:
+                    raise FloatingPointError(
+                        "a required level equation rounded to zero"
+                    )
+        return result
+
+
+def _scale_level_totals(
+    totals: FloatArray, unit: float
+) -> FloatArray | _ExceptionalTotals:
+    """Preserve ordinary division and avoid losing range in its denominator."""
+    with np.errstate(over="ignore", under="ignore"):
+        scaled = totals * unit
+    if not 0.0 < unit < np.inf:
+        return immutable_array(scaled)
+    tiny = np.finfo(np.float64).tiny
+    # A true subnormal product can round up to the smallest normal.
+    exceptional = np.flatnonzero((scaled <= tiny) | np.isinf(scaled))
+    if not exceptional.size:
+        return immutable_array(scaled)
+    exact_unit = Fraction(unit)
+    exact = []
+    for index in exceptional:
+        level = int(index)
+        product = Fraction(float(totals[level])) * exact_unit
+        if product == float(scaled[level]) or (
+            scaled[level] == tiny and product >= float(tiny)
+        ):
+            continue
+        exact.append((level, product))
+        scaled[level] = 1.0
+    divisors = immutable_array(scaled)
+    return _ExceptionalTotals(divisors, tuple(exact)) if exact else divisors
+
+
+def _equation_divisors(
+    problem: ProfileProblem,
+) -> tuple[FloatArray | _ExceptionalTotals, ...]:
+    """The level divisors from the record, or the same construction on its inputs."""
+    held: tuple[FloatArray | _ExceptionalTotals, ...] | None = getattr(
+        problem, "_equation_divisors", None
+    )
+    if held is not None:
+        return held
+    unit = score_unit(problem.z, problem.prepared.weights, problem.variance)
+    totals = problem.prepared.totals
+    if unit == 1.0:
+        return totals
+    return tuple(_scale_level_totals(d, unit) for d in totals)
+
+
 def _equations(
-    problem: ProfileProblem, q: FloatArray, rows: RowEvaluation | None,
-    sums_for: ProfileSum | None, inputs: ProfileInput | None = None,
+    problem: ProfileProblem,
+    q: FloatArray,
+    rows: RowEvaluation | None,
+    sums_for: ProfileSum | None,
+    inputs: ProfileInput | None = None,
 ) -> EquationCheck:
     """The one ordered equation assembly, with every product/sum/quotient check."""
     plain_problem = type(problem) is ProfileProblem
@@ -948,14 +1153,17 @@ def _equations(
     weights = (
         problem.prepared.weights if all_active else problem.prepared.weights[active]
     )
-    score = (active_scores(problem, q) if rows is None
-             else _checked_active_score(problem.z, q, rows.score))
+    score = (
+        active_scores(problem, q)
+        if rows is None
+        else _checked_active_score(problem.z, q, rows.score)
+    )
     products = required_product(weights, score)
     errors: list[FloatArray] = []
     prepared = None
-    for slot, (block, totals) in enumerate(zip(
-        problem.grouping.blocks, problem.prepared.totals, strict=True
-    )):
+    for slot, (block, totals) in enumerate(
+        zip(problem.grouping.blocks, _equation_divisors(problem), strict=True)
+    ):
         codes = block.codes if all_active else block.codes[active]
         count = block.n_levels
         if slot == 0 and inputs is not None:
@@ -963,8 +1171,16 @@ def _equations(
                 prepared = inputs(products)
             except MemoryError:
                 prepared = None
-        sums = (prepared(codes, count, slot) if prepared is not None else
-                group_sum(products, codes, count) if sums_for is None else
-                sums_for(products, codes, count, slot))
-        errors.append(required_quotient(sums, totals))
+        sums = (
+            prepared(codes, count, slot)
+            if prepared is not None
+            else group_sum(products, codes, count)
+            if sums_for is None
+            else sums_for(products, codes, count, slot)
+        )
+        errors.append(
+            totals.divide(sums)
+            if isinstance(totals, _ExceptionalTotals)
+            else required_quotient(sums, totals)
+        )
     return EquationCheck(tuple(errors), max(float(np.max(np.abs(e))) for e in errors))

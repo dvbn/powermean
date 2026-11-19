@@ -1,10 +1,13 @@
 """The estimation sample of one mean order: steps 3, 4 and 9 on the order-neutral base.
 
-The prepared problem is reusable across ``(omega, tau)``.  :func:`derive_order` takes
-the :class:`~powermean.data.sample.SampleBase` of steps 1 and 2 and derives the sample
-of one mean order without changing the base or training anything again:
+``design/02_computation.md``, Section 2, steps 3, 4 and 9, and Section 9 (the
+fingerprint of the sample); ``DESIGN.md``, Sections 5.1 and 6.1 ("the prepared problem
+is reusable across ``(omega, tau)``"); ``design/01_statistical_core.md``, Section 3;
+decisions D16, D41, D51 and D55.  :func:`derive_order` takes the
+:class:`~powermean.data.sample.SampleBase` of steps 1 and 2 and derives the sample of
+one mean order without changing the base or training anything again:
 
-- step 3, the domain rule of :mod:`powermean.model.order`
+- step 3, the domain rule of the accepted :mod:`powermean.model.order`
   (``_selection``), on every complete row, zero and negative weights included, so that
   no weight hides an invalid zero at a nonpositive order; with ``positive_only`` the
   zero outcomes leave at every order with the reason ``"zero_outcome"``, which
@@ -18,7 +21,7 @@ of one mean order without changing the base or training anything again:
   trained design, the offset or the exposure (whose logarithm the record forms once),
   the original weight objects, checked exactly there (a frequency count on an excluded
   row is never seen), and the original positions as integer labels;
-- the numerical transform once, on the final rows
+- the accepted numerical transform once, on the final rows
   (:func:`~powermean.model.order.transform_problem`): a row that step 4 excludes is
   never raised to its power nor has its offset scaled, so a zero-weight row with
   ``y = 1e200`` at ``omega = 2``, or an extreme offset, does not fail on a value that
@@ -36,30 +39,32 @@ owned columns of :class:`~powermean.data.raw.AlignedColumns`, which hand out a f
 array of fresh copies of the elements of an object column on every access, so that
 no element handed out is a retained one.
 
-The boundary of steps 3 and 4.  :func:`select_order` runs steps 3 and 4 alone, by the
-same lines and with the same refusals in the same order as :func:`derive_order`, and
-returns their rows (:class:`OrderRows`) without forming the numeric record, the
-transform or the scaled design: the ordered composition of
+The boundary of steps 3 and 4 (task M1.10).  :func:`select_order` runs steps 3 and 4
+alone, by the same lines and with the same refusals in the same order as
+:func:`derive_order`, and returns their rows (:class:`OrderRows`) without forming the
+numeric record, the transform or the scaled design: the ordered composition of
 :mod:`powermean.data.sample_fe` and :mod:`powermean.interface.sample` validates the
 weights of those rows exactly (:func:`_regression_data`) before any fixed-effect
 exclusion, transforms only after its deterministic closure and scales only the final
 active columns of the final rows.  :func:`derive_order` itself is unchanged: the same
-steps, then the record, the transform and step 9 on every column.  An :class:`OrderRows`
-owns exact arrays, also when constructed or replaced directly (:func:`_exact_index`);
-the ledger formed from it checks the codes' relation to the rows, so that the
-perturbations of steps 3 and 4 keep their detections.
+steps, then the record, the transform and step 9 on every column.  An
+:class:`OrderRows` owns exact arrays, also when constructed or replaced directly
+(correction A, :func:`_exact_index`); the ledger formed from it checks the codes'
+relation to the rows, so that the perturbations of steps 3 and 4 keep their detections.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, replace
+from types import MappingProxyType
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 from powermean.data.accounting import (
     EXCLUSION_REASONS,
+    SEPARATED,
     ZERO_OUTCOME,
     CodeArray,
     MissingAccount,
@@ -69,7 +74,7 @@ from powermean.data.accounting import (
     reason_of,
 )
 from powermean.data.design import ScaledDesign, scale_columns
-from powermean.data.fingerprint import sample_fingerprint
+from powermean.data.fingerprint import _positions_fingerprint
 from powermean.data.inputs import RegressionData
 from powermean.data.raw import AlignedColumns, AnyArray, RawInputs
 from powermean.data.weights import ObservationWeights
@@ -87,6 +92,7 @@ from powermean.model.variance import FloatArray
 
 if TYPE_CHECKING:
     from powermean.data.sample import SampleBase
+    from powermean.data.sample_fe_state import RowLedger
 
 
 @dataclass(frozen=True, eq=False)
@@ -140,6 +146,7 @@ class OrderSample:
     design: ScaledDesign
     metadata: AlignedColumns
     fingerprint: str
+    separation: RowLedger | None = None
 
     @property
     def nobs(self) -> int:
@@ -164,14 +171,14 @@ class OrderSample:
     @property
     def counts(self) -> Mapping[str, int]:
         """The rows excluded by each reason, in the order of the steps, and retained."""
-        return counts_of(self.codes)
+        return order_counts(self.codes, separated=self.separation is not None)
 
     def reason(self, position: int) -> str | None:
         """The reason that excluded the input row ``position``, or ``None`` if kept."""
         return reason_of(int(self.codes[position]))
 
     def table(self) -> tuple[tuple[str, int], ...]:
-        """The counts in the order of the steps: each reason, each group, kept.
+        """The counts in the order of file 02, Section 2: each reason, each group, kept.
 
         Returns
         -------
@@ -180,16 +187,40 @@ class OrderSample:
             overlap and need not sum to ``missing``), ``zero_outcome``, ``zero_weight``
             and ``retained``.  The reasons and ``retained`` sum to the input rows.
         """
-        counts = self.counts
-        groups = [(f"missing: {group}", n) for group, n in self.missing.counts.items()]
-        return (
-            ("subset", counts["subset"]),
-            ("missing", counts["missing"]),
-            *groups,
-            ("zero_outcome", counts["zero_outcome"]),
-            ("zero_weight", counts["zero_weight"]),
-            ("retained", counts["retained"]),
-        )
+        return order_table(self.counts, self.missing)
+
+
+def order_counts(codes: CodeArray, *, separated: bool) -> Mapping[str, int]:
+    """The ordinary row counts, preserving the existing layout before separation."""
+    counts = counts_of(codes)
+    if not separated:
+        return counts
+    found = dict(counts)
+    kept = found.pop("retained")
+    return MappingProxyType(
+        {
+            **found,
+            "separated": int(np.count_nonzero(codes == SEPARATED)),
+            "retained": kept,
+        }
+    )
+
+
+def order_table(
+    counts: Mapping[str, int], missing: MissingAccount
+) -> tuple[tuple[str, int], ...]:
+    """The ordered reasons and individual missing-value groups for ordinary rows."""
+    groups = [(f"missing: {group}", n) for group, n in missing.counts.items()]
+    separated = (("separated", counts["separated"]),) if "separated" in counts else ()
+    return (
+        ("subset", counts["subset"]),
+        ("missing", counts["missing"]),
+        *groups,
+        ("zero_outcome", counts["zero_outcome"]),
+        ("zero_weight", counts["zero_weight"]),
+        *separated,
+        ("retained", counts["retained"]),
+    )
 
 
 @dataclass(frozen=True, eq=False)
@@ -362,23 +393,51 @@ def _regression_data(inputs: RawInputs, positions: IndexArray) -> RegressionData
     """The validated numeric record of the retained rows, labeled by their positions.
 
     The weights are the original objects of those rows, so that frequency counts are
-    checked exactly there and only there.
+    checked exactly there and only there.  Where the positions are ``0, ..., n - 1``,
+    every input row in its order, each array of the inputs is handed over whole, which
+    holds those rows in that order, without a selected copy.
     """
+    every = _every_row(positions, inputs.nobs)
     weights = None
     if inputs.weights is not None:
-        values = cast("FloatArray", inputs.weights.values[positions])
+        values = _taken(inputs.weights.values, positions, every)
         weights = ObservationWeights(values, inputs.weights.kind)
-    offset = None if inputs.offset is None else inputs.offset[positions]
-    exposure = None if inputs.exposure is None else inputs.exposure[positions]
+    offset = None if inputs.offset is None else _taken(inputs.offset, positions, every)
+    exposure = (
+        None if inputs.exposure is None else _taken(inputs.exposure, positions, every)
+    )
     return RegressionData(
-        inputs.y[positions],
-        inputs.design[positions],
+        _taken(inputs.y, positions, every),
+        _taken(inputs.design, positions, every),
         offset=offset,
         exposure=exposure,
         weights=weights,
         row_labels=positions.tolist(),
         column_names=inputs.column_names,
     )
+
+
+def _every_row(positions: IndexArray, rows: int) -> bool:
+    """Whether ``positions`` is the integer vector ``0, 1, ..., rows - 1`` exactly.
+
+    ``rows`` strictly increasing integers from ``0`` to ``rows - 1`` are those.
+    """
+    return bool(
+        positions.ndim == 1
+        and positions.dtype.kind in "iu"
+        and positions.size == rows > 0
+        and positions[0] == 0
+        and positions[-1] == rows - 1
+        and (positions[1:] > positions[:-1]).all()
+    )
+
+
+def _taken(values: FloatArray, positions: IndexArray, every: bool) -> FloatArray:
+    """``values[positions]``: ``values`` itself when ``every`` row is taken in order."""
+    if every:
+        return values
+    taken: FloatArray = values[positions]
+    return taken
 
 
 def derive_order(
@@ -446,5 +505,75 @@ def _derive_order_parts(
         problem=problem,
         design=scale_columns(data.design, data.column_names),
         metadata=base.inputs.metadata.take(positions),
-        fingerprint=sample_fingerprint(data),
+        # The record is labeled by ``positions`` (``_regression_data``).
+        fingerprint=_positions_fingerprint(data, positions),
     ), selected
+
+
+def after_separation(
+    sample: OrderSample, base: SampleBase, ledger: RowLedger
+) -> OrderSample:
+    """Form the ordinary equation on the surviving rows of the admitted ledger."""
+    positions = ledger.positions
+    data = _regression_data(base.inputs, positions)
+    problem = transform_problem(
+        data.y, sample.omega, offset=data.offset, positive_only=False
+    )
+    return replace(
+        sample,
+        positions=positions,
+        retained_index=ledger.retained_index,
+        codes=ledger.codes,
+        data=data,
+        problem=problem,
+        design=scale_columns(data.design, data.column_names),
+        metadata=base.inputs.metadata.take(positions),
+        fingerprint=_positions_fingerprint(data, positions),
+        separation=ledger,
+    )
+
+
+def without_columns(sample: OrderSample, kept: Sequence[int]) -> OrderSample:
+    """The sample with the columns ``kept`` of its design only.
+
+    For the route without fixed effects, whose collinearity step decides which
+    regressors stay (owner's rulings 109 and 110).  The numeric record is re-formed
+    through its constructor from the kept columns, in their order, so that it is the
+    record that the formula without the omitted regressors forms on the same rows:
+    the same bytes of outcome, offset or exposure and weights, the same scales, the
+    same fingerprint.  The rows, their accounting, the transformed problem (which
+    reads the outcome and the offset only) and the metadata are unchanged.
+
+    Parameters
+    ----------
+    sample : OrderSample
+        A sample that holds every column of its fitted design.
+    kept : sequence of int
+        The indices of the columns that stay, strictly increasing, at least one.
+
+    Returns
+    -------
+    OrderSample
+        The reduced sample.  The omitted regressors are the columns of the fitted
+        design that it does not hold; the result names them
+        (:attr:`powermean.results.sample.SampleView.dropped_collinear`).
+    """
+    data = sample.data
+    columns = [int(j) for j in kept]
+    names = tuple(data.column_names[j] for j in columns)
+    reduced = RegressionData(
+        data.y,
+        data.design[:, columns],
+        # The record forms the offset of an exposure once, from the exposure.
+        offset=None if data.exposure is not None else data.offset,
+        exposure=data.exposure,
+        weights=data.weights,
+        row_labels=data.row_labels,
+        column_names=names,
+    )
+    return replace(
+        sample,
+        data=reduced,
+        design=scale_columns(reduced.design, reduced.column_names),
+        fingerprint=_positions_fingerprint(reduced, sample.positions),
+    )

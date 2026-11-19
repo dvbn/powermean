@@ -1,18 +1,22 @@
 """The keywords of the public calls: their collectors, validation and normalization.
 
-No ``**kwargs`` passes between layers, and options are data.
+``DESIGN.md``, Section 4.1 (the table of the arguments of ``fit``, their values and
+defaults) and 4.6; ``design/02_computation.md``, Sections 5.7 and 6;
+``design/04_inference_and_effects.md``, Sections 2 and 3; ``design/11_engineering.md``,
+Section 5, rules 6 (no ``**kwargs`` between layers), 7 (options are data) and 13;
+decisions D41, D45, D47 and D51; task M0.22.
 
 The collectors.  A public call takes its formula and its data as its two named
-parameters, positionally or by keyword (``data=df``), and every other argument as a
-named keyword of a closed
+parameters, positionally or by keyword (``data=df`` as ``DESIGN.md``, Section 4.1,
+writes the call), and every other argument as a named keyword of a closed
 ``TypedDict`` (:class:`FitOptions`,
 :class:`PrepareOptions`, :class:`PreparedFitOptions`), so that the formal signature
-stays short while each keyword is
+stays within the limits of the engineering rules while each approved keyword is
 declared with its type and documented here.  The collector is a normalization
 boundary at the entry point, not an options bag: :func:`collect` reads the keywords
 given, refuses a key that no collector declares (``specification.unknown_option``,
-listing the valid keywords), refuses the explicit request of a feature that is not
-available (``specification.unimplemented``) and
+listing the valid keywords), refuses the explicit request of a feature of a later
+milestone (``specification.unimplemented``, naming the milestone; decision D41) and
 hands explicit typed records to the preparation and the dispatch.  Nothing is
 forwarded loosely between layers, no keyword has an ``Any`` type, and the run-time
 ``inspect.signature`` of a public function shows the collector, not its keys.
@@ -23,52 +27,55 @@ does not conflict with an explicit ``variance=pm.NB2(kappa)``; the fixed values 
 convenience wrapper (``ppml``: ``omega = 1``, ``tau = 1``; ``gpml``: ``tau = 2``;
 ``logols``: ``omega = 0``) refuse a contradictory explicit value and accept an equal
 one (``specification.conflicting``); the aliases ``cluster`` and ``vcov`` must agree;
-and an unavailable feature that is omitted is not activated and does not invalidate
-an ordinary call, while its explicit inactive value (``cancel=None``,
+and a later feature that is omitted is not activated and does not invalidate an
+ordinary call, while its explicit inactive value (``cancel=None``,
 ``difference=False``, ``bias_correction=False``, ``moment="multiplicative"``,
-``bread="observed"``, ``solver="newton"``) is accepted as a request of nothing.  No
-advisor is instantiated.
+``bread="observed"``, ``solver="newton"``) is accepted as the request of nothing
+beyond the first milestone.  No advisor is instantiated.
 
-Named HC methods.  Without fixed effects, ``vcov`` also takes the exact
+Named HC methods (``plan/evidence/M1_contract.txt``, Sections 3.1, 3.2 and 6(a), (e);
+decisions D55, D57, D60 and D65).  Without fixed effects, ``vcov`` also takes the exact
 strings ``"HC0"`` to ``"HC5"`` and ``"HC4m"``, never beside a cluster; ``ssc`` and
 ``bread`` are then the per-request keywords of that method, validated by their domains
 (a preset name or a custom record; ``"observed"`` or ``"expected"``; an explicit
 ``None`` refused) and recorded with the request
 (:class:`~powermean.data.specs.Inference`).  Beside the robust covariance ``bread``
-stays an unavailable feature, refused or accepted by the collector as
-above, and so does ``bread`` beside a cluster covariance.  A ``vcov`` or ``cluster``
+stays the later feature of decision D41, refused or accepted by the collector as
+before, and so does ``bread`` beside a cluster covariance.  A ``vcov`` or ``cluster``
 given to a fit replaces the prepared request whole; ``ssc`` or ``bread`` given alone
 apply to a prepared named method, and ``ssc`` alone to a prepared robust or cluster
 request.
 
-The robust covariance.  The
+The robust covariance (contract, Sections 3.1 and 6(e); decisions D60 and D65).  The
 keyword ``ssc`` beside ``vcov="robust"``, beside neither ``vcov`` nor ``cluster`` (the
 robust default), or given alone to a fit of a prepared robust request, is that
 request's explicit convention, validated by its domain (a preset name or a custom
 record; an explicit ``None`` refused) and recorded with the typed request, whose robust
 factor applies once and whose reference is the convention's.  An explicit ``"stata"``
 is recorded as explicit too, its factor unchanged.  Omitted, the robust request keeps
-the record, the provider and the covariance of the plain request.
+the record, the provider and the covariance of the first milestone.
 
-Cluster and multiway requests.  The
+Cluster and multiway requests (``design/04_inference_and_effects.md``, Sections 2, 3
+and 5; contract, Sections 3.1, 3.3 and 6(d), (e); decisions D4, D60 and D65).  The
 key ``"cluster"`` of a ``vcov`` mapping, and its shorthand ``cluster``, name one
 variable, ``a^b`` the interaction of two, or several dimensions joined by ``+``, as
 ``{"cluster": "a + b"}``, in their order, repetitions kept and no number of dimensions
 fixed; beside it, ``"multiway"`` (``"cgm"``, the signed form and the default of two or
-more dimensions, or ``"ddg"``) and ``"psd"`` (``"cgm"`` or ``"none"``,
-valid on a signed multiway request only) are the other keys of the mapping, each
+more dimensions, or ``"ddg"``) and ``"psd"`` (decision D4's ``"cgm"``, ``fixest``'s
+rule ``"fixest"`` or ``"none"``, valid on a signed multiway request only) are the other
+keys of the mapping, each
 validated by the canonical :class:`~powermean.data.inference_requests.ClusterRequest`;
-``"ssc"`` is no key of it (an unknown key, whose valid keys are listed)
-and ``"adjustment"`` is refused as not available.  The keyword ``ssc`` beside
+``"ssc"`` is no key of it (Section 6(e): an unknown key, whose valid keys are listed)
+and ``"adjustment"`` stays a feature of a later milestone.  The keyword ``ssc`` beside
 a cluster request, or given alone to a fit of a prepared cluster request, is that
 request's explicit convention, validated by its domain (an explicit ``None`` refused)
 and recorded with the typed request.  A single cluster variable with neither
 ``"multiway"`` nor ``"psd"`` and with ``ssc`` omitted keeps the record, the preparation
-and the covariance of the plain one-way request; every other cluster request is typed,
+and the covariance of the first milestone; every other cluster request is typed,
 including an explicit ``"stata"`` whose requested-convention provenance is kept.
 
-The tolerance.  ``tol`` is a shorthand for the option ``tol`` of the certificate,
-and the one canonical table of defaults and domains is
+The tolerance.  ``tol`` is a shorthand for the option ``tol`` of the certificate
+(``DESIGN.md``, Section 4.1), and the one canonical table of defaults and domains is
 :class:`~powermean.solve.options.SolverOptions`.  :func:`resolve_solver_options`
 applies it: neither given, the canonical default; only one given, that value, validated
 by the canonical domain; both given, each validated by the domain first (a Boolean does
@@ -84,7 +91,7 @@ the keywords as given: a ``tol`` keyword that is present is a supplied value wha
 it holds, so ``tol=None`` is validated like any other value and refused by the
 canonical domain (``specification.invalid_value``), before any comparison; only the
 absence of the keyword is the omission that takes the canonical default.  This rule
-is the tolerance's; it is not a rule for every
+is the tolerance's, whose shorthand the design names; it is not a rule for every
 nullable keyword.  A snapshot record is validated again against the canonical table
 at this boundary (:func:`resolve_solver_options`): every value it holds is resolved
 by the domain of its option, as a mapping's values are, so that a record whose
@@ -97,7 +104,7 @@ What is normalized.  :class:`Specification` holds the typed records of one fit: 
 :class:`~powermean.data.specs.Estimator` (any finite real order; a power variance
 with ``tau`` in ``[1, 2]``, or any finite ``tau`` for the no-FE Newton fit at a
 nonzero order, whose root outside ``[1, 2]`` is the selected root of
-:mod:`powermean.solve.joint_root`, and for the joint FE fit at a nonzero
+:mod:`powermean.solve.joint_root`, and for the private joint FE preview at a nonzero
 order, the selected root of :mod:`powermean.solve.absorbed_root`, whose root-Newton
 options are the existing nested ``root_options`` record of its ``solver_options``;
 or the NB2 variance), ``positive_only``, the
@@ -105,17 +112,18 @@ or the NB2 variance), ``positive_only``, the
 the interaction of two, a typed cluster request of one or more dimensions, or a named
 HC method), the resolved :class:`~powermean.solve.options.
 SolverOptions` (with, outside ``[1, 2]``, the resolved
-:class:`~powermean.solve.cancelled_records.RootOptions` of the six root-Newton keys,
-read flat from the same ``solver_options``), the start
+:class:`~powermean.solve.cancelled_records.RootOptions` of the six root-Newton keys
+of ``design/02``, Section 5.7, read flat from the same ``solver_options``), the start
 on the reported scale as an owned array (one vector at any
-order, the order zero included, where the forward map is ``theta_j = d_j
-beta_j`` and the least-squares solve records the start without reading it; the list
-of starts of the instrumental systems is not available), the behavior on failure and
-whether the influence record
+order, the order zero included, where the accepted forward map is ``theta_j = d_j
+beta_j`` and the least-squares solve records the start without reading it,
+``design/02``, Section 6; the list of starts of the instrumental systems is a
+feature of milestone M4), the behavior on failure and whether the influence record
 is kept.  :class:`Preparation`
 holds what the sample construction reads: the weights with their stated kind, the
 offset or the exposure (a column or an expression), the requested cluster dimensions,
-the subset condition and the outcome domain.
+the subset condition and the outcome domain.  The milestones of the refusals are
+those of ``DESIGN.md``, Section 13, and of decision D41.
 """
 
 from __future__ import annotations
@@ -184,7 +192,7 @@ SOLVERS: tuple[Solver, ...] = ("newton", "iols")
 VcovSpec = str | Mapping[str, object]
 DEFAULT_OMEGA = 1.0
 DEFAULT_TAU = 1.0
-# The values of the unavailable features that request nothing.
+# The values of the later features that request nothing beyond the first milestone.
 INACTIVE_CANCEL = None
 INACTIVE_DIFFERENCE = False
 INACTIVE_BIAS_CORRECTION = False
@@ -198,35 +206,39 @@ _CERT_KEYS: frozenset[str] = frozenset(
 
 
 class LaterOptions(TypedDict, total=False):
-    """The keywords of ``fit`` whose features are not all available.
+    """The keywords of ``fit`` whose features arrive at a later milestone.
 
-    Each is declared so that the explicit request of an unavailable feature is refused
-    as such rather than as an unknown keyword; omitted, none is active.
+    Each is declared so that its explicit request is refused with its milestone
+    (decision D41) rather than as an unknown keyword; omitted, none is active.
 
     Parameters
     ----------
     cancel : str or bool, optional
-        The fixed-effect block to cancel.  The
+        The fixed-effect block to cancel (``DESIGN.md``, 4.1); milestone M2.  The
         inactive ``None`` is accepted.
     difference : bool, str or mapping, optional
-        Two-way difference moments; not available in this version.  The inactive
-        ``False`` is accepted.
+        Two-way difference moments; milestone M3.  The inactive ``False`` is accepted.
     bias_correction : bool or str, optional
-        ``False`` leaves the fit unchanged. In a cancelled-FE fit,
-        ``True`` or ``"short_group"`` requires actual cancelled-group sampling;
-        ``"cell"`` requires declared one-way dependence made of complete cancelled
-        groups. The certified root and first-order covariance stay uncorrected;
-        reported coefficients use the BBP shift. Joint-cell, crossing/multiway
-        cell pairing and WZ integration remain unavailable, not zero corrections.
+        ``False`` leaves the fit unchanged. In the private cancelled-FE preview,
+        ``True`` or ``"short_group"`` corrects at the cancelled-group sampling;
+        ``"cell"`` at the cancelled groups, or at a declared one-way classification
+        made of complete cancelled groups. The certified root and first-order
+        covariance stay uncorrected; reported coefficients use the BBP shift. A
+        ``vcov`` request that declares no such sampling (robust, named HC, several
+        dimensions, a classification that crosses the groups, or one coarser than
+        them beside ``True``) is answered as after the fit: the correction at the
+        cancelled groups, the requested covariance at the uncorrected root (owner's
+        ruling 82). Joint-cell fits and WZ integration remain unavailable, not zero
+        corrections.
     moment : str, optional
-        The instrument moment type; ``"multiplicative"`` is accepted; ``"additive"``
-        is not available in this version.
+        The instrument moment type; ``"multiplicative"``, the moment of the first
+        milestone, is accepted; ``"additive"`` arrives at milestone M4.
     gmm : str, optional
-        The weighting of an overidentified system; not available in this version.
+        The weighting of an overidentified system; milestone M4.
     advise : str or mapping, optional
-        The advisory output; not available in this version.  No advisor runs.
+        The advisory output; milestone M1.  No advisor runs at the first milestone.
     threads : int, optional
-        The thread setting of BLAS and kernels; not available in this version.
+        The thread setting of BLAS and kernels; milestone M1.
     ssc : str or ConventionValues, optional
         The small-sample convention.  Beside a named HC method (``vcov="HC0"`` to
         ``"HC5"`` or ``"HC4m"``), the explicit convention of that request:
@@ -239,11 +251,11 @@ class LaterOptions(TypedDict, total=False):
         never a key of the ``vcov`` mapping.  Beside the robust covariance, given or
         by default, the explicit convention of that request, whose robust factor
         applies once and whose reference is the convention's; omitted, the
-        ``"stata"`` convention.
+        ``"stata"`` convention of the first milestone.
     bread : str, optional
         The bread of the covariance.  Beside a named HC method, ``"observed"`` (the
         default) or ``"expected"``; otherwise ``"observed"`` is accepted and
-        ``"expected"`` is not available in this version.
+        ``"expected"`` arrives at milestone M1.
     """
 
     cancel: str | bool | None
@@ -264,7 +276,7 @@ class PrepareOptions(LaterOptions, total=False):
     ----------
     positive_only : bool, default False
         Whether the sample keeps the rows of positive outcome only: the outcome
-        domain of every fit of the prepared problem.
+        domain of every fit of the prepared problem (``design/01``, Section 3.2).
     weights : str, optional
         The column of the weights.
     weight_type : {"analytic", "frequency", "probability"}, default "analytic"
@@ -278,18 +290,20 @@ class PrepareOptions(LaterOptions, total=False):
         strictly positive.  Not together with ``offset``.
     subset : array_like of bool or pandas.Series, optional
         The evaluated subset condition, one Boolean per row of the data, as
-        ``df["x"] > 0``; a missing condition excludes its row.
+        ``df["x"] > 0``; a missing condition excludes its row (``design/02``,
+        Section 2, step 1).
     vcov : str or mapping, optional
         The default covariance of the fits: ``"robust"`` (the default),
         ``{"cluster": "a"}`` for one cluster variable, ``"a^b"`` the interaction of
         two, or, without fixed effects, several dimensions as ``{"cluster": "a + b"}``
         with the optional keys ``"multiway"`` (``"cgm"``, the default signed form,
-        or ``"ddg"``) and ``"psd"`` (``"cgm"`` or ``"none"``, on a signed multiway
-        request only), with its ``ssc``; or a named HC method by its exact string,
+        or ``"ddg"``) and ``"psd"`` (``"cgm"``, ``"fixest"`` or ``"none"``, on a
+        signed multiway request only), with its ``ssc``; or a named HC method by its
+        exact string,
         ``"HC0"``, ``"HC1"``, ``"HC2"``, ``"HC3"``, ``"HC4"``, ``"HC4m"`` or
         ``"HC5"``, with its ``ssc`` and ``bread``.  Every requested dimension is
-        retained with the sample.  HAC and Conley are reserved and refused.
-        ``"robust"`` takes its ``ssc`` too.
+        retained with the sample.  The key ``"adjustment"`` arrives at milestone M2,
+        HAC and Conley at a later release.  ``"robust"`` takes its ``ssc`` too.
     cluster : str, optional
         A shorthand for ``vcov={"cluster": cluster}``, one or several dimensions;
         consistent with ``vcov``.
@@ -318,7 +332,7 @@ class PreparedFitOptions(LaterOptions, total=False):
         ``variance`` is given.  Not together with ``variance``.  In ``[1, 2]`` the
         criterion is convex and the root unique.  Outside ``[1, 2]``, for the Newton
         solver at a nonzero ``omega`` only, without fixed effects or with joint
-        absorbed fixed effects, the estimate is the
+        absorbed fixed effects in the private FE preview, the estimate is the
         selected root of the equation, reached by root Newton from the certified
         nearest convex fit of the same sample (PPML below 1, Gamma above 2) or from
         ``start``; cancellation, ``solver="iols"`` and ``omega = 0`` keep their
@@ -338,13 +352,13 @@ class PreparedFitOptions(LaterOptions, total=False):
         A shorthand for ``vcov={"cluster": cluster}``, one or several dimensions;
         consistent with ``vcov``.
     solver : {"newton"}, default "newton"
-        The solver.
+        The solver; ``"iols"`` arrives at milestone M1.
     solver_options : mapping or SolverOptions, optional
-        The options of the certificate and of the convex Newton solver,
-        as a mapping of names to values or as the
+        The options of the certificate and of the convex Newton solver
+        (``design/02``, Section 5.7), as a mapping of names to values or as the
         typed record of ``solver_defaults``; unknown keys are refused with the valid
         ones.  A fit with ``tau`` outside ``[1, 2]`` also reads the root-Newton keys
-        from the mapping: ``root_armijo``, ``root_max_backtracks``,
+        of Section 5.7 from the mapping: ``root_armijo``, ``root_max_backtracks``,
         ``root_max_iter``, ``merit_metric`` (``"gamma"`` or ``"gram"``),
         ``continuation`` (``"fallback"`` or ``"never"``) and ``continuation_step``,
         with their defaults where omitted; another fit refuses them as unknown.
@@ -354,17 +368,17 @@ class PreparedFitOptions(LaterOptions, total=False):
     start : array_like, optional
         One starting coefficient vector on the reported scale, one finite value per
         coefficient of the design; mapped to the coordinates of the solver by the
-        range-safe forward map and recorded in both coordinates.  At
+        accepted range-safe forward map and recorded in both coordinates.  At
         ``omega = 0`` the map is ``theta_j = d_j beta_j``, and the least-squares
         solve records the start without reading it.  A list of starts belongs to
-        the instrumental systems, which are not available.
+        the instrumental systems of milestone M4.
     on_failure : {"raise", "return"}, default "raise"
         What happens when no certified solution is obtained: ``ConvergenceError``
         with the last state, or a result flagged as not certified whose inference
         is withheld.
     keep_influence : bool, default True
         Whether the influence contributions are kept after the default covariance
-        is formed.
+        is formed (``design/04``, Section 1).
     """
 
     omega: float
@@ -389,7 +403,7 @@ class FitOptions(PrepareOptions, PreparedFitOptions, total=False):
     """
 
 
-# The features whose explicit request is refused as not available.
+# The milestone that each later feature arrives at (DESIGN.md, Section 13; D41).
 LATER_FEATURES: frozenset[str] = frozenset(
     {
         "cancel",
@@ -407,13 +421,13 @@ LATER_FEATURES: frozenset[str] = frozenset(
 FE_ACTIVE_FEATURES: frozenset[str] = frozenset(
     {"cancel", "ssc", "bread", "retain", "bias_correction"}
 )
-# The per-request keywords of a named HC method without fixed effects.
+# The per-request keywords of a named HC method without fixed effects (6(e)).
 NAMED_HC_FEATURES: frozenset[str] = frozenset({"ssc", "bread"})
-# The per-request keyword of a cluster request without fixed effects.
+# The per-request keyword of a cluster request without fixed effects (6(e)).
 CLUSTER_FEATURES: frozenset[str] = frozenset({"ssc"})
-# The per-request keyword of the robust covariance without fixed effects.
+# The per-request keyword of the robust covariance without fixed effects (3.1, 6(e)).
 ROBUST_FEATURES: frozenset[str] = frozenset({"ssc"})
-# The keys of a cluster mapping of ``vcov``; ``"ssc"`` is not one.
+# The keys of a cluster mapping of ``vcov`` (6(d)); ``"ssc"`` is not one (6(e)).
 CLUSTER_KEYS: tuple[str, ...] = ("cluster", "multiway", "psd")
 VALID_VCOV = (
     "'robust', 'HC0', 'HC1', 'HC2', 'HC3', 'HC4', 'HC4m', 'HC5', or a mapping with "
@@ -459,8 +473,11 @@ def _conflicting(first: str, second: str) -> SpecificationError:
 
 
 def _unimplemented(feature: str) -> SpecificationError:
-    """The refusal of a feature that is not available."""
-    return SpecificationError("specification.unimplemented", {"feature": feature})
+    """The refusal of a feature that is not available in this version."""
+    return SpecificationError(
+        "specification.unimplemented",
+        {"feature": feature},
+    )
 
 
 def requests_named_hc(
@@ -506,7 +523,7 @@ def requests_robust(
     Read from the keywords as given, before they are collected: a ``vcov`` given is the
     exact string ``"robust"``; a ``cluster`` given is not; with neither, the request is
     ``default``, the prepared problem's, where there is one, else the robust default.
-    The call's ``ssc`` is then that request's convention.
+    The call's ``ssc`` is then that request's convention (contract, 3.1 and 6(e)).
     """
     vcov = options.get("vcov")
     if vcov is not None:
@@ -597,12 +614,12 @@ def _iols_later_feature(key: str, value: object) -> None:
 
 
 def later_feature(key: str, value: object) -> None:
-    """Refuse the explicit request of an unavailable feature; accept its inactive value.
+    """Refuse the explicit request of a later feature; accept its inactive value.
 
     ``cancel=None``, ``difference=False``, ``bias_correction=False``,
     ``moment="multiplicative"``, ``ssc="stata"`` and ``bread="observed"`` request
-    nothing; every other value, and any value of
-    ``gmm``, ``advise`` and ``threads``, is refused.
+    nothing beyond the first milestone; every other value, and any value of
+    ``gmm``, ``advise`` and ``threads``, is refused with its milestone.
     """
     inactive: dict[str, object] = {
         "cancel": INACTIVE_CANCEL,
@@ -647,8 +664,8 @@ def _power_variance(
     """The power variance of ``tau``: any finite ``tau`` for the root route.
 
     Outside ``[1, 2]`` the Newton fit at a nonzero order is the joint root route;
-    ``solver="iols"`` refuses it, and the order zero, whose least-squares
-    route has no working variance to select a root of, refuses it as not available.
+    ``solver="iols"`` refuses it as before, and the order zero, whose least-squares
+    route has no working variance to select a root of, keeps milestone M2.
     """
     valid = "finite real numbers"
     if solver == "iols":
@@ -706,7 +723,7 @@ def resolve_variance(
     ------
     SpecificationError
         Both given (``specification.conflicting``); ``tau`` outside ``[1, 2]`` at
-        ``omega = 0`` (``specification.unimplemented``); a value that is not a
+        ``omega = 0`` (``specification.unimplemented``, M2); a value that is not a
         finite real number or an object of another type
         (``specification.invalid_value``).
     SolverCapabilityError
@@ -757,8 +774,8 @@ def cluster_inference(
 ) -> Inference:
     """The inference of cluster dimensions with the keys ``multiway`` and ``psd``.
 
-    One dimension without either key is the plain one cluster variable,
-    unchanged; every other request is the typed
+    One dimension without either key is the one cluster variable of the first
+    milestone, unchanged; every other request is the typed
     :class:`~powermean.data.inference_requests.ClusterRequest`, which checks the form,
     the ``"psd"`` treatment and where it is valid (``specification.invalid_value``,
     ``specification.conflicting``).
@@ -773,7 +790,7 @@ def cluster_inference(
 
 
 def _vcov_mapping(spec: Mapping[str, object]) -> Inference:
-    """The inference of a ``vcov`` mapping: the keys of a cluster request."""
+    """The inference of a ``vcov`` mapping: the keys of a cluster request (6(d))."""
     check_deferred_vcov(spec)
     for key in spec:
         if key == "adjustment":
@@ -824,8 +841,8 @@ def resolve_inference(vcov: object | None, cluster: object | None) -> Inference:
     Raises
     ------
     SpecificationError
-        A cluster given beside ``vcov="robust"``, beside a named HC method or beside
-        other dimensions (``specification.conflicting``);
+        A cluster given beside ``vcov="robust"``, beside a named HC method (contract,
+        Section 6(a)) or beside other dimensions (``specification.conflicting``);
         ``"psd"`` outside a signed multiway request (``specification.conflicting``);
         the key ``"adjustment"`` (``specification.unimplemented``); another value
         (``specification.invalid_value``, ``specification.unknown_option``).
@@ -885,13 +902,13 @@ def ordinary_inference(
 
 
 def cluster_convention(found: Inference, options: Mapping[str, object]) -> Inference:
-    """A cluster request with the explicit ``ssc`` of its call.
+    """A cluster request with the explicit ``ssc`` of its call (contract, 6(e)).
 
     The call's ``ssc``, beside its cluster request or alone at a fit of a prepared
     one, replaces the convention of the request it keeps, validated by its domain
     (``specification.invalid_value``, ``None`` included) and recorded with the typed
     request; omitted, the request keeps its own.  An explicit ``"stata"`` is
-    recorded as explicit too, even though its factor is unchanged.
+    recorded as explicit too (D65 6(e)), even though its factor is unchanged.
     """
     if "ssc" not in options:
         return found
@@ -905,14 +922,14 @@ def cluster_convention(found: Inference, options: Mapping[str, object]) -> Infer
 
 
 def robust_convention(found: Inference, options: Mapping[str, object]) -> Inference:
-    """The robust request with the explicit ``ssc`` of its call.
+    """The robust request with the explicit ``ssc`` of its call (contract, 3.1, 6(e)).
 
     The call's ``ssc``, beside the robust request or alone at a fit of a prepared one,
     replaces the convention of the request it keeps, validated by its domain
     (``specification.invalid_value``, ``None`` included) and recorded with the request;
-    omitted, the request keeps its own, none for the plain robust default.  An
-    explicit ``"stata"`` is recorded as explicit too, even though its factor is
-    unchanged.
+    omitted, the request keeps its own, none for the robust default of the first
+    milestone.  An explicit ``"stata"`` is recorded as explicit too (D65 6(e)), even
+    though its factor is unchanged.
     """
     if found.covariance != "robust":
         raise ValueError("the request is not the robust covariance")
@@ -1075,7 +1092,7 @@ def resolve_start(value: object | None) -> FloatArray | None:
     Accepted at every order, with the same domain and shape rules: at ``omega = 0``
     the vector is mapped and recorded, and the least-squares solve does not read it
     (the module docstring).  A list of vectors is the multistart of the
-    instrumental systems, which are not available.
+    instrumental systems (milestone M4).
     """
     if value is None:
         return None
@@ -1141,6 +1158,8 @@ class Preparation:
     explicit_vcov: bool = False
     cancel: str | Literal[True] | None = None
     bias_correction: BiasRequest = None
+    explicit_cancel: bool = False
+    explicit_bias_correction: bool = False
 
 
 @dataclass(frozen=True)
@@ -1164,6 +1183,8 @@ class Specification:
     iols_options: IolsOptions | None = None
     bias_correction: BiasRequest = None
     root_options: RootOptions | None = None
+    explicit_cancel: bool = False
+    explicit_bias_correction: bool = False
 
 
 def _root_solver_options(
@@ -1173,7 +1194,7 @@ def _root_solver_options(
 
     A convex or log-OLS fit resolves ``solver_options`` as before and has no root
     options, so that a root key stays unknown there.  A fit outside ``[1, 2]`` reads
-    the six root keys from a mapping (each validated by
+    the six root keys of ``design/02``, Section 5.7, from a mapping (each validated by
     the domains of :class:`~powermean.solve.cancelled_records.RootOptions`, the
     defaults where omitted) and every other key as before; a snapshot record leaves
     the root options at their defaults.  An unknown key is refused with every valid
@@ -1276,6 +1297,8 @@ def preparation_of(
         explicit_vcov=explicit_vcov,
         cancel=cancel,
         bias_correction=resolve_bias_correction(options.get("bias_correction", False)),
+        explicit_cancel="cancel" in options or cancel is not None,
+        explicit_bias_correction="bias_correction" in options,
     )
 
 
@@ -1347,10 +1370,13 @@ def specification_of(
         or "ssc" in options
         or "bread" in options
     ):
+        # The stored cancelled-group request is already resolved. A convention
+        # or bread override inherits it after validating the new settings.
+        inherited = None if prep_vcov == "cluster_cancelled" else prep_vcov
         raw_vcov = (
             options.get("vcov")
             if (options.get("vcov") is not None or options.get("cluster") is not None)
-            else (None if not prep_explicit else prep_vcov)
+            else (inherited if prep_explicit else None)
         )
         fe_vcov, ssc_val, bread_val, explicit_vcov = resolve_fe_vcov(
             raw_vcov,
@@ -1379,9 +1405,13 @@ def specification_of(
     pos_flag = (
         None if positive_only is None else resolve_flag(positive_only, "positive_only")
     )
+    fe_controls = options.get("solver_options", {})
+    tol = _explicit_tol(options)
+    if isinstance(fe_controls, SolverOptions):
+        fe_controls = resolve_solver_options(fe_controls, tol).to_dict()
     fe_solver_opts = resolve_fe_solver_options(
-        options.get("solver_options"),
-        _explicit_tol(options),
+        fe_controls,
+        tol,
         cancel=cancel,
         selected_root=cancel is None and omega != 0 and outside_convex(variance),
     )
@@ -1404,6 +1434,10 @@ def specification_of(
             resolve_bias_correction(options["bias_correction"])
             if "bias_correction" in options
             else prepared_bias
+        ),
+        explicit_cancel="cancel" in options or cancel is not None,
+        explicit_bias_correction=(
+            "bias_correction" in options or prepared_bias is not None
         ),
     )
 

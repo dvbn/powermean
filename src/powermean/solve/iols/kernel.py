@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+from collections.abc import Iterable
 from typing import Any
 
 import numpy as np
@@ -12,7 +14,6 @@ from powermean.solve.iols._numeric import (
     IntArray,
     exp_with_float64_overflow_guard,
 )
-from powermean.solve.iols.fe import demean, profile_fe
 from powermean.solve.iols.kernel_grid import (
     _adapt_anderson_m,
     _criterion_stagnated,
@@ -124,6 +125,7 @@ def _phase2_initialization_usable(
     context: _FullrecoverContext,
     beta: FloatArray,
     linear: FloatArray | None,
+    policy_grid: bool = False,
 ) -> bool:
     if not np.all(np.isfinite(beta)):
         return False
@@ -133,12 +135,19 @@ def _phase2_initialization_usable(
         linear_current = np.asarray(linear, dtype=np.float64)
     if not np.all(np.isfinite(linear_current)):
         return False
-    rho_path, _ = _rho_path_for_linear_state(
-        linear=linear_current,
-        tau=context.tau,
-        rho_hint=None,
-        control=context.control,
-    )
+    control = context.control
+    rho_path: Iterable[float]
+    if policy_grid and control.rho_log_max <= control.rho_log_min:
+        # Both step policies clip to the upper rho bound in this case.
+        alpha_min = 1.0 / (1.0 + math.exp(control.rho_log_max))
+        rho_path, _ = _direct_step_rho_grid(alpha_min, alpha_min)
+    else:
+        rho_path, _ = _rho_path_for_linear_state(
+            linear=linear_current,
+            tau=context.tau,
+            rho_hint=None,
+            control=control,
+        )
     for rho in rho_path:
         _, _, valid = _phi_step_fullrecover(
             context=context,
@@ -180,7 +189,12 @@ def _concentrated_fullrecover(
         beta: FloatArray,
         linear: FloatArray | None,
     ) -> bool:
-        return _phase2_initialization_usable(context=context, beta=beta, linear=linear)
+        return _phase2_initialization_usable(
+            context=context,
+            beta=beta,
+            linear=linear,
+            policy_grid=direct_nofe_fixed_tau and direct_rho_grid_policy != "legacy",
+        )
 
     return _run_concentrated_fullrecover(
         problem,
@@ -399,7 +413,5 @@ __all__ = [
     "_transformed_normalization_mode",
     "_uses_joint_hdfe_state",
     "_windowed_contraction_rate",
-    "demean",
     "exp_with_float64_overflow_guard",
-    "profile_fe",
 ]

@@ -1,10 +1,12 @@
 """Connectivity of the fixed-effect blocks: components, indicator rank and its bounds.
 
-Redundancies are exact for one and two blocks (connected components of the bipartite
-graph) and bounded pairwise for three or more, as in ``reghdfe``; effects are
-normalized by reference levels within connected components.  Connectivity is new code,
-not a port.  A disconnected two-block design needs the rank of its connected
-components, not ``sum(levels) - 1``.
+``design/03_fixed_effects.md``, Section 2 ("redundancies are exact for one and two
+blocks, connected components of the bipartite graph, and bounded pairwise for three or
+more, as in ``reghdfe``"; effects are normalized by reference levels within connected
+components); ``DESIGN.md``, Section 7.1; decision D66 (connectivity is new code, with
+independent tests, not a port).  The handoff of the wildfire application
+(``design/06``, source S10) records why: a disconnected two-block design needs the rank
+of its connected components, not ``sum(levels) - 1``.
 
 The graph.  The levels of all blocks are the vertices; each row joins its level in the
 first block to its level in every other block, so the levels of one row form a
@@ -48,7 +50,7 @@ an explicit intercept, the blocks contribute ``rank D - 1`` centered indicator c
 (the fixed-effect slopes beyond one common level); the two counts are reported apart.
 No reference level, omission, QR threshold or normalization is chosen here: the
 components say how many normalizations each pair of blocks needs and which levels lie
-together, and a later stage decides.
+together, and a later task decides.
 """
 
 from __future__ import annotations
@@ -308,8 +310,10 @@ def _rank_from_counts(
 
 
 def _rank_from_pairs(
-    levels: tuple[int, ...], joint: int,
-    pairwise: tuple[tuple[int, int, int], ...], blocks: int,
+    levels: tuple[int, ...],
+    joint: int,
+    pairwise: tuple[tuple[int, int, int], ...],
+    blocks: int,
 ) -> IndicatorRank:
     """The same bounds arithmetic over the freshly computed pair counts."""
     lower = max(levels[i] + levels[j] - c for i, j, c in pairwise)

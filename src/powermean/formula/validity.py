@@ -1,9 +1,9 @@
 """Missing and non-finite values of a model frame, marked row by row.
 
-A row leaves the sample for a missing or non-finite value of a variable that it uses,
-reported by variable group (step 2 of the sample construction).  This module marks
-rows and removes none; the sample construction applies its steps in their order.  A
-raw value is invalid when pandas reads it as missing (``NaN``, ``None``,
+``design/02_computation.md``, Section 2, step 2: a row leaves the sample for a missing
+or non-finite value of a variable that it uses, reported by variable group.  This
+module marks rows and removes none; task M0.20 applies the steps of Section 2 in their
+order.  A raw value is invalid when pandas reads it as missing (``NaN``, ``None``,
 ``NaT``, ``pd.NA``) or when it is a floating-point infinity, in a float or complex
 column or as a float in an object column; integers, Booleans, strings, categories and
 dates are never infinite.  An evaluated value is invalid when it is not finite.  A mask
@@ -45,6 +45,33 @@ def values_invalid(values: pd.Series[Any]) -> BoolArray:
         infinite = [_infinite_float(value) for value in raw]
         return missing | np.asarray(infinite, dtype=np.bool_)
     return missing
+
+
+def raw_invalid_count(values: npt.NDArray[Any]) -> int:
+    """Count invalid retained labels when only the raw column is available.
+
+    Keep the original array dtype: complex infinities invalidate a complex
+    column, while in an object column only floating-point infinities do.
+    Pandas recognizes missing scalar objects, including Decimal NaNs, and
+    treats tuple-valued labels as individual objects.
+    """
+    kind = values.dtype.kind
+    if kind in "fc":
+        return int(np.count_nonzero(~np.isfinite(values)))
+    if kind in "Mm":
+        return int(np.count_nonzero(np.isnat(values)))
+    if kind in "biuSU":
+        return 0
+    if kind == "O" and pd.api.types.infer_dtype(values, skipna=False) in (
+        "string",
+        "bytes",
+        "boolean",
+        "integer",
+    ):
+        # These label types cannot contain floating-point infinity.
+        return int(np.count_nonzero(pd.isna(values)))
+    series = pd.Series(values, dtype=values.dtype, copy=False)
+    return int(np.count_nonzero(values_invalid(series)))
 
 
 def columns_invalid(frame: pd.DataFrame, names: Iterable[str]) -> BoolArray:
@@ -101,4 +128,6 @@ def frozen(mask: BoolArray) -> BoolArray:
 
 def _infinite_float(value: object) -> bool:
     """Whether a value of an object column is a floating-point infinity."""
+    if type(value) is np.longdouble:
+        return bool(np.isinf(value))
     return isinstance(value, float | np.floating) and math.isinf(value)

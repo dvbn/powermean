@@ -10,6 +10,7 @@ import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
 from powermean.fe._cancel_storage import FloatStorage, finite_vector
+from powermean.fe.admission import AdmittedGeometry
 from powermean.inference.correction.budget import BiasBounds
 from powermean.model.variance import NB2Variance, PowerVariance, Variance
 
@@ -133,9 +134,12 @@ class BiasOperatorRequest(NamedTuple):
 
     Like upstream GeometryInputs this request does not validate or own the caller
     arrays. No request or callback object is retained in an evaluated state.
+    ``admitted`` is the admission of the fit that owns the geometry, if any;
+    ``identified_equations`` decides whether its check can stand.
     """
 
     bounds: BiasBounds
     centered_offset: ArrayLike | None = None
     obs_weights: ArrayLike | None = None
     cell: bool = False
+    admitted: AdmittedGeometry | None = None

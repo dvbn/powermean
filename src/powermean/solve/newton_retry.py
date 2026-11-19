@@ -1,8 +1,9 @@
-"""The attempts of one convex Newton solve: the first, and the retry.
+"""The attempts of one convex Newton solve: the first, and the retry of S1.
 
-One retry of the same method when a native stop misses the certificate but has
-improved the score; its cost is recorded.  The rule has two constants, which are not
-options:
+``design/02_computation.md``, Section 5.1: "One retry of the same method when a native
+stop misses the certificate but has improved the score, as in the campaign; its cost is
+recorded."  The rule is that of S1 ``engine.solve``, with its two constants, which are
+facts of the source and not options:
 
 - a second attempt runs only when ``retry`` is 1, the first attempt stopped natively,
   its independent assessment is not accepted, its common error is finite, its score is
@@ -31,20 +32,20 @@ from powermean.model.variance import FloatArray
 from powermean.solve.assessment import Assessment
 from powermean.solve.newton_trace import NewtonAttempt
 
-# A retry needs the score of the first attempt below 0.99 times that
+# S1 engine.solve: a retry needs the score of the first attempt below 0.99 times that
 # of the start, and a second attempt that does not bring the common error below 0.99
 # times the first's made no measurable progress.
 RETRY_FACTOR = 0.99
-# The score of the start is at least 1e-300, so that a start that is
+# S1 engine.solve: the score of the start is at least 1e-300, so that a start that is
 # an exact root still has a positive score to compare with.
 SCORE_FLOOR = 1e-300
 
 
 def improved(first: Assessment, initial: Assessment) -> bool:
-    """The measurable improvement: score below 0.99 times that of the start.
+    """S1's measurable improvement: score below 0.99 times that of the start.
 
-    The score of the start is floored at ``SCORE_FLOOR`` with Python's ``max``,
-    which keeps a NaN score, and no score is then below it.
+    The score of the start is floored at ``SCORE_FLOOR`` with Python's ``max``, as in
+    S1, which keeps a NaN score, and no score is then below it.
     """
     return first.score < RETRY_FACTOR * max(initial.score, SCORE_FLOOR)
 
@@ -62,6 +63,27 @@ def verdict(first: Assessment, second: Assessment) -> tuple[bool, bool]:
     if math.isfinite(error) and error < RETRY_FACTOR * previous:
         return False, False
     return True, previous < error or not math.isfinite(error)
+
+
+def short_of_strict(assessed: Assessment, tol: float) -> bool:
+    """Whether an accepted point misses ``tol``: it passes at the secondary level only.
+
+    The two levels of a certificate differ only in the tolerance on the scaled score
+    and the index correction, whose larger is the common error, so an accepted point
+    whose error exceeds ``tol`` passes at ``tol_secondary`` alone.
+    """
+    return assessed.accepted and assessed.error > tol
+
+
+def kept(first: Assessment, second: Assessment) -> tuple[bool, bool]:
+    """After a second attempt from a point accepted at the secondary level only.
+
+    Returns (no measurable progress, keep the first point), as :func:`verdict` does.
+    The second point is kept only when it is accepted with a smaller common error; the
+    progress is measurable when that error is also below 0.99 times the first's.
+    """
+    better = second.accepted and second.error < first.error
+    return not (better and second.error < RETRY_FACTOR * first.error), not better
 
 
 class AttemptRunner(Protocol):
@@ -90,7 +112,7 @@ def run_attempts(
     max_iter: int,
     evaluations_remain: Callable[[], bool],
 ) -> Attempts:
-    """The first attempt and, if the retry rule allows it, the second.
+    """The first attempt and, if the rule of S1 allows it, the second.
 
     Parameters
     ----------

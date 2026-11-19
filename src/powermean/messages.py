@@ -7,7 +7,8 @@ are plain names.  :data:`REGISTRY` maps identifiers to messages, and :func:`rend
 formats one deterministically.  :mod:`powermean.errors` consumes this module;
 nothing here imports beyond the standard library.
 
-Contract:
+Contract (``DESIGN.md``, Section 4.6; ``design/11_engineering.md``, Section 5,
+rule 8; decision D45):
 
 - An identifier is ``"<prefix>.<name>"``.  The prefix names the class that carries
   the message: ``specification``, ``sample``, ``identification``, ``existence``,
@@ -29,18 +30,23 @@ Contract:
   unknown-option message always lists the valid keys in one order.
 - The messages of ``existence``, ``convergence`` and ``numerical`` name the field
   ``status``: the exception or warning that carries them fills it with its ``status``
-  attribute, so that text and payload
+  attribute (``design/02_computation.md``, Section 7), so that text and payload
   cannot disagree.
 
-The catalog covers the refusals of features that are not available, the sample
-rules of steps 3 and 4 of the sample construction, the unknown-option error and the
-statuses.  The identification and existence messages exist with their classes;
-their dispatch is the existence analysis and the collinearity resolution.
+The catalog covers the foundation and the error cases documented for M0: the
+refusals of decision D41, the sample rules of ``design/02_computation.md``, Section
+2, steps 3 and 4, the unknown-option error of Section 5.7, and the statuses of
+Section 7.  The identification and existence messages exist with their classes;
+their dispatch is the existence analysis and collinearity resolution of M1 (D41,
+item 4).  A later milestone adds its messages here.
 
-The expanded covariance menu has seventeen templates: two notes carried
+Decision D65 adds the seventeen templates of the expanded covariance menu, worded
+as ``plan/evidence/M1_contract.txt``, Section 6(i), states them: two notes carried
 by ``CovarianceWarning`` (prefix ``covariance``), fourteen refusals carried by
 ``SpecificationError``, and ``convergence.unusable_covariance``, whose ``status`` the
-``ConvergenceError`` that carries it fills.  The
+``ConvergenceError`` that carries it fills.  They are registered, and exported with
+the interface description, before any fit, request or result issues them: their
+dispatch belongs to the tasks that implement the requests of milestone M1.  The
 wording of ``specification.hac_lag_too_long`` fixes no bound of an explicit lag.
 """
 
@@ -134,8 +140,7 @@ def _catalog(entries: Iterable[tuple[str, str]]) -> Mapping[str, Message]:
 
 REGISTRY: Mapping[str, Message] = _catalog(
     [
-        # SpecificationError: inconsistent arguments, and the refusals of features
-        # that are not available.
+        # SpecificationError: inconsistent arguments, and the refusals of D41.
         (
             "specification.unimplemented",
             "Not available in this version: {feature}.",
@@ -152,11 +157,11 @@ REGISTRY: Mapping[str, Message] = _catalog(
             "specification.unknown_option",
             "Unknown {kind} {key!r}; the valid ones are {valid}.",
         ),
-        # SpecificationError: the refusals of a later request on a result:
-        # a cluster variable that the fit did not retain, one with a missing
+        # SpecificationError: the refusals of a later request on a result (task
+        # M0.21): a cluster variable that the fit did not retain, one with a missing
         # value on the estimation sample (no row is dropped after the fit), and a
         # request that needs the influence contributions discarded by
-        # keep_influence=False, which requires a refit.
+        # keep_influence=False, which requires a refit (design/04, Section 1).
         (
             "specification.cluster_not_retained",
             "Cluster variable {name!r} was not retained with the fit; the retained "
@@ -172,11 +177,12 @@ REGISTRY: Mapping[str, Message] = _catalog(
             "The influence contributions were discarded (keep_influence=False); "
             "{request} needs them and requires a refit.",
         ),
-        # SpecificationError: the refusals of the expanded covariance menu:
+        # SpecificationError: the refusals of the expanded covariance menu of milestone
+        # M1, approved by decision D65 (plan/evidence/M1_contract.txt, Section 6(i)):
         # dependence metadata named after the fit, the time of a HAC request, its
         # replicated rows and its lag, the residual degrees of freedom of HC1, unit
         # leverage, the coordinates, locations and pooling of a Conley request, and a
-        # method that a case does not support.
+        # method that a case does not support.  No request issues them yet.
         (
             "specification.metadata_not_retained",
             "Variable {name!r} was not retained with the fit; the retained variables "
@@ -243,6 +249,24 @@ REGISTRY: Mapping[str, Message] = _catalog(
             "specification.unsupported_inference",
             "{method} is not available for {case}.",
         ),
+        # Table arguments and public sample alignment.
+        (
+            "specification.table_column",
+            "{argument} names {name!r}, which is not a column of the data.",
+        ),
+        (
+            "specification.table_not_numeric",
+            "Column {name!r} is not numeric; in a list of variables, pass "
+            "expand=True to expand a categorical column into indicators.",
+        ),
+        (
+            "specification.table_argument",
+            "{argument}={value!r} is not accepted; expected {expected}.",
+        ),
+        (
+            "specification.table_sample",
+            "The data do not match the fit given as sample: {detail}.",
+        ),
         # SampleError: steps 3 and 4 of sample construction, and an empty sample.
         (
             "sample.negative_outcome",
@@ -261,13 +285,33 @@ REGISTRY: Mapping[str, Message] = _catalog(
             "sample.empty",
             "No usable observation remains of the {count} input row(s).",
         ),
-        # IdentificationError: dispatched by the collinearity resolution.
+        (
+            "sample.table_arms",
+            "Treatment {name!r} has {count} distinct value(s) on the usable rows; a "
+            "comparison of arms needs at least two.",
+        ),
+        # IdentificationError: dispatched by the collinearity resolution of M1.
         (
             "identification.rank_deficient",
             "The design has rank {rank} for {columns} columns, and the deficiency "
             "cannot be resolved by dropping collinear columns.",
         ),
-        # ExistenceError: dispatched by the existence analysis.
+        # IdentificationError: the sample steps for zeros and singletons (owner's
+        # ruling 70) left no observation, on any route.
+        (
+            "identification.not_identified",
+            "No slope is identified once separated observations and singletons are "
+            "removed: of the {count} usable row(s), {separated} are separated (zero "
+            "outcomes that the fixed effects and regressors fit exactly; "
+            "{separated_by_fixed_effect} of them by a fixed effect alone) and "
+            "{singleton} are alone in a fixed-effect level; none remains.",
+        ),
+        (
+            "identification.table_rank",
+            "The regression of {target} on the variables has not full column rank "
+            "({columns} columns, {rows} rows); remove the collinear variables.",
+        ),
+        # ExistenceError: dispatched by the existence analysis of M1.
         (
             "existence.no_finite_root",
             "No finite root of the estimating equation on this sample: the "
@@ -281,9 +325,9 @@ REGISTRY: Mapping[str, Message] = _catalog(
             "No certified solution within the budget: status {status!r}; the last "
             "state is attached to this error.",
         ),
-        # ConvergenceError: the root gates hold, but the covariance
+        # ConvergenceError (decision D65): the root gates hold, but the covariance
         # requested at the fit gives a coefficient no usable standard error, so the
-        # coefficient gate fails.  The status is that of the status
+        # coefficient gate of D49 fails.  The status is that of the accepted status
         # composition, which the error supplies; no status is added.
         (
             "convergence.unusable_covariance",
@@ -301,24 +345,98 @@ REGISTRY: Mapping[str, Message] = _catalog(
             "coverage.outside_bbp",
             "{case} is computed but lies outside the results proved in BBP.",
         ),
+        # CoverageWarning: a formula term that Formulaic reads as another one.
+        (
+            "coverage.power_collapsed",
+            "In the formula, {written} is read as {variable}: a power of one variable "
+            "is its interaction with itself and adds no column. Write {fix} for the "
+            "power.",
+        ),
+        # CoverageWarning: a regressor of the formula that the fit omits, one note per
+        # regressor, as fixest ("The variable 'x' has been removed because of
+        # collinearity") and ppmlhdfe ("note: x omitted because of collinearity") do.
+        (
+            "coverage.collinear_omitted",
+            "The regressor {name!r} is omitted because of collinearity with the other "
+            "regressors or the fixed effects on the estimation sample; it has no "
+            "coefficient.",
+        ),
+        (
+            "numerical.small_mean_order",
+            "At omega={omega}, rounding in the power transformation can affect "
+            "reported coefficients and standard errors even when the transformed "
+            "fit has status {status!r}.",
+        ),
         # NumericalWarning: the status verified_secondary of the certificate.
         (
             "numerical.secondary_convergence",
             "The solution meets the secondary tolerance tol_secondary={tol_secondary} "
             "but not tol={tol}: the certificate reports status {status!r}.",
         ),
-        # CovarianceWarning: the eigenvalue adjustment
+        (
+            "numerical.zero_row_false_alarm",
+            "Low fitted means for zero outcomes triggered a separation check at "
+            "original row positions {positions}. Fresh support checks confirmed "
+            "overlap on the same sample, and the polished fit passed strict "
+            "certification (status {status!r}).",
+        ),
+        # NumericalWarning: a merit metric that the caller stated, replaced at the zero
+        # start of a cancelled root solve (solve_cancelled_root), once per fit.
+        (
+            "numerical.merit_metric_replaced",
+            "The cancelled root solve started from zero, as the Gamma (tau = 2) fit "
+            "certified no root on this sample, and used merit_metric='gram' in place "
+            "of the requested {requested!r}: the Gamma metric there is the tau = 2 "
+            "Jacobian at a point that equation did not certify, and whether its "
+            "factor forms can be decided by rounding, hence by the unit of the "
+            "outcome. The fit reports status {status!r}.",
+        ),
+        # NumericalWarning (owner's ruling 78): a certified root at which the
+        # certificate found the curvature not positive definite, so that it read the
+        # score in the solve's fixed merit metric; one note per fit, at the fit.
+        (
+            "numerical.indefinite_curvature",
+            "The estimating equation may have other roots: its curvature at the "
+            "certified root (status {status!r}) is not positive definite.",
+        ),
+        # CovarianceWarning (decision D65): the eigenvalue adjustment of decision D4
         # applied to a signed multiway estimate, and an indefinite covariance whose
-        # dependent inference is withheld.
+        # dependent inference is withheld (decision D62).  No covariance issues them
+        # yet.
+        # ``reference``: the Stata command of the same estimator that applies the
+        # same adjustment, ``ppmlhdfe``, or ``reghdfe`` for fixed-effect log-OLS
+        # ("VCV matrix was non-positive semi-definite; adjustment from Cameron,
+        # Gelbach & Miller applied").
         (
             "covariance.psd_adjusted",
             "The signed multiway covariance was not positive semidefinite; {count} "
-            "negative eigenvalue(s) were set to zero, as ppmlhdfe does.",
+            "{repair}, as {reference} does.",
         ),
         (
             "covariance.indefinite",
             "The {method} covariance is not positive semidefinite (smallest eigenvalue "
             "{minimum}); inference that needs a valid variance is withheld.",
+        ),
+        # Named HC covariances of joint fixed-effect fits (owner's rulings 63 and 65).
+        # The second follows the warning of R sandwich 3.1-3, meatHC (R/vcovHC.R).
+        (
+            "covariance.singletons_excluded",
+            "{count} singleton observation(s), each alone in a fixed-effect level "
+            "(leverage one, zero score), are excluded from the {method} covariance; "
+            "N = {kept}.",
+        ),
+        (
+            "covariance.unstable_leverage",
+            "{method} covariances are numerically unstable for hat values close to 1 "
+            "(and undefined if exactly 1), as for {count} observation(s).",
+        ),
+        # A saturated fit, as many observations as parameters (owner's rulings 65 and
+        # 74): every covariance of the fit is missing, with this one note.
+        (
+            "covariance.saturated",
+            "The fit is saturated: its N = {count} observations equal its {rank} "
+            "parameters, so no residual degrees of freedom remain and its standard "
+            "errors are missing.",
         ),
     ]
 )

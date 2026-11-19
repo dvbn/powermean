@@ -1,6 +1,7 @@
 """A solve that ended before a candidate existed: the failure of the automatic start.
 
-The
+``design/02_computation.md``, Sections 6 (the start of the convex case) and 7 (the
+statuses); ``DESIGN.md``, Section 4.6; decisions D41 and D45; task M0.22.  The
 automatic start of the convex Newton solver (:func:`powermean.solve.starts.
 automatic_start`) places the logarithm of the mean of the transformed outcome in the
 intercept; where that logarithm is not a finite double, as on an outcome of zeros on
@@ -8,7 +9,7 @@ every row of positive weight with an intercept, or where the mean's sum is beyon
 the doubles, it raises ``FloatingPointError`` and no start, no iteration and no
 candidate exist.  The accepted algorithm is unchanged: nothing is clipped, no other
 start is substituted, and whether the equation has a finite root at all is the
-question of an existence analysis, which is not answered here.
+question of the existence analysis of milestone M1, which is not answered here.
 
 :class:`StartFailure` is the truthful record of that boundary: the text of the error,
 the mean whose logarithm had no finite value, and the intercept column.  Its status

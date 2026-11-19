@@ -1,6 +1,6 @@
 """The five cells with two-way fixed effects of the direct solver study.
 
-Cells ``d12`` to ``d16`` of that study.  Every cell
+Port of ``direct_mc_2026_09_26/generator.py``, cells ``d12`` to ``d16``.  Every cell
 has ``E(y | x, g1, g2) = exp(x'b + a[g1] + c[g2])`` with a binary treatment of
 coefficient ``log(1.08)`` and standard normal regressors.
 
@@ -41,16 +41,14 @@ from powermean.testing.synthetic import (
     seeded,
 )
 
-TWOWAY_SOURCE = (
-    "direct solver study of Benatia, Bellego and Pape: cells d12 to d16"
-)
+TWOWAY_SOURCE = "direct solver study of Benatia, Bellego and Pape: cells d12 to d16"
 TWOWAY_SEED = 20260926
 """Master seed of the direct study (split 40)."""
 
 
 @dataclass(frozen=True)
 class TwoWayDesign:
-    """One cell with two-way fixed effects of the direct solver study."""
+    """One fixed-effect cell of the tuple ``CELLS`` of ``generator.py``."""
 
     number: int
     topology: str

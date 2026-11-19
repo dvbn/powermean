@@ -1,18 +1,21 @@
 """Cluster and multiway covariances of a fit without fixed effects, at and after it.
 
-The typed cluster requests of a fit without fixed effects (``{"cluster": "a + b"}`` with
-the keys ``"multiway"`` and ``"psd"``, and every cluster request with an explicit
-``ssc``) are answered by one engine, the convention composition of
+``design/04_inference_and_effects.md``, Sections 1, 2, 2.1, 3 and 5;
+``plan/evidence/M1_contract.txt``, rules B1 to B3, B7 and B9 to B12 and Sections 3.1,
+3.3 and 6(d), (e), (j); decisions D4, D49, D54, D60 and D65.  The typed cluster
+requests of a fit without fixed effects (``{"cluster": "a + b"}`` with the keys
+``"multiway"`` and ``"psd"``, and every cluster request with an explicit ``ssc``) are
+answered by one engine, the accepted convention composition of
 :mod:`powermean.results.retained_inference`: the raw port of
-:mod:`powermean.inference.multiway` with every factor off, the convention's factors once
-by their owner (:mod:`powermean.inference.ssc`), the reporting map once and the frame
-and sequence of the ``psd`` adjustment (:mod:`powermean.inference.psd`).  Nothing here
-forms a covariance, a factor or an adjustment of its own.  The robust covariance with an
-explicit ``ssc`` is answered by the same engine, at the fit and after it, as its request
-without dimensions: the primitive ``HC0`` estimate of the active rows, the convention's
-robust factor once, its reference and the reporting map once, with no ``psd`` step
-(:func:`engine_request`).  The robust covariance without an explicit ``ssc`` keeps its
-default provider and record.
+:mod:`powermean.inference.multiway` with every factor off, the convention's factors
+once by their owner (:mod:`powermean.inference.ssc`), the reporting map once and
+decision D4's frame and sequence (:mod:`powermean.inference.psd`).  Nothing here forms
+a covariance, a factor or an adjustment of its own.  The robust covariance with an
+explicit ``ssc`` (contract, Section 3.1) is answered by the same engine, at the fit and
+after it, as its request without dimensions: the primitive ``HC0`` estimate of the
+active rows, the convention's robust factor once, its reference and the reporting map
+once, with no D4 step (:func:`engine_request`).  The robust covariance without an
+explicit ``ssc`` keeps the provider and the record of the first milestone.
 
 Binding (:func:`bound_request`).  The dimensions of the typed request are bound to the
 sample's final rows by the retained classifications
@@ -22,32 +25,32 @@ a missing value on the estimation sample, is refused and no row is dropped), in 
 request's order, repetitions kept, with the request's explicit convention and the
 observed bread.
 
-At the fit.  :func:`cluster_preflight` binds the request of the fit and applies its
-convention to the counts of the sample's active rows before anything is solved, so that
-a dimension that was not retained, a dimension with fewer than two clusters among the
-active rows and a convention whose degrees of freedom are not positive are refused at no
-cost of a solve.  The certificate's coefficient gate reads the standard errors of the
-requested covariance itself at every candidate that it assesses (:class:`ClusterScale`
-on the joint system, :class:`LinearClusterScale` on the least-squares equation): the
-influence record of the fresh evaluation (the observed bread), the engine at that
-candidate, its standard errors, which for a signed request whose ``psd`` treatment is
-``"cgm"`` are those of the final reported matrix; the adjustment's notes are withheld
-there.  No other covariance, the default robust one included, stands in for the request,
-and a request whose standard error is missing at the candidate fails the gate.  The
-handoff forms the record of the fit once from the certificate's evaluation
-(:func:`fit_record`), with its notes, and binds the certificate's standard errors to
-that record's, bit for bit.
+At the fit (rule B12(a)).  :func:`cluster_preflight` binds the request of the fit and
+applies its convention to the counts of the sample's active rows before anything is
+solved, so that a dimension that was not retained, a dimension with fewer than two
+clusters among the active rows and a convention whose degrees of freedom are not
+positive are refused at no cost of a solve.  The certificate's coefficient gate reads
+the standard errors of the requested covariance itself at every candidate that it
+assesses (:class:`ClusterScale` on the joint system, :class:`LinearClusterScale` on the
+least-squares equation): the influence record of the fresh evaluation (the observed
+bread), the engine at that candidate, its standard errors, which for a signed request
+whose D4 treatment is ``"cgm"`` are those of the final reported matrix; D4's notes are
+withheld there.  No other covariance, the robust one of the first milestone included,
+stands in for the request, and a request whose standard error is missing at the
+candidate fails the gate as D49 has it.  The handoff forms the record of the fit once
+from the certificate's evaluation (:func:`fit_record`), with its notes, and binds the
+certificate's standard errors to that record's, bit for bit.
 
 The record (:func:`answer_record`).  The answers at the fit and after it share one
 record: the covariance of ``theta`` with the factor applied once, the reported matrix
-(the adjustment's final matrix where it ran), its standard errors, the convention in
+(D4's final matrix where the adjustment ran), its standard errors, the convention in
 force by its preset name or its custom record (which a later request inherits), its
-counts with ``G_min``, the rank and the diagnostics of the raw estimate (the
-adjustment's notes where it was active, the raw diagnostics staying in the typed
+counts with ``G_min``, the rank and the diagnostics of the raw estimate (D4's approved
+notes where the adjustment was active, the raw diagnostics staying in the typed
 answer), and the typed answer itself: the bound request, the components with their
-signs, cluster counts and factors, the raw estimate, the ``psd`` treatment and, where it
-ran, its adjustment and frame records.  No row array is kept, so
-``keep_influence=False`` discards the rows while the record answers its own request.
+signs, cluster counts and factors, the raw estimate, D4's treatment and, where it ran,
+its adjustment and frame records.  No row array is kept, so ``keep_influence=False``
+discards the rows while the record answers its own request.
 """
 
 from __future__ import annotations
@@ -61,6 +64,7 @@ from powermean.data.inference_requests import ClusterRequest
 from powermean.data.request_values import OMITTED, Omitted, given
 from powermean.data.retained import OrderSample
 from powermean.data.specs import Inference
+from powermean.errors import SpecificationError
 from powermean.inference.contributions import Influence, joint_influence
 from powermean.inference.linear_provider import fresh_linear_influence
 from powermean.inference.multiway import MultiwayCovariance
@@ -76,7 +80,7 @@ from powermean.solve.linear_evaluation import LinearEvaluation
 from powermean.solve.reported import ReportedScale
 from powermean.systems.joint import JointEvaluation, SamplingUnits
 
-# The notes that describe a reported matrix that the ``psd`` adjustment replaced.
+# The notes that describe a reported matrix that decision D4's adjustment replaced.
 ADJUSTED = "covariance.psd_adjusted"
 INDEFINITE = "covariance.indefinite"
 
@@ -124,8 +128,8 @@ def engine_request(inference: Inference) -> bool:
     """Whether the request of a fit is answered by the engine (module docstring).
 
     A typed cluster request, or the robust covariance with an explicit ``ssc``; the
-    robust covariance without one, the single cluster variable and a named HC method
-    keep their own providers and records.
+    robust covariance without one, the cluster variable of the first milestone and a
+    named HC method keep their own providers and records.
     """
     if inference.clusters is not None:
         return True
@@ -149,7 +153,7 @@ def cluster_preflight(sample: OrderSample, inference: Inference) -> InferenceReq
     to the counts of the sample's active rows, the rows of positive weight that every
     evaluation of the fit holds (:func:`~powermean.results.retained_inference.
     nofe_convention`): fewer than two clusters among them (``ValueError``), fewer than
-    two observations under ``N/(N-1)`` (``ValueError``, as the convention
+    two observations under ``N/(N-1)`` (``ValueError``, as the accepted convention
     refuses them) or a convention whose degrees of freedom are not positive
     (``specification.no_residual_dof``) are refused at no cost of a solve.
 
@@ -161,6 +165,16 @@ def cluster_preflight(sample: OrderSample, inference: Inference) -> InferenceReq
     request = fit_request(sample, inference)
     weights = sample.data.weight_values
     active = weights > 0
+    for c in request.clusters:
+        if int(np.unique(c.codes[active]).size) < 2:
+            raise SpecificationError(
+                "specification.invalid_value",
+                {
+                    "argument": "cluster",
+                    "value": c.name,
+                    "valid": "at least two clusters on the estimation sample",
+                },
+            )
     units = SamplingUnits(
         np.flatnonzero(active), np.flatnonzero(~active), int(active.size)
     )
@@ -182,7 +196,7 @@ def _scale(
 
 @dataclass(frozen=True, eq=False)
 class ClusterScale:
-    """The reported scale at a joint evaluation, by an engine request.
+    """The reported scale at a joint evaluation, by an engine request (B12(a)).
 
     Parameters
     ----------
@@ -210,7 +224,7 @@ class ClusterScale:
 
 @dataclass(frozen=True, eq=False)
 class LinearClusterScale:
-    """The reported scale at a linear evaluation, by an engine request.
+    """The reported scale at a linear evaluation, by an engine request (B12(a)).
 
     Parameters
     ----------
@@ -242,10 +256,9 @@ class LinearClusterScale:
 def _diagnostics(
     answered: RetainedInference, multiway: MultiwayCovariance
 ) -> tuple[str, ...]:
-    """The diagnostics of a multiway record: the adjustment's notes where it ran, else
-    raw.
+    """The diagnostics of a multiway record: the D4 notes where it ran, else raw.
 
-    Where the adjustment was active, the adjustment's notes describe the reported matrix
+    Where the adjustment was active, the approved notes describe the reported matrix
     (the port's raw diagnostics describe the raw estimate and stay in the answer).
     """
     adjustment = answered.adjustment
@@ -347,8 +360,8 @@ def fit_record(
     Returns
     -------
     CovarianceRecord
-        The record of :func:`answer_record`, formed once, with the adjustment's notes;
-        a robust record names no cluster.
+        The record of :func:`answer_record`, formed once, with D4's notes; a robust
+        record names no cluster.
     """
     request = fit_request(sample, inference)
     answered = candidate_nofe_inference(sample, influence, request)

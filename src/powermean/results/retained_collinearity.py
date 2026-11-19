@@ -1,8 +1,9 @@
 """Detached snapshots of collinearity column diagnostics and analyses.
 
-This module detaches ``ColumnDiagnostics`` and ``CollinearityAnalysis`` into explicit
-finite typed records without retaining live ``Grouping`` or invoking diagnostic replay
-constructors.
+``design/02_computation.md``, Sections 2 and 4; ``plan/evidence/M1.15_contract.txt``;
+decision D51.  This module detaches ``ColumnDiagnostics`` and
+``CollinearityAnalysis`` into explicit finite typed records without retaining
+live ``Grouping`` or invoking diagnostic replay constructors.
 """
 
 from __future__ import annotations

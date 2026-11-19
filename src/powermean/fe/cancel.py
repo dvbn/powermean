@@ -1,6 +1,6 @@
 """Owned layout and ordinary centering for one cancelled fixed-effect block.
 
-Codes use the package's
+Design: file 03, Section 3.1; file 01, Section 5.2 (D12). Codes use the package's
 first-occurrence label convention, including arbitrary hashable scalar labels.
 Row identity is positional, independent of those labels. No row is deleted.
 """
@@ -11,7 +11,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 import numpy as np
-from numpy.typing import ArrayLike
+from numpy.typing import ArrayLike, NDArray
 
 from powermean.data.raw import Column
 from powermean.fe._cancel_storage import (
@@ -191,9 +191,19 @@ def cancel_structure(
 
 
 def segment_sum(structure: CancelStructure, values: FloatArray) -> FloatArray:
-    """Sum sorted rows over cancelled groups along axis zero."""
+    """Sum sorted rows over cancelled groups along axis zero (03 Section 3.1)."""
     with np.errstate(over="raise", invalid="raise"):
         return finite_product(np.add.reduceat(values, structure.starts, axis=0))
+
+
+def pair_positions(structure: CancelStructure) -> tuple[IndexArray, IndexArray]:
+    """Sorted positions ``(i, j)`` of every ordered pair of rows of one group."""
+    codes = structure.sorted_codes
+    size = structure.counts[codes]
+    left = np.repeat(np.arange(size.size, dtype=np.intp), size)
+    first = np.repeat(np.cumsum(size) - size, size)
+    offset = np.arange(left.size, dtype=np.intp) - first
+    return left, structure.starts[codes][left] + offset
 
 
 def center_sorted(structure: CancelStructure, values: FloatArray) -> FloatArray:
@@ -209,6 +219,8 @@ def to_sorted(structure: CancelStructure, values: FloatArray) -> FloatArray:
     return values[structure.order]
 
 
-def to_original(structure: CancelStructure, values: FloatArray) -> FloatArray:
+def to_original[T: np.generic](
+    structure: CancelStructure, values: NDArray[T]
+) -> NDArray[T]:
     """Return sorted values to their input positional rows."""
     return values[structure.inverse]

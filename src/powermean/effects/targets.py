@@ -1,4 +1,4 @@
-"""Linear coefficient targets and their transformations.
+"""Linear coefficient targets and their transformations, design/04 Sections 7/9.
 
 For a fixed design contrast D, l = D'beta and var(l) = D'VD, including all
 cross terms. Finite changes report expm1(l), with gradient exp(l)D. Local
@@ -13,11 +13,13 @@ import importlib
 import math
 import statistics
 from dataclasses import dataclass
+from fractions import Fraction
 from typing import Literal, Protocol, cast
 
 import numpy as np
 
 from powermean.inference.ssc import ReferenceDistribution
+from powermean.model.order import IndexArray
 from powermean.model.variance import FloatArray
 
 TargetKind = Literal["finite_change", "semi_elasticity", "elasticity"]
@@ -152,6 +154,125 @@ def derivative_target(
     )
 
 
+# Above this magnitude every binary64 operand is a multiple of 2**-340.
+# Products of two or three such operands and their sums cannot be subnormal.
+_MIN_CONTRACTION_OPERAND = 2.0**-288
+
+
+def _has_tiny_operand(values: FloatArray) -> bool:
+    magnitude = np.abs(values)
+    return bool(np.any((magnitude < _MIN_CONTRACTION_OPERAND) & (magnitude != 0.0)))
+
+
+def _exact_dot(values: FloatArray, weights: list[Fraction]) -> Fraction:
+    """An unrounded sum of products of finite binary64 operands."""
+    return sum(
+        (
+            Fraction(float(value)) * weight
+            for value, weight in zip(values, weights, strict=True)
+        ),
+        Fraction(),
+    )
+
+
+def _bilinear(
+    left: FloatArray,
+    covariance: FloatArray,
+    right: FloatArray,
+    *,
+    may_underflow: bool,
+    overflow: Literal["ignore", "raise"] = "ignore",
+) -> float:
+    """Recover the active form before applying the caller's overflow policy."""
+    failure: FloatingPointError | None = None
+    with np.errstate(over=overflow, invalid="ignore", under="ignore"):
+        try:
+            value = float(left @ covariance @ right)
+        except FloatingPointError as error:
+            failure = error
+            value = math.nan
+    if (math.isfinite(value) and not may_underflow) or not np.isfinite(
+        covariance
+    ).all():
+        if failure is not None:
+            raise failure
+        return value
+
+    # BLAS can silently round away subnormal terms even in a finite contraction.
+    # The finite weights and active entries are binary rationals. Preserve
+    # their contributions and cancellation before rounding back to float.
+    exact_right = [Fraction(float(x)) for x in right]
+    exact = Fraction()
+    for weight, row in zip(left, covariance, strict=True):
+        exact += Fraction(float(weight)) * _exact_dot(row, exact_right)
+    try:
+        return float(exact)
+    except OverflowError:
+        if failure is not None:
+            raise failure from None
+        if overflow == "raise" and not math.isfinite(value):
+            # Keep the existing unavailable effect covariance when BLAS did
+            # not raise on a contraction that is genuinely out of range.
+            return value
+        return -math.inf if exact < 0 else math.inf
+
+
+def _target_support(
+    gradient: tuple[float, ...],
+) -> tuple[IndexArray, FloatArray]:
+    """Select just the nonzero reported coefficients a target touches."""
+    weights = np.asarray(gradient, dtype=np.float64)
+    active = np.flatnonzero(weights)
+    return active, weights[active]
+
+
+def _target_variance(
+    context: ReportingContext,
+    active: IndexArray,
+    selected: FloatArray,
+    *,
+    overflow: Literal["ignore", "raise"] = "ignore",
+) -> float:
+    """Contract the covariance on the target's support, including cross terms."""
+    covariance = np.asarray(context.covariance, dtype=np.float64).reshape(
+        (len(context.names), len(context.names))
+    )
+    block = covariance[np.ix_(active, active)]
+    return _bilinear(
+        selected,
+        block,
+        selected,
+        may_underflow=_has_tiny_operand(selected) or _has_tiny_operand(block),
+        overflow=overflow,
+    )
+
+
+def _target_influence_rows(rows: FloatArray, gradient: FloatArray) -> FloatArray:
+    """Apply the target gradient without losing finite rows to product overflow."""
+    with np.errstate(over="ignore", invalid="ignore"):
+        values = rows @ gradient
+    failed = np.flatnonzero(~np.isfinite(values))
+    if not failed.size:
+        return values
+
+    exact_gradient = [Fraction(float(weight)) for weight in gradient]
+    unavailable = False
+    for index in failed:
+        row = rows[index]
+        if not np.isfinite(row).all():
+            unavailable = True
+            continue
+        try:
+            values[index] = float(_exact_dot(row, exact_gradient))
+        except OverflowError:
+            unavailable = True
+    if unavailable:
+        # Replay the native diagnostics only when genuine nonfinite rows remain.
+        # Their values and the caller's NumPy warning/error policy are unchanged.
+        _ = rows @ gradient
+    return values
+
+
 def linear_moments(
     context: ReportingContext, target: LinearTarget
 ) -> tuple[float, float]:
@@ -162,19 +283,13 @@ def linear_moments(
     """
     if len(target.weights) != len(context.names):
         raise ValueError("a target must use the full reported coefficient basis")
-    weights = np.asarray(target.weights, dtype=np.float64)
-    active = np.flatnonzero(weights)
-    selected: FloatArray = weights[active]
+    active, selected = _target_support(target.weights)
     beta = np.asarray(context.beta, dtype=np.float64)[active]
-    covariance = np.asarray(context.covariance, dtype=np.float64).reshape(
-        (len(context.names), len(context.names))
-    )
     with np.errstate(over="raise", invalid="ignore"):
         estimate = float(selected @ beta)
-        variance = float(selected @ covariance[np.ix_(active, active)] @ selected)
     if not math.isfinite(estimate):
         raise FloatingPointError("the linear coefficient target is not finite")
-    return estimate, variance
+    return estimate, _target_variance(context, active, selected, overflow="raise")
 
 
 def evaluate(
@@ -222,7 +337,7 @@ def evaluate(
 def _finite_change(
     linear: Inference, quantile: float, ci: IntervalKind
 ) -> tuple[Inference, float]:
-    """expm1(l), exp(l)se(l), and transformed or delta endpoints."""
+    """expm1(l), exp(l)se(l), and transformed or delta endpoints (Section 9.5)."""
     # Fail on unrepresentable transformations; never manufacture a zero delta SE
     # from an underflowed exp(l) or silently report successful inference at infinity.
     with np.errstate(over="raise", invalid="ignore"):

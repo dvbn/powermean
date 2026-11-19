@@ -1,18 +1,21 @@
 """Concrete positional metadata binding from a prepared frame and estimation sample.
 
-This module binds retained dependence metadata to
+``design/02_computation.md``, Section 2; ``design/04_inference_and_effects.md``, Section
+2.3; ``plan/evidence/M1_contract.txt``, Sections 3.4, 3.5 and 6(f);
+``plan/evidence/M1.15_revision_B.txt`` (L1, F2, F3) and ``M1.15_final_layout_B.txt``
+(item D); decisions D51, D55 and D65.  This module binds retained dependence metadata to
 a concrete ``OrderSample``, ``FESample``, or ``RetainedSampleSnapshot`` from a concrete
 ``PreparedFrame`` and explicit request fields without ``_SampleLike`` duck-typing or
 importing :mod:`powermean.interface.retention`.
 
 The binding and the check read only the base, labels and dependence provenance.
-Their authoritative logic accepts the original frame, preserving its observation
-order, or fresh :class:`~powermean.results.primitive_snapshot.MetadataParts` from a
-primitive capture without rebuilding a frame.  In particular, a frame's labels
-are not copied until the preceding validation has succeeded.
+They validate the original frame in observation order. Frame labels are copied
+only after the preceding validation succeeds.
 """
 
 from __future__ import annotations
+
+from typing import Protocol, cast
 
 import numpy as np
 
@@ -27,6 +30,8 @@ from powermean.data.weights import ObservationWeights, WeightKind
 from powermean.interface.retained_metadata import (
     BoundDependence,
     RetainedColumnMetadata,
+    _capture_column,
+    _owned_missing_count,
     _take_owned_column,
 )
 from powermean.interface.retained_space import RetainedSpaceView
@@ -35,7 +40,6 @@ from powermean.model.order import IndexArray
 from powermean.results.absorbed_sample import RetainedSampleSnapshot
 from powermean.results.absorbed_sample_binding import UNBOUND
 from powermean.results.owned import owned_array
-from powermean.results.primitive_snapshot import MetadataParts
 from powermean.results.retained_input_values import (
     InputKey,
     SampleKey,
@@ -104,7 +108,7 @@ def _verify_sample_column(sample: SampleTarget, name: str, expected: AnyArray) -
 
 
 def _collect_bound_columns(
-    parts: MetadataParts | PreparedFrame, sample: SampleTarget, pos: IndexArray
+    parts: PreparedFrame, sample: SampleTarget, pos: IndexArray
 ) -> dict[str, RetainedColumnMetadata]:
     """Collect and verify sample-aligned metadata columns from ``parts``."""
     dep = parts.dependence
@@ -113,14 +117,8 @@ def _collect_bound_columns(
         for name, prov in dep.columns.items():
             taken = prov.take(pos)
             _verify_sample_column(sample, name, taken)
-            cols[name] = RetainedColumnMetadata(
-                name=name,
-                roles=prov.roles,
-                used_in_fit=prov.used_in_fit,
-                source_dtype=prov.source_dtype,
-                pandas_kind=prov.pandas_kind,
-                full_missing_count=int(np.count_nonzero(prov.missing_mask)),
-                values=taken,
+            cols[name] = RetainedColumnMetadata._from_provenance(
+                prov, pos, _capture_column(name, taken)
             )
     for name in sample.metadata:
         if name not in cols:
@@ -137,7 +135,7 @@ def _collect_bound_columns(
                 used_in_fit=False,
                 source_dtype=str(taken.dtype),
                 pandas_kind=taken.dtype.kind,
-                full_missing_count=0,
+                full_missing_count=_owned_missing_count(raw_col),
                 values=taken,
             )
     return cols
@@ -198,7 +196,7 @@ def bind_sample_metadata(
 
 
 def _bind_metadata_parts(
-    parts: MetadataParts | PreparedFrame,
+    parts: PreparedFrame,
     sample: SampleTarget,
     *,
     weights: ObservationWeights | None = None,
@@ -261,13 +259,36 @@ def _bind_metadata_parts(
     )
 
 
+class _LedgerSize(Protocol):
+    @property
+    def nobs(self) -> int:
+        """The number of input rows."""
+        ...
+
+
+class _MetadataRows(Protocol):
+    """Only the sample fields needed to bind already admitted metadata."""
+
+    @property
+    def positions(self) -> IndexArray:
+        """The input positions of retained rows."""
+        ...
+
+    @property
+    def ledger(self) -> _LedgerSize:
+        """The original row universe."""
+        ...
+
 
 def _bind_owned_metadata_parts(
-    parts: PreparedFrame, sample: FESample | OrderSample, *,
+    parts: PreparedFrame,
+    sample: _MetadataRows | OrderSample,
+    *,
     weights: ObservationWeights | None = None,
     hac_request: HacRequest | None = None,
     conley_request: ConleyRequest | None = None,
-    input_key: InputKey | None = None, sample_key: SampleKey | None = None,
+    input_key: InputKey | None = None,
+    sample_key: SampleKey | None = None,
 ) -> BoundDependence:
     """Normal NumericExecution's already admitted private FINAL-row metadata.
 
@@ -277,7 +298,11 @@ def _bind_owned_metadata_parts(
     continue through _bind_metadata_parts and all original comparison/copy hooks.
     """
     pos = owned_array(sample.positions)
-    nobs = sample.nobs if type(sample) is OrderSample else sample.ledger.nobs
+    nobs = (
+        sample.nobs
+        if type(sample) is OrderSample
+        else cast("_MetadataRows", sample).ledger.nobs
+    )
     dep = parts.dependence
     used = dep.used if dep is not None else UsedDependence()
     columns: dict[str, RetainedColumnMetadata] = {}
@@ -287,26 +312,32 @@ def _bind_owned_metadata_parts(
                 columns[name] = RetainedColumnMetadata._from_retained(prov, pos)
                 continue
             column = _take_owned_column(prov._column_record, pos)
-            columns[name] = RetainedColumnMetadata._from_owned_column(
-                name=name, roles=prov.roles, used_in_fit=prov.used_in_fit,
-                source_dtype=prov.source_dtype, pandas_kind=prov.pandas_kind,
-                full_missing_count=int(np.count_nonzero(prov._missing_mask)),
-                column=column,
-            )
+            columns[name] = RetainedColumnMetadata._from_provenance(prov, pos, column)
     for name, raw in parts.base.inputs.metadata.columns.items():
         if name not in columns:
             column = _take_owned_column(raw, pos)
             columns[name] = RetainedColumnMetadata._from_owned_column(
-                name=name, roles=("retained",), used_in_fit=False,
-                source_dtype=str(column.dtype), pandas_kind=column.dtype.kind,
-                full_missing_count=0, column=column,
+                name=name,
+                roles=("retained",),
+                used_in_fit=False,
+                source_dtype=str(column.dtype),
+                pandas_kind=column.dtype.kind,
+                full_missing_count=_owned_missing_count(raw),
+                sample_missing_count=_owned_missing_count(column),
+                column=column,
             )
     kind, frequencies = _extract_frequency_counts(parts.base, pos, weights)
     labels = parts._labels.take(pos)
     bound = BoundDependence._from_owned(
-        nobs=nobs, used_dependence=used, columns=columns,
-        positions=pos, labels=labels, weight_kind=kind, frequency_counts=frequencies,
-        input_key=input_key, sample_key=sample_key,
+        nobs=nobs,
+        used_dependence=used,
+        columns=columns,
+        positions=pos,
+        labels=labels,
+        weight_kind=kind,
+        frequency_counts=frequencies,
+        input_key=input_key,
+        sample_key=sample_key,
     )
     time, space = _resolve_initial_views(
         bound, used, hac_request=hac_request, conley_request=conley_request
@@ -314,9 +345,17 @@ def _bind_owned_metadata_parts(
     if time is None and space is None:
         return bound
     return BoundDependence._from_owned(
-        nobs=nobs, used_dependence=used, columns=columns,
-        positions=pos, labels=labels, weight_kind=kind, frequency_counts=frequencies,
-        input_key=input_key, sample_key=sample_key, initial_time=time, initial_space=space,
+        nobs=nobs,
+        used_dependence=used,
+        columns=columns,
+        positions=pos,
+        labels=labels,
+        weight_kind=kind,
+        frequency_counts=frequencies,
+        input_key=input_key,
+        sample_key=sample_key,
+        initial_time=time,
+        initial_space=space,
     )
 
 
@@ -434,7 +473,7 @@ def _check_dependence_against_prepared(
 def _check_dependence_against_parts(
     dependence: BoundDependence,
     sample: FESample,
-    parts: MetadataParts | PreparedFrame,
+    parts: PreparedFrame,
     *,
     hac_request: HacRequest | None = None,
     conley_request: ConleyRequest | None = None,
@@ -512,4 +551,3 @@ def _check_dependence_against_parts(
         dependence.initial_time_view, exp_time
     ) or not _same_initial_space_view(dependence.initial_space_view, exp_space):
         raise ValueError(UNBOUND)
-

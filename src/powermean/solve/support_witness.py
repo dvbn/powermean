@@ -1,6 +1,8 @@
 """Fresh primal and dual witnesses of a support diagnostic on its current sample.
 
-Internal module: ``powermean`` exports nothing of it.  The sample record, its
+``design/02_computation.md``, Sections 2 and 4; ``design/01_statistical_core.md``,
+Section 8, item 1; ``plan/evidence/M1.7_contract.txt``, Section B; decision D51.
+Task M1.7, private: ``powermean`` exports nothing of it.  The sample record, its
 binding and its index storage are :mod:`powermean.solve.support_problem`.
 
 Primal witness.  With ``P = {Z > 0}`` and ``O = {Z = 0}``, ``z = X beta + sum_b
@@ -19,8 +21,11 @@ Dual witness.  A proposed ``l`` is constructed by setting its entries on the wit
 set ``S`` to zero, no other entry edited, normalized by its largest absolute zero-row
 entry and checked afresh: ``l_i > d`` on every zero row outside ``S``, and for every
 slope column and every level of every block ``|sum b_i l_i| / sum |b_i l_i| <= e``, an
-exact zero denominator requiring an exact zero numerator.  With primal witnesses for
-``S`` it is a numerical completeness diagnostic, not an exact theorem; a
+exact zero denominator requiring an exact zero numerator.  A level of one row has
+no cancellation to measure (its ratio is 1 for any nonzero entry): its entry is
+compared against the unit scale of the normalized dual, ``|l_i| / max(|l_i|, 1) <=
+e``.  With primal witnesses for
+``S`` it is the contract's numerical completeness diagnostic, not an exact theorem; a
 nonfinite or range-lost quantity fails it.  A required ratio is a range-checked
 quotient (:func:`relative`): a nonzero numerator whose quotient would underflow, to zero
 or to an inexact subnormal, is range-lost rather than an exact zero ratio.
@@ -195,7 +200,7 @@ def primal_witness(
     tolerance: float,
     threshold: float,
 ) -> PrimalWitness:
-    """Reconstruct, normalize, reconstruct again and check one direction.
+    """Reconstruct, normalize, reconstruct again and check one direction (contract B).
 
     ``method`` names the step that proposed the coefficients (``fe``, ``lp``, ``ir``);
     ``tolerance`` and ``threshold`` are that method's ``e`` and ``d``.  The proposed
@@ -322,6 +327,16 @@ class DualWitness:
         return not self.failure
 
 
+def _level_sums(dual: FloatArray, codes: IndexArray, counts: IndexArray) -> ColumnSums:
+    """The level sums of ``dual``; a level of one row compares against unit scale."""
+    n_levels = int(counts.size)
+    numerators = group_sums(dual, codes, n_levels)
+    denominators = group_sums(np.abs(dual), codes, n_levels)
+    divisors = np.where(counts == 1, np.maximum(denominators, 1.0), denominators)
+    ratios = relative(np.abs(numerators), divisors)
+    return ColumnSums(numerators, denominators, immutable_array(ratios))
+
+
 def _sums(
     problem: SupportProblem, dual: FloatArray
 ) -> tuple[ColumnSums | None, tuple[ColumnSums, ...]]:
@@ -332,7 +347,7 @@ def _sums(
         found = column_sums(products, indices(np.zeros(problem.n_rows)), 1)
         slopes = ColumnSums(found.numerators[0], found.denominators[0], found.ratios[0])
     blocks = () if problem.grouping is None else problem.grouping.blocks
-    return slopes, tuple(column_sums(dual, b.codes, b.n_levels) for b in blocks)
+    return slopes, tuple(_level_sums(dual, b.codes, b.counts) for b in blocks)
 
 
 def dual_witness(
@@ -343,7 +358,7 @@ def dual_witness(
     tolerance: float,
     threshold: float,
 ) -> DualWitness:
-    """Construct the zero-on-``separated`` candidate and check it afresh.
+    """Construct the zero-on-``separated`` candidate and check it afresh (contract B).
 
     ``ValueError`` when ``raw`` is not one value per row, ``separated`` is not a set of
     zero rows, or every zero row is in ``separated`` (no dual is then needed).

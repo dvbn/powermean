@@ -1,6 +1,6 @@
 """One nonsymmetric H delta=S attempt with fixed-SPD difference Armijo merit.
 
-Equilibrated LU, explicit native gradient control and bounded
+Design 02.5.3/5.7: equilibrated LU, explicit native gradient control and bounded
 backtracking; fresh final certification belongs to the stage orchestrator.  The
 iteration is the shared kernel of :mod:`powermean.solve.root_kernel`, step for step;
 this module supplies its cancelled seams: the fresh identified equations of the
@@ -10,7 +10,7 @@ dense whitening by the fixed merit factor, with the work labels of the solver.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 
@@ -19,6 +19,7 @@ from powermean.fe.admission_records import WorkLog
 from powermean.model.variance import (
     CancelledFamily,
     FloatArray,
+    cancelled_score_unit,
 )
 from powermean.solve.assessment import CertificateControls
 from powermean.solve.cancelled_certificate import (
@@ -87,11 +88,15 @@ def root_kernel(ctx: _RootContext) -> RootKernel[IdentifiedState]:
     def whiten(score: FloatArray) -> Whitened:
         return whitened_score(score, ctx.merit_cholesky, ctx.work)
 
+    # The kernel's native criterion compares max |S| with gradient_tol, and the
+    # cancelled moment is linear in the outcome: the tolerance is read in that unit,
+    # so that the attempt stops at the same step whatever the unit (ruling 68).
+    unit = cancelled_score_unit(ctx.capture.z, ctx.capture.obs_weights)
     return RootKernel(
         equations,
         direction,
         whiten,
-        ctx.options,
+        replace(ctx.options, gradient_tol=ctx.options.gradient_tol * unit),
         ctx.root_options,
         ctx.budget,
         ctx.work,

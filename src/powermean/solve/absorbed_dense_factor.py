@@ -1,12 +1,11 @@
 """Dense factors of admitted ordinary and curvature Schur systems.
 
-The partial-pivoting backend also serves the final observed projection and
-the certificate's ordinary actions, and the dense-final producer is adapted to it.
-A Cholesky curvature factor is used within the existing stored-entry
+The P75 partial-pivoting backend also serves the final observed projection and
+the certificate's ordinary actions. P77 adapts the delivered dense-final producer.
+P84 adds the approved Cholesky curvature factor within the existing stored-entry
 and dense-workspace bounds; merit and ineligible curvature remain sparse.
-The direct producer is selected by an internal route-local array-workspace bound,
-not a memory limit set by the caller or a whole-process/native-allocator RSS
-guarantee.
+The new direct producer is selected by a route-local array-workspace bound,
+not a public memory limit or a whole-process/native-allocator RSS guarantee.
 """
 
 from __future__ import annotations
@@ -30,33 +29,57 @@ class _Lapack(Protocol):
     """The SciPy LAPACK double-precision factor and action interfaces used here."""
 
     def dgetrf(
-        self, a: FloatArray, *, overwrite_a: bool,
+        self,
+        a: FloatArray,
+        *,
+        overwrite_a: bool,
     ) -> tuple[FloatArray, NDArray[np.intc], int]:
         """Partial-pivoting LU, overwriting the owned Fortran buffer."""
         ...
 
     def dgetrs(
-        self, lu: FloatArray, piv: NDArray[np.intc], b: FloatArray, *,
-        trans: int, overwrite_b: bool,
+        self,
+        lu: FloatArray,
+        piv: NDArray[np.intc],
+        b: FloatArray,
+        *,
+        trans: int,
+        overwrite_b: bool,
     ) -> tuple[FloatArray, int]:
         """Normal or transpose solve, overwriting only the owned RHS copy."""
         ...
 
     def dpotrf(
-        self, a: FloatArray, *, lower: int, clean: int, overwrite_a: bool,
+        self,
+        a: FloatArray,
+        *,
+        lower: int,
+        clean: int,
+        overwrite_a: bool,
     ) -> tuple[FloatArray, int]:
         """Lower Cholesky, overwriting the owned Fortran buffer."""
         ...
 
     def dpotrs(
-        self, c: FloatArray, b: FloatArray, *, lower: int, overwrite_b: bool,
+        self,
+        c: FloatArray,
+        b: FloatArray,
+        *,
+        lower: int,
+        overwrite_b: bool,
     ) -> tuple[FloatArray, int]:
         """Symmetric solve, overwriting only the owned RHS copy."""
         ...
 
     def dtrtrs(
-        self, a: FloatArray, b: FloatArray, *, lower: int, trans: int,
-        unitdiag: int, overwrite_b: bool,
+        self,
+        a: FloatArray,
+        b: FloatArray,
+        *,
+        lower: int,
+        trans: int,
+        unitdiag: int,
+        overwrite_b: bool,
     ) -> tuple[FloatArray, int]:
         """Lower nonunit triangular solve for the curvature whitening."""
         ...
@@ -81,12 +104,17 @@ def workspace_bytes(matrix: SparseMatrix) -> int:
     return int(sparse_bytes + 9 * size * size + vectors)
 
 
-# The ordinary producer's internal eligibility allowance, not a fit refusal.
+# The P77 ordinary producer's private eligibility allowance, not a fit refusal.
 DENSE_WORKSPACE_BYTES = 128 * 2**20
 
 
 def schur_workspace_bytes(
-    dimension: int, reduced: int, entries: int, couplings: int, *, compact: bool,
+    dimension: int,
+    reduced: int,
+    entries: int,
+    couplings: int,
+    *,
+    compact: bool,
 ) -> int:
     """Bound accounted live arrays before ordinary partition/product allocation.
 
@@ -103,8 +131,7 @@ def schur_workspace_bytes(
     """
     n, r, e = int(dimension), int(reduced), int(entries)
     m = n - r
-    fixed = (40 * e + 16 * m + 56 * r + 48 if compact
-             else 64 * e + 64 * n)
+    fixed = 40 * e + 16 * m + 56 * r + 48 if compact else 64 * e + 64 * n
     product = 16 * r * r + 8 * (r + 1)
     converted_indices = 8 * int(couplings) + 8 * (n + 2)
     partition_work = 16 * e + 16 * (n + 1)
@@ -124,13 +151,17 @@ def _dense_buffer(matrix: Remainder) -> FloatArray:
     be overwritten by LAPACK; a non-owned/non-Fortran input is copied first.
     """
     if isinstance(matrix, np.ndarray):
-        if (matrix.dtype != np.float64 or not matrix.flags.f_contiguous
-                or not matrix.flags.owndata or not matrix.flags.writeable):
+        if (
+            matrix.dtype != np.float64
+            or not matrix.flags.f_contiguous
+            or not matrix.flags.owndata
+            or not matrix.flags.writeable
+        ):
             return np.array(matrix, dtype=np.float64, order="F", copy=True)
         return matrix
     values = np.zeros(matrix.shape, dtype=np.float64, order="F")
     for column in range(matrix.shape[0]):
-        first, stop = matrix.indptr[column:column + 2]
+        first, stop = matrix.indptr[column : column + 2]
         values[matrix.indices[first:stop], column] = matrix.data[first:stop]
     return values
 
@@ -158,7 +189,10 @@ class DenseLU:
         one = values.ndim == 1
         work = np.array(values[:, None] if one else values, order="F", copy=True)
         found, info = lapack.dgetrs(
-            self.lu, self.piv, work, trans=0 if trans == "N" else 1,
+            self.lu,
+            self.piv,
+            work,
+            trans=0 if trans == "N" else 1,
             overwrite_b=True,
         )
         if info != 0 or not np.isfinite(found).all():
@@ -167,7 +201,9 @@ class DenseLU:
 
 
 def _checked_cholesky_rhs(
-    rhs: FloatArray, size: int, trans: str,
+    rhs: FloatArray,
+    size: int,
+    trans: str,
 ) -> FloatArray:
     """Validate the dense symmetric action without modifying its input."""
     values = np.asarray(rhs, dtype=np.float64)
@@ -221,7 +257,12 @@ class DenseCholesky:
             raise ValueError("the whitening action takes one vector")
         work = np.array(values[:, None], order="F", copy=True)
         found, info = lapack.dtrtrs(
-            self.lower, work, lower=1, trans=0, unitdiag=0, overwrite_b=True,
+            self.lower,
+            work,
+            lower=1,
+            trans=0,
+            unitdiag=0,
+            overwrite_b=True,
         )
         if info != 0:
             raise FloatingPointError("the whitening solve is not representable")
@@ -241,7 +282,7 @@ def _row_permutation(piv: NDArray[np.intc]) -> NDArray[np.intc]:
 def dense_factorized(matrix: Remainder) -> tuple[FactorRecord, DenseLU | None]:
     """Factor one admitted ordinary remainder; preserve failed attempts.
 
-    The direct producer transfers its private buffer. CSC input retains its
+    The direct producer transfers its private buffer. CSC input retains P75's
     canonical scatter. Neither path forms full L/U for optional diagnostics.
     """
     size = matrix.shape[0]
@@ -252,21 +293,29 @@ def dense_factorized(matrix: Remainder) -> tuple[FactorRecord, DenseLU | None]:
         reason = "the Schur complement is not representable"
         return factor_record("ordinary", "failed", reason), None
     values = _dense_buffer(matrix)
-    call = MappingProxyType({
-        "routine": "scipy.linalg.lapack.dgetrf", "shape": matrix.shape,
-        "overwrite_a": True,
-    })
+    call = MappingProxyType(
+        {
+            "routine": "scipy.linalg.lapack.dgetrf",
+            "shape": matrix.shape,
+            "overwrite_a": True,
+        }
+    )
     options = MappingProxyType({"pivoting": "partial", "packed_lu": True})
     lu, piv, info = lapack.dgetrf(values, overwrite_a=True)
     record = replace(factor_record("ordinary", "factored", "", call), options=options)
     if info != 0 or not np.isfinite(lu).all():
-        reason = (f"dgetrf argument {-info} is invalid" if info < 0 else
-                  "the dense remainder is exactly singular" if info > 0 else
-                  "the dense remainder factor is not finite")
+        reason = (
+            f"dgetrf argument {-info} is invalid"
+            if info < 0
+            else "the dense remainder is exactly singular"
+            if info > 0
+            else "the dense remainder factor is not finite"
+        )
         return replace(record, status="failed", reason=reason), None
     row, col = _row_permutation(piv), np.arange(size, dtype=np.intc)
     record = replace(
-        record, perm_r=frozen_index(np.asarray(row, dtype=np.intp)),
+        record,
+        perm_r=frozen_index(np.asarray(row, dtype=np.intp)),
         perm_c=frozen_index(np.asarray(col, dtype=np.intp)),
     )
     return record, DenseLU(lu, piv, row, col)
@@ -289,23 +338,30 @@ def dense_cholesky(
         return factor_record("curvature", "failed", reason), None
     values = _dense_buffer(matrix)
     call: dict[str, object] = {
-        "routine": "scipy.linalg.lapack.dpotrf", "shape": matrix.shape,
-        "lower": True, "clean": True, "overwrite_a": True,
+        "routine": "scipy.linalg.lapack.dpotrf",
+        "shape": matrix.shape,
+        "lower": True,
+        "clean": True,
+        "overwrite_a": True,
     }
     options = MappingProxyType({"pivoting": "none", "packed_cholesky": True})
     lower, info = lapack.dpotrf(values, lower=1, clean=1, overwrite_a=True)
     if info != 0:
         if info > 0:
             call["leading_minor"] = int(info)
-        reason = (f"dpotrf argument {-info} is invalid" if info < 0 else
-                  "the curvature is not positive definite: a nonpositive pivot")
+        reason = (
+            f"dpotrf argument {-info} is invalid"
+            if info < 0
+            else "the curvature is not positive definite: a nonpositive pivot"
+        )
         record = factor_record("curvature", "failed", reason, MappingProxyType(call))
         return replace(record, options=options), None
     factor = DenseCholesky(lower)
     diagonal = factor.diagonal
     if not (np.isfinite(factor.values).all() and np.isfinite(diagonal).all()):
         record = factor_record(
-            "curvature", "failed",
+            "curvature",
+            "failed",
             "the curvature factor holds a value that is not finite",
             MappingProxyType(call),
         )
@@ -313,7 +369,9 @@ def dense_cholesky(
     identity = frozen_index(np.arange(size, dtype=np.intp))
     record = replace(
         factor_record("curvature", "factored", "", MappingProxyType(call)),
-        options=options, perm_r=identity, perm_c=identity,
+        options=options,
+        perm_r=identity,
+        perm_c=identity,
         diagonal=immutable_array(diagonal),
     )
     return record, factor

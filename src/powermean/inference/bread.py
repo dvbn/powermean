@@ -1,8 +1,10 @@
 """Same-point bread-to-slope influence on the full nuisance basis, observed or expected.
 
-The bread is the observed Jacobian; ``bread="expected"`` substitutes the expected
-information on joint systems, and the two coincide at ``tau = 1``.  Internal
-module: a computation at a retained point, never another fit.
+``design/04_inference_and_effects.md``, Sections 1 and 2.2 (the bread is the observed
+Jacobian; ``bread="expected"`` substitutes the expected information on joint systems,
+the two coinciding at ``tau = 1``); ``design/02_computation.md``, Section 7;
+``plan/evidence/M1_contract.txt``, rules B2, B3 and B6; decisions D51, D54 and D57.
+Task M1.16, private: a retained-point computation, never another fit.
 
 At one accepted coefficient point with the full joint design ``B = [X, E_J]`` (``X``
 the scaled slopes, ``E_J`` the kept incidence of
@@ -16,7 +18,7 @@ SAME basis) the slope influence of row ``i`` is ``u_i = s_i H^-T E_s``: with
     u_i = b_i (X_i W_X + (E_J)_i W_J) = b_i (X W_X + lift(embed(W_J)))_i
 
 on EVERY row, slopes and nuisance alike: swapping a slope-only inverse while keeping
-observed-residualized scores is not this.  ``W`` is formed by the sparse
+observed-residualized scores is not this.  ``W`` is formed by the accepted sparse
 actions of the certificate: the equilibration ``s`` of ``H``, the scaled ordinary
 ``A = S^-1 H S^-1``, its transient LU factor (``factorized``, the ordinary options) and
 the ``K`` transposed solves of ``slope_map``, ``W = S^-1 A^-T S^-1 E_s``.  The factor is
@@ -40,12 +42,9 @@ from powermean.solve.absorbed_certificate_factor import (
     FactorRecord,
     factorized,
 )
-from powermean.solve.absorbed_certificate_geometry import (
-    SparseMatrix,
-    equilibration,
-    scaled_ordinary,
-)
+from powermean.solve.absorbed_certificate_geometry import equilibration, scaled_ordinary
 from powermean.solve.absorbed_certificate_sparse import slope_map
+from powermean.solve.sparse_matrix import SparseMatrix
 
 Bread = Literal["observed", "expected"]
 BREADS: tuple[Bread, ...] = ("observed", "expected")

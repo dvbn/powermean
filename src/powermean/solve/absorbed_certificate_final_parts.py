@@ -1,6 +1,8 @@
-"""Owned copies of the arrays bound by a candidate's final work.
+"""Owned copies of the arrays bound by a candidate's final work (task M1.14).
 
-Internal module: re-forming a candidate's final record so that it
+``design/02_computation.md``, Sections 1 and 7; the M1.14 readiness revision A, Section
+1 (``plan/evidence/M1.14_readiness.txt``) and implementation revisions A and B;
+decision D51.  Task M1.14, private: re-forming a candidate's final record so that it
 retains no array that another holder can write, used by
 :mod:`powermean.solve.absorbed_certificate_final`.
 

@@ -1,16 +1,18 @@
 """The binding of an owned point certificate to the history admitted by its audit.
 
-Part of the internal within-fit full-assessment handoff.  A complete fresh certificate,
-formed on an owned replica of its inputs
+The author's approval of 26 October 2026 of the private within-fit full-assessment
+handoff (task M1.25 prototype) and its ordinary ownership correction.  A complete fresh
+certificate, formed on an owned replica of its inputs
 (:mod:`powermean.results.absorbed_assessment_capture`), may be passed through the fresh
 admission of the candidate's history for the identical selected problem, point and
 request.  This module is that passage and nothing else.  Only
 :mod:`powermean.results.absorbed_assessment_handoff` imports it.
 
-Why it is needed.  A certificate is bound to its inputs by identity as well as by value.
-``point.sample``, ``point.record`` and ``basis.grouping`` are the very records it was
-formed from, and so are the sample, the grouping and the family in the binding of its
-scale input and evidence.  The existing admission of a retained result
+Why it is needed.  A certificate is bound to its inputs by identity as well as by value
+(the M1.14 readiness, Section 2).  ``point.sample``, ``point.record`` and
+``basis.grouping`` are the very records it was formed from, and so are the sample, the
+grouping and the family in the binding of its scale input and evidence.  The existing
+admission of a retained result
 (:func:`~powermean.results.absorbed_binding.admit_absorbed_graph`) requires them to be
 those of the admitted history.  An owned certificate holds the replica's records
 instead.
@@ -37,9 +39,9 @@ pair is then admitted by the unchanged
 
 Every computed part is carried as it was formed and nothing is recomputed: rows, effect
 equations, inner checks, geometry arrays, factors, measures, covariance, standard
-errors, the coefficient check, errors, work and gate lists.  The gates are read again
-from the re-formed certificate and must be the same.  ``None`` when any of this does not
-hold; the handoff then certifies afresh.
+errors, the D49 check, errors, work and gate lists.  The gates are read again from the
+re-formed certificate and must be the same.  ``None`` when any of this does not hold;
+the handoff then certifies afresh.
 """
 
 from __future__ import annotations

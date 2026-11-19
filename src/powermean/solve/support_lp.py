@@ -1,7 +1,10 @@
 """The small no-FE separation linear program, with fresh primal and dual witnesses.
 
-This is the linear-programming step on the regressors when there are no absorbed
-effects.  Internal module.
+``design/02_computation.md``, Section 4 (the linear-programming step on the regressors
+when there are no absorbed effects); ``plan/evidence/M1.7_contract.txt``, Sections A
+to C; decision D51.  Task M1.7, private.  An adaptation of the bounded homogeneous LP of
+S6 ``design/support.py`` (``references/pyiols_support.py.txt``, lines 86 to 180), not a
+port: its tolerances, dispatcher, rank reports and single-vertex verdict are not taken.
 
 The program.  With ``A = X / s`` (the power-of-two column scales of
 :func:`powermean.solve.support_projection.scales`), the zero rows ``R`` not yet in the
@@ -16,7 +19,7 @@ warning raised during the call (an unknown or replaced option included) is a fai
 never a support result; ``success`` and ``fun`` are recorded, not trusted.
 
 Witnesses.  The returned ``v`` must lie in its box within the feasibility tolerance (the
-optimizer's own constraint), then ``beta = v / s`` (exact for powers of two)
+optimizer's own constraint; contract C), then ``beta = v / s`` (exact for powers of two)
 is checked afresh by :func:`powermean.solve.support_witness.primal_witness`.  A valid
 witness with a strict row outside ``S`` adds its strict set and the next solve maximizes
 over the rows still uncovered; all checked witnesses are kept, since a later vertex need
@@ -114,9 +117,6 @@ class Optimize(Protocol):
     linprog: Linprog
 
 
-optimize = cast("Optimize", importlib.import_module("scipy.optimize"))
-
-
 def _positive(value: object, name: str) -> float:
     """A positive finite float, or ``ValueError``."""
     if isinstance(value, bool) or not isinstance(value, float) or not value > 0:
@@ -128,7 +128,7 @@ def _positive(value: object, name: str) -> float:
 
 @dataclass(frozen=True)
 class LPControls:
-    """The explicit controls of the separation LP.
+    """The explicit controls of the separation LP (contract table).
 
     ``tolerance`` and ``threshold`` are ``e_LP`` and ``d_LP``, ``0 < e < d < 1``;
     ``feasibility`` is HiGHS's primal and dual feasibility tolerance; ``max_iterations``
@@ -249,6 +249,7 @@ def _call(
     cost = -(zero.T @ rows)
     a_eq = positive if positive.shape[0] else None
     b_eq = np.zeros(positive.shape[0]) if positive.shape[0] else None
+    optimize = cast("Optimize", importlib.import_module("scipy.optimize"))
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         result = optimize.linprog(
@@ -391,7 +392,7 @@ def _no_columns(problem: SupportProblem, controls: LPControls) -> LPDual:
 
 
 def separation_lp(problem: SupportProblem, controls: LPControls) -> LPOutcome:
-    """The separation LP of one fresh invocation on the current sample.
+    """The separation LP of one fresh invocation on the current sample (contract C).
 
     Parameters
     ----------

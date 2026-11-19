@@ -1,10 +1,14 @@
 """Numerical geometry of the collinearity analysis: within rank, spans and relations.
 
-Internal module: the within rank, the original-column span tests and the relations that
-:mod:`powermean.data.collinearity` runs, and the records of their evidence.  The checked
-coordinates, norms, comparators, Gram products, LAPACK calls and their ledger are
-:mod:`powermean.data.collinearity_numeric`, whose names this module still provides.
-Nothing here absorbs, decides a sample, fits or forms an indicator matrix.
+``design/02_computation.md``, Sections 3 and 8.4; the adopted contract
+``plan/evidence/M1.9_contract.txt`` (proposal C with the retained arithmetic of
+proposal A) and its correction A (``plan/evidence/M1.9_revision_A.txt``); decision
+D51.  Task M1.9, private: the within rank, the original-column span tests and the
+relations that :mod:`powermean.data.collinearity` runs, and the records of their
+evidence.  The checked coordinates, norms, comparators, Gram products, LAPACK calls
+and their ledger are :mod:`powermean.data.collinearity_numeric`, whose names this
+module still provides (their former home).  Nothing here absorbs, decides a sample,
+fits or forms an indicator matrix.
 
 Within rank (:func:`within_rank`).  ``G = Z'Z`` by range-checked products and
 row-order sums; SciPy's pivoted economic QR of ``G`` (LAPACK ``dgeqp3``) proposes a
@@ -67,9 +71,9 @@ from powermean.fe.reductions import immutable_array
 from powermean.model.order import IndexArray
 from powermean.model.variance import FloatArray
 
-# The names this private module provides, with the numerical names of
-# collinearity_numeric, whose import routes from here are kept (the patchable
-# ``linalg`` boundary is that module's own, not provided here).
+# The names this private module provides, with the numerical names that were imported
+# from here before they moved to collinearity_numeric (their routes are kept; the
+# patchable ``linalg`` boundary is that module's own, not provided here).
 __all__ = [
     "EPSILON",
     "Components",

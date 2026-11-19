@@ -232,7 +232,8 @@ def _phi_step_fullrecover(
         tol=float(context.control.fe_demean_tol),
         maxiter=int(context.control.fe_demean_maxiter),
     )
-    beta_new: FloatArray = context.projection @ demeaned_pseudo
+    with np.errstate(over="ignore", invalid="ignore"):  # refused just below
+        beta_new: FloatArray = context.projection @ demeaned_pseudo
     if not np.all(np.isfinite(beta_new)):
         return beta.copy(), linear, False
     if not joint_hdfe:
@@ -255,12 +256,13 @@ def _phi_step_fullrecover(
     )
 
 
-def _profiled_slope_score_residual(
+def _profiled_score_rows(
     *,
     context: _FullrecoverContext,
     beta: FloatArray,
     linear: FloatArray | None = None,
-) -> float:
+) -> FloatArray:
+    """Form the raw slope and intercept score contributions at the same point."""
     if linear is None:
         linear_arr = _profile_linear(
             endog=context.endog,
@@ -274,10 +276,30 @@ def _profiled_slope_score_residual(
         )
     else:
         linear_arr = np.asarray(linear, dtype=np.float64)
-    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-        score_obs = context.endog * exp_with_float64_overflow_guard(
-            (1.0 - context.tau) * linear_arr
-        ) - exp_with_float64_overflow_guard((2.0 - context.tau) * linear_arr)
+    with np.errstate(divide="ignore", invalid="ignore", over="ignore", under="ignore"):
+        log_weight = (1.0 - context.tau) * linear_arr
+        log_base = (2.0 - context.tau) * linear_arr
+        weight = np.exp(log_weight)
+        score: FloatArray = context.endog * weight - np.exp(log_base)
+        retry = (weight < np.finfo(np.float64).tiny) | ~np.isfinite(score)
+        if np.any(retry):
+            # Factor y*mu**(1-tau) - mu**(2-tau) by its larger term.
+            # log(1-exp(-abs(d))) also keeps cancellation near the root.
+            log_y = np.log(context.endog[retry])
+            d = log_y - linear_arr[retry]
+            larger = np.where(d > 0, log_y + log_weight[retry], log_base[retry])
+            log_gap = np.log(-np.expm1(-np.abs(d)))
+            score[retry] = np.sign(d) * np.exp(larger + log_gap)
+    return score
+
+
+def _profiled_slope_score_residual(
+    *,
+    context: _FullrecoverContext,
+    beta: FloatArray,
+    linear: FloatArray | None = None,
+) -> float:
+    score_obs = _profiled_score_rows(context=context, beta=beta, linear=linear)
     if not np.all(np.isfinite(score_obs)):
         return float("inf")
     score = context.x_demeaned.T @ score_obs
@@ -292,23 +314,7 @@ def _profiled_fe_score_residual(
     beta: FloatArray,
     linear: FloatArray | None = None,
 ) -> float:
-    if linear is None:
-        linear_arr = _profile_linear(
-            endog=context.endog,
-            exog=context.exog,
-            beta=beta,
-            groups=context.groups,
-            counts=context.counts,
-            tau=context.tau,
-            maxiter=int(context.control.fe_profile_maxiter),
-            tol=float(context.control.fe_profile_tol),
-        )
-    else:
-        linear_arr = np.asarray(linear, dtype=np.float64)
-    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-        score_obs = context.endog * exp_with_float64_overflow_guard(
-            (1.0 - context.tau) * linear_arr
-        ) - exp_with_float64_overflow_guard((2.0 - context.tau) * linear_arr)
+    score_obs = _profiled_score_rows(context=context, beta=beta, linear=linear)
     if not np.all(np.isfinite(score_obs)):
         return float("inf")
     if len(context.groups) == 0:

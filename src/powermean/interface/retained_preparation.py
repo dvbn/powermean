@@ -1,6 +1,8 @@
 """Order-neutral retained preparation record and dependence request extraction.
 
-This module defines
+``design/02_computation.md``, Section 2; ``design/04_inference_and_effects.md``, Section
+2.3; ``plan/evidence/M1_contract.txt``, Sections 3.4, 3.5 and 6(f);
+``brief/layout_C_ownership.txt`` (P19); decisions D51, D55 and D65.  This module defines
 :func:`used_dependence_from_requests` and :class:`RetainedPreparation` backed by an
 isolated :class:`~powermean.interface.retained_context.PerFitPreparationContext`.
 """
@@ -114,23 +116,15 @@ class RetainedPreparation:
         hac_request: HacRequest | None = None,
         conley_request: ConleyRequest | None = None,
         offset_design: Design | None = None,
-        primitive_snapshot: bool = False,
     ) -> None:
-        """Store an isolated :class:`PerFitPreparationContext` and detached snapshot.
-
-        ``primitive_snapshot`` is passed through to the context unchanged (internal
-        opt-in route; default off).  On that route
-        the outward parts below are fresh materializations of the context's immutable
-        capture.
-        """
+        """Store an isolated :class:`PerFitPreparationContext` and detached snapshot."""
         ctx = PerFitPreparationContext(
             prepared,
             used_dependence=used_dependence,
             cluster_request=cluster_request,
             hac_request=hac_request,
             conley_request=conley_request,
-            primitive_snapshot=primitive_snapshot,
-            clean_fit=not primitive_snapshot,
+            clean_fit=True,
         )
         object.__setattr__(self, "input_key", ctx.input_key)
         object.__setattr__(self, "positive_only", bool(positive_only))
@@ -151,10 +145,15 @@ class RetainedPreparation:
 
     @classmethod
     def _from_normalized(
-        cls, prepared: PreparedFrame, *, positive_only: bool,
-        used_dependence: UsedDependence, cluster_request: ClusterRequest | None,
+        cls,
+        prepared: PreparedFrame,
+        *,
+        positive_only: bool,
+        used_dependence: UsedDependence,
+        cluster_request: ClusterRequest | None,
         offset_design: Design | None,
         single_fit: bool = False,
+        deferred_retained: bool = False,
     ) -> RetainedPreparation:
         """Single owned boundary for prepare_problem's fresh canonical producer.
 
@@ -164,22 +163,35 @@ class RetainedPreparation:
         reusable public prepare keeps its original independent capture.
         """
         ctx = PerFitPreparationContext._from_normalized(
-            prepared, used_dependence=used_dependence, cluster_request=cluster_request,
+            prepared,
+            used_dependence=used_dependence,
+            cluster_request=cluster_request,
             single_fit=single_fit,
+            deferred_retained=deferred_retained,
         )
         if ctx is None:
-            return cls(prepared, positive_only=positive_only,
-                       used_dependence=used_dependence, cluster_request=cluster_request,
-                       offset_design=offset_design)
+            return cls(
+                prepared,
+                positive_only=positive_only,
+                used_dependence=used_dependence,
+                cluster_request=cluster_request,
+                offset_design=offset_design,
+            )
         result = object.__new__(cls)
         for name, value in (
-            ("input_key", ctx.input_key), ("positive_only", bool(positive_only)),
+            ("input_key", ctx.input_key),
+            ("positive_only", bool(positive_only)),
             ("used_dependence", ctx.used_dependence),
             ("retained_columns", RetainedColumns(ctx.used_dependence.retained)),
-            ("cluster_request", cluster_request), ("hac_request", None),
-            ("conley_request", None), ("input_snapshot", ctx.input_snapshot),
+            ("cluster_request", cluster_request),
+            ("hac_request", None),
+            ("conley_request", None),
+            ("input_snapshot", ctx.input_snapshot),
             ("_context", ctx),
-            ("_offset_design", None if offset_design is None else owned_design(offset_design)),
+            (
+                "_offset_design",
+                None if offset_design is None else owned_design(offset_design),
+            ),
         ):
             object.__setattr__(result, name, value)
         return result
@@ -209,41 +221,26 @@ class RetainedPreparation:
     @property
     def frame(self) -> ModelFrame:
         """Return a fresh owned ModelFrame."""
-        capture = self._context._capture
-        if capture is not None:
-            return capture.model_frame()
         return _owned_model_frame(self._context._owned_template().frame)
 
     @property
     def base(self) -> SampleBase:
         """Return a fresh owned SampleBase."""
-        capture = self._context._capture
-        if capture is not None:
-            return capture.sample_base()
         return _owned_sample_base(self._context._owned_template().base)
 
     @property
     def labels(self) -> pd.Index[Any]:
         """Return a fresh owned row Index."""
-        capture = self._context._capture
-        if capture is not None:
-            return capture.labels_index()
         return self._context._owned_template().labels
 
     @property
     def effects(self) -> EffectColumns | None:
         """Return a fresh owned EffectColumns or None."""
-        capture = self._context._capture
-        if capture is not None:
-            return capture.effect_columns()
         return _owned_effect_columns(self._context._owned_template().effects)
 
     @property
     def dependence(self) -> DependenceProvenance | None:
         """Return a fresh owned DependenceProvenance or None."""
-        capture = self._context._capture
-        if capture is not None:
-            return capture.dependence_provenance()
         return _owned_dependence_provenance(self._context._owned_template().dependence)
 
     @property

@@ -1,18 +1,20 @@
 """Small-sample conventions: resolution, counts, factors, references and ownership.
 
-Internal module: the convention is one
+``design/04_inference_and_effects.md``, Sections 2.2, 3 and 5; ``DESIGN.md``, Section
+8; ``plan/evidence/M1_contract.txt``, rules B5 and B9, Sections 3.1 and 6(e) and (g);
+decisions D49, D54, D60, D65 and D76.  Task M1.16, private: the convention is one
 explicit object (:class:`~powermean.data.inference_conventions.ConventionValues`) that
 never changes the estimator; it supplies scalar factors, a reference distribution and
 the PSD rule.  Nothing here parses a public keyword, exposes ``pm.ssc`` or computes a
 score: the kernels receive counts and arrays.
 
-Presets, each equal to one canonical custom record:
+Presets (file 04, Section 3), each equal to one canonical custom record:
 
     stata        N/(N-1)       G_min/(G_min-1)                       normal   cgm
     none         1             1                                     normal   none
     regression   N/(N-K_f)     (N-1)/(N-K_f) * G_min/(G_min-1)       t        cgm
 
-Resolution: the request's explicit ``ssc`` (a preset name or a
+Resolution (Section 3.1, rule B9): the request's explicit ``ssc`` (a preset name or a
 custom record; an explicit ``None`` is refused), else the convention inherited from the
 fit, else the default ``"stata"``.  The record keeps the requested value with its
 presence, the convention in force, its source and, privately, its origin: a preset put
@@ -20,7 +22,7 @@ in force by its name (an explicit name, the default, or a fit's convention in fo
 that was one) or a custom record, whatever its values.  An inherited custom record
 stays inherited and custom.
 
-Counts.  ``N`` is the statistical count; ``K`` the exact full-design
+Counts (rule B5, D76).  ``N`` is the statistical count; ``K`` the exact full-design
 rank, slopes plus kept nuisance coordinates, which nesting never changes;
 ``K_reference = n_slopes + df_a`` with ``df_a`` the request's convention count of
 :mod:`powermean.inference.absorbed_rank`, and
@@ -30,7 +32,7 @@ reference.  ``G_min`` is the smallest count over the REQUESTED dimensions, repet
 kept, never an intersection count.  The ``t`` reference has ``N - K_reference`` degrees
 of freedom, or ``min(G_min - 1, N - K_reference)`` for a cluster request.
 
-Ownership.  A robust, HAC or Conley request takes the convention's
+Ownership (D60, Section 3.1).  A robust, HAC or Conley request takes the convention's
 robust factor once; a cluster request its cluster factor, one common factor with
 ``G_min`` under ``cluster_count="min"`` or each component's own ``G`` under ``"each"``,
 the reference still using ``G_min``.  A named HC method owns its scalar: HC1
@@ -42,28 +44,29 @@ otherwise a second correction, refused; floating-point values are never compared
 inherited or default convention neither applies its factor to a named method nor
 conflicts with it, and its reference distribution survives.
 
-Undefined degrees of freedom refuse (``specification.no_residual_dof``) and are never
-the exact-zero case: ``N/(N-K*)`` and HC1 need ``N > K``; a ``t`` reference needs a
+Undefined degrees of freedom refuse (``specification.no_residual_dof``), never a zero
+of decision D49: ``N/(N-K*)`` and HC1 need ``N > K``; a ``t`` reference needs a
 positive count.  ``N/(N-1)`` needs ``N >= 2`` and ``G/(G-1)`` two clusters, refused as
-:mod:`powermean.inference.convention` refuses them.
+the accepted convention refuses them.
 
-Sequence of the eigenvalue adjustment.  The resolved convention carries privately the
+Sequence of decision D4 (file 04, Sections 2.1.1, 2.1.4 and 3; the author's third-round
+answer of 17 October 2026, task M1.17).  The resolved convention carries privately the
 native sequence in which an indefinite signed multiway estimate is adjusted, selected
 by the origin of the convention in force and never by its values: ``"legacy"`` for the
 ``"stata"`` preset put in force by its name (``ppmlhdfe`` 2.3.4 through its
 ``reghdfe5`` callee), ``"modern"`` for every other convention in force
 (``"regression"``, ``"none"`` with an explicit ``"psd": "cgm"``, and every custom
-record, which has no field to select the legacy sequence).  A custom record whose
+record, which D65 gives no field to select the legacy sequence).  A custom record whose
 five values are a preset's keeps that preset's factors, reference and PSD treatment, and
 :func:`preset_name` still names the preset its values equal; it is not the preset, and
 it selects the modern sequence.  No new public spelling, field or default: the sequence
 is read from the convention in force, never requested on its own.
 
-Composition.  The primitive estimate is the one of
+Composition.  The primitive estimate is the accepted one of
 :mod:`powermean.inference.absorbed` (``fe_covariance``): source-average rows, frequency
 rows divided by ``sqrt(f)`` for the robust meat and not for a cluster total, one stored
 row padded with a zero row; the factor multiplies it ONCE
-(:func:`scaled_covariance`), and the direct standard errors are the map of
+(:func:`scaled_covariance`), and the direct standard errors are the accepted map of
 :meth:`powermean.model.order_scale.OrderScale.standard_errors`.
 """
 
@@ -129,11 +132,11 @@ def preset_name(values: ConventionValues) -> str | None:
 
 
 def sequence_of(values: ConventionValues, origin: ConventionOrigin) -> PsdSequence:
-    """Native adjustment sequence of a convention in force (module docstring).
+    """Decision D4's native sequence of a convention in force (module docstring).
 
     ``"legacy"`` for the ``"stata"`` preset put in force by its name (``origin`` is
     ``"preset"``), ``"modern"`` for every other convention, every custom record
-    included whatever its values.
+    included whatever its values (file 04, Section 2.1.4).
     """
     if origin not in ("preset", "custom"):
         raise ValueError("origin must be 'preset' or 'custom'")
@@ -158,8 +161,7 @@ class ResolvedConvention:
     origin : {"preset", "custom"}
         How it was put in force, kept privately: by a preset's name (an explicit name,
         the default, or a fit's convention in force that was one) or by a custom
-        record, whatever its values.  It selects the sequence of the eigenvalue
-        adjustment.
+        record, whatever its values.  It selects the sequence of decision D4.
     """
 
     requested: str | ConventionValues | Omitted
@@ -188,7 +190,7 @@ class ResolvedConvention:
 
     @property
     def sequence(self) -> PsdSequence:
-        """Native PSD sequence of the convention in force (internal)."""
+        """Decision D4's native sequence of the convention in force (private)."""
         return sequence_of(self.values, self.origin)
 
     @property
@@ -275,7 +277,7 @@ def resolve_convention(
 
 @dataclass(frozen=True)
 class ConventionCounts:
-    """The counts of one request, checked as a record.
+    """The counts of one request (rule B5, D76), checked as a record.
 
     Attributes
     ----------
@@ -494,6 +496,12 @@ def reference_of(
     return ReferenceDistribution("t", df)
 
 
+HC1_FORMULA = "HC1 N/(N-K)"
+"""The formula of HC1's own scalar."""
+COUNTED_FORMULAS = frozenset({HC1_FORMULA, "N/(N-K*)", "(N-1)/(N-K*)*G/(G-1)"})
+"""The factors that read a parameter count, ``K`` or ``K*``."""
+
+
 def method_factor(method: HCMethod, counts: ConventionCounts) -> ScalarFactor:
     """A named HC method's own scalar: HC1 ``N/(N-K)`` with the exact ``K``, else 1."""
     if method not in HC_METHODS:
@@ -503,7 +511,7 @@ def method_factor(method: HCMethod, counts: ConventionCounts) -> ScalarFactor:
     n, k = counts.count, counts.rank
     if n <= k:
         raise _no_residual_dof("HC1", n, k)
-    return ScalarFactor(n, n - k, "HC1 N/(N-K)", "method")
+    return ScalarFactor(n, n - k, HC1_FORMULA, "method")
 
 
 def _same_correction(method: HCMethod, robust: str, counts: ConventionCounts) -> bool:
@@ -540,16 +548,20 @@ def owned_factor(
             "specification.conflicting",
             {"first": f"vcov={method!r}", "second": f"a {kind} request"},
         )
-    own = method_factor(method, counts)
+    # The ownership is decided before the method's own factor, which refuses only at
+    # N = K (a saturated fit, whose covariance is missing: results.saturated), so that
+    # a second correction is refused on every fit.
     robust = resolved.values.robust
-    if resolved.source != "explicit" or robust == "none":
-        return own
-    if _same_correction(method, robust, counts):
-        return own
-    raise SpecificationError(
-        "specification.conflicting",
-        {"first": resolved.label, "second": f"vcov={method!r}"},
-    )
+    if (
+        resolved.source == "explicit"
+        and robust != "none"
+        and not _same_correction(method, robust, counts)
+    ):
+        raise SpecificationError(
+            "specification.conflicting",
+            {"first": resolved.label, "second": f"vcov={method!r}"},
+        )
+    return method_factor(method, counts)
 
 
 @dataclass(frozen=True)
@@ -577,9 +589,9 @@ class AppliedConvention:
         The rule of the components for a cluster request.
     reference : ReferenceDistribution
         The reference distribution of the convention in force.
-    psd : {"cgm", "none"}
-        The treatment of an indefinite signed multiway estimate, carried for its
-        owner.
+    psd : {"cgm", "none", "fixest"}
+        Decision D4's treatment of an indefinite signed multiway estimate, carried for
+        its owner (task M1.17).
     """
 
     convention: ResolvedConvention
@@ -594,8 +606,21 @@ class AppliedConvention:
 
     @property
     def sequence(self) -> PsdSequence:
-        """Native PSD sequence of the convention in force (internal)."""
+        """Decision D4's native sequence of the convention in force (private)."""
         return self.convention.sequence
+
+    @property
+    def reads_count(self) -> bool:
+        """Whether a factor or the reference reads a parameter count, ``K`` or ``K*``.
+
+        HC1's ``N/(N-K)``, the factors ``N/(N-K*)`` and ``(N-1)/(N-K*)*G/(G-1)``
+        (:data:`COUNTED_FORMULAS`) and the ``t`` reference (``N - K_reference``) read
+        one; ``1``, ``N/(N-1)``, ``G/(G-1)`` and the normal reference read none.
+        """
+        factors = (*(() if self.factor is None else (self.factor,)), *self.components)
+        return self.reference.kind == "t" or any(
+            found.formula in COUNTED_FORMULAS for found in factors
+        )
 
 
 def apply_convention(
@@ -672,7 +697,7 @@ def primitive_estimate(
     frequency: bool,
     cluster: tuple[str, IntegerArray] | None = None,
 ) -> CovarianceEstimate:
-    """The primitive estimate of the active rows, as in ``fe_covariance``.
+    """The primitive estimate of the active rows, as the accepted ``fe_covariance``.
 
     Parameters
     ----------
@@ -774,11 +799,11 @@ def scaled_covariance(
 
 
 def direct_errors(covariance: FloatArray, order: OrderScale) -> FloatArray:
-    """``sqrt(V_jj)`` by the direct map of the order scale, once.
+    """``sqrt(V_jj)`` by the accepted direct map of the order scale, once.
 
-    NaN where a variance is negative, zero where it is zero; nothing floored.
+    NaN where a variance is negative, zero where it is zero (D49); nothing floored.
     The same map as ``powermean.inference.provider.direct_standard_errors``, which
-    reads the ``Covariance`` record.
+    reads the accepted ``Covariance`` record of the first milestone.
     """
     if type(order) is not OrderScale:
         raise TypeError("order must be an OrderScale")

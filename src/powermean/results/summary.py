@@ -1,39 +1,46 @@
-"""The printed summary of a result, for a no-FE fit.
+"""The printed summary of a result (``DESIGN.md``, Section 4.5), for a no-FE fit.
 
-The layout, without fixed-effect and bias-correction lines: the estimator and the
-package version, the outcome, the mean order and the working variance, the observations
-with the accounting of the sample, the zeros, the weights, the standard errors with
-their convention and counts, the certificate, the coverage label of the theory, the
-table of the coefficients under the normal reference, then the notes and the references
-that every result holds (:mod:`powermean.results.citations`).
+The layout of Section 4.5 without its fixed-effect and bias-correction lines, which
+arrive with their milestones: the estimator and the package version, the outcome, the
+mean order and the working variance, the observations with the accounting of the
+sample (``design/02_computation.md``, Section 2), the zeros, the weights, the standard
+errors with their convention and counts, the certificate, the coverage label of the
+theory (``design/01_statistical_core.md``, Section 6; D58), the table of the
+coefficients under the normal reference, then the notes and the references that the
+author requires on every result (:mod:`powermean.results.citations`).
 
-A result whose inference is withheld prints the point with its status and no standard
-error, so that a failed or supplied uncertified point is visibly not certified; a result
-without a point (a least-squares solve that formed none, an automatic start without a
-finite value) prints its status and the reason, with no coefficients; a certified log
-OLS fit prints its fresh linear certificate and the least-squares solve that reached the
-point; degenerate inference at an exact root prints its zero standard errors and
-undefined ratios as such.  The standard errors are those of the active covariance: the
-one requested at the fit, or a view's (``with_vcov``); a named HC method prints its
-method, bread, leverage geometry, factor with its owner, convention in force with its
-source and reference; a multiway cluster covariance prints its dimensions, its form, the
-cluster count of each dimension, its factor with its owner, its convention with its
-source and reference, and the ``psd`` treatment (whether the adjustment was active, the
-matrix reported being then the adjusted one); and a ``t`` reference labels the table's
-ratio and p-value.  The summary emits no warning: the secondary convergence warning
-belongs to the fit, and a summary is a retrieval.
+A result whose inference is withheld prints the point with its status and no
+standard error, so that a failed or supplied uncertified point is visibly not
+certified; a result without a point (a least-squares solve that formed none, an
+automatic start without a finite value) prints its status and the reason, with no
+coefficients; a certified log OLS fit prints its fresh linear certificate and the
+least-squares solve that reached the point (task M0.22); degenerate inference at an
+exact root (decision D49) prints its zero standard errors and undefined ratios as
+such.  The standard errors are those of the active covariance: the one requested at
+the fit, or a view's (``with_vcov``); a named HC method prints its method, bread,
+leverage geometry, factor with its owner, convention in force with its source and
+reference; a multiway cluster covariance prints its dimensions, its form, the cluster
+count of each dimension, its factor with its owner, its convention with its source and
+reference, and decision D4's treatment (whether the adjustment was active, the matrix
+reported being then the adjusted one); and a ``t`` reference labels the table's ratio
+and p-value.  The summary emits no warning: the
+secondary convergence warning belongs to the fit of task M0.22, and a summary is a
+retrieval.
 """
 
 from __future__ import annotations
 
 import math
+from typing import cast
 
 import numpy as np
 import pandas as pd
 
 from powermean.results import naming
+from powermean.results.indefinite import note, retained_indefinite
 from powermean.results.provenance import Provenance
 from powermean.results.retained import CovarianceRecord, RetainedFit
+from powermean.results.saturated import SaturatedCovariance
 
 WIDTH = 84
 RULE = "-" * WIDTH
@@ -52,7 +59,9 @@ def _scientific(value: float) -> str:
 
 
 def _header(
-    retained: RetainedFit, provenance: Provenance, record: CovarianceRecord | None
+    retained: RetainedFit,
+    provenance: Provenance,
+    record: CovarianceRecord | SaturatedCovariance | None,
 ) -> list[str]:
     """The lines before the table: estimator, sample, weights, errors, certificate."""
     estimator, sample = retained.estimator, retained.sample
@@ -66,18 +75,20 @@ def _header(
         f"{naming.order_text(omega)} ({naming.mean_label(omega)})    "
         f"Working variance: {naming.variance_text(estimator)}"
     )
-    counts = sample.counts
+    exhausted = retained.exhausted
+    counts = sample.counts if exhausted is None else exhausted.counts
+    count = counts["retained"]
     excluded = ", ".join(
         f"{reason.replace('_', ' ')} {count}"
         for reason, count in counts.items()
         if reason != "retained" and count
     )
     accounting = excluded if excluded else "none dropped"
-    lines.append(
-        f"Observations: {sample.count} of {sample.nobs} input rows ({accounting})"
-    )
-    zeros = int(np.count_nonzero(sample.data.y == 0))
-    zero_line = f"Zeros: {zeros} of {sample.count} ({100 * zeros / sample.count:.1f}%)"
+    lines.append(f"Observations: {count} of {sample.nobs} input rows ({accounting})")
+    zero_line = "Zeros: none in the empty retained sample"
+    if count:
+        zeros = int(np.count_nonzero(sample.data.y == 0))
+        zero_line = f"Zeros: {zeros} of {count} ({100 * zeros / count:.1f}%)"
     if sample.conditioned:
         zero_line += "; conditioned on positive outcomes (zero outcomes removed)"
     lines.append(zero_line)
@@ -97,7 +108,9 @@ def _weights_line(retained: RetainedFit) -> str:
         return "Weights: none"
     line = f"Weights: {weights.kind}, column {columns.weights!r}"
     if weights.frequency:
-        line += f" (N = {sample.effective_n} observations in {sample.count} rows)"
+        n = sample.effective_n if retained.exhausted is None else 0
+        rows = sample.count if retained.exhausted is None else 0
+        line += f" (N = {n} observations in {rows} rows)"
     return line
 
 
@@ -152,18 +165,26 @@ def _multiway_line(record: CovarianceRecord) -> str | None:
     if answer.psd == "cgm":
         state = "active" if answer.adjusted else "inactive"
         line += f"; eigenvalue adjustment {state}"
+    elif answer.psd == "fixest":
+        state = "active" if answer.adjusted else "inactive"
+        line += f"; eigenvalue adjustment by fixest's rule {state}"
     elif answer.psd == "none":
         line += "; no eigenvalue adjustment (psd 'none')"
     return line
 
 
-def _errors_line(retained: RetainedFit, record: CovarianceRecord | None) -> str:
+def _errors_line(
+    retained: RetainedFit, record: CovarianceRecord | SaturatedCovariance | None
+) -> str:
     """The convention of the active covariance, or why none is reported."""
     default = retained.default if record is None else record
     if retained.estimator.route == "linear" and retained.status is None:
         return "Std. errors: not available before the certificate of the linear path"
     if not retained.certified or default is None:
         return "Std. errors: withheld, the solution is not certified"
+    if type(default) is SaturatedCovariance:
+        return f"Std. errors: {default.method}, missing. Note: {default.note}"
+    default = cast("CovarianceRecord", default)
     multiway = _multiway_line(default)
     if multiway is not None:
         line = multiway
@@ -205,6 +226,12 @@ def _errors_line(retained: RetainedFit, record: CovarianceRecord | None) -> str:
 def _no_point_line(retained: RetainedFit) -> str:
     """Why no certificate exists: no point, or a bare linear candidate."""
     failure, linear = retained.failure, retained.linear
+    if retained.sample_failure is not None:
+        detail = retained.sample_failure.reason.replace("_", " ")
+        return (
+            f"Certified solution: no (status {retained.status!r}; "
+            f"sample diagnosis: {detail})"
+        )
     if failure is not None:
         return (
             f"Certified solution: no (status {retained.status!r}; no candidate: "
@@ -218,9 +245,7 @@ def _no_point_line(retained: RetainedFit) -> str:
             f"Certified solution: no (status {retained.status!r}; no point of the "
             f"least-squares solve: {detail})"
         )
-    return (
-        "Certified solution: not available for the linear path in this version"
-    )
+    return "Certified solution: not available for the linear path in this version"
 
 
 def _solve_text(retained: RetainedFit) -> str:
@@ -262,11 +287,18 @@ def _certificate_line(retained: RetainedFit) -> str:
     return f"Certified solution: {verdict} ({'; '.join(pieces)})"
 
 
-def _table(table: pd.DataFrame, level: float, *, statistic: str = "z") -> list[str]:
-    """The coefficient table: the ratio ``z`` of the normal reference, or ``t``."""
+def _table(
+    table: pd.DataFrame, level: float, *, statistic: str | None = None
+) -> list[str]:
+    """The coefficient table: the ratio ``z`` of the normal reference, or ``t``.
+
+    A fit without a reported coefficient (every regressor dropped) has the head alone.
+    """
+    if statistic is None:
+        statistic = "t" if table.attrs.get("reference") == "t" else "z"
     percent = f"{100 * level:g}% conf. interval"
     names = [str(term) for term in table["term"]]
-    width = max(len(name) for name in names) + 2
+    width = max((len(name) for name in names), default=0) + 2
     head = (
         f"{'':<{width}}{'coef.':>12}{'std. err.':>12}{statistic:>9}"
         f"{'P>|' + statistic + '|':>9}{'[' + percent + ']':>24}"
@@ -304,7 +336,7 @@ def render(
     table: pd.DataFrame | None,
     beta: pd.Series[float] | None,
     level: float,
-    record: CovarianceRecord | None = None,
+    record: CovarianceRecord | SaturatedCovariance | None = None,
 ) -> str:
     """The summary text: the header, the table or the point, the references.
 
@@ -319,6 +351,8 @@ def render(
         lines.extend(_table(table, level, statistic=statistic))
     else:
         lines.extend(_point(beta))
+    if retained_indefinite(retained):
+        lines.append(note(provenance.status))
     if retained.sample.conditioned:
         lines.append(
             "Note: the fit conditions on positive outcomes; dropping zeros does not "

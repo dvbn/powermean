@@ -36,7 +36,9 @@ Meanings:
 ``SolverCapabilityError``    The requested solver does not cover the case
 ``CoverageWarning``          Computed, but outside the results proved in BBP
 ``NumericalWarning``         The secondary convergence criteria are met but the
-                             requested tolerance is not: status ``verified_secondary``
+                             requested tolerance is not: status ``verified_secondary``;
+                             or a certified root whose curvature is not positive
+                             definite: the equation may have other roots
 ``CovarianceWarning``        A note about a reported covariance: an indefinite signed
                              multiway estimate adjusted, or an indefinite covariance
                              whose inference is withheld
@@ -176,7 +178,12 @@ class SolverCapabilityError(Exception):
 
 
 class CoverageWarning(UserWarning):
-    """The requested combination is computed but outside the results proved in BBP."""
+    """The requested combination is computed but outside the results proved in BBP.
+
+    Also the note of a formula term that is computed with another meaning than the
+    one written (``coverage.power_collapsed``: ``x^2`` read as ``x``), and that of a
+    regressor omitted because of collinearity (``coverage.collinear_omitted``).
+    """
 
     def __init__(
         self, identifier: str, fields: Mapping[str, object] | None = None
@@ -189,9 +196,15 @@ class CoverageWarning(UserWarning):
 class NumericalWarning(UserWarning):
     """The secondary convergence criteria are met but the requested tolerance is not.
 
+    Also the note of a merit metric that the caller stated and the cancelled root
+    solve replaced at its zero start (``numerical.merit_metric_replaced``).
     Carries the ``status`` reported by the certificate (``verified_secondary``, as
     the caller reports it) and the ``certificate`` as supplied.  Distinct from
-    :class:`CoverageWarning`, which concerns theory, not numerics.
+    :class:`CoverageWarning`, which concerns theory, not numerics.  Also the note of
+    a certified root whose curvature is not positive definite
+    (``numerical.indefinite_curvature``, owner's ruling 78), with the fit's status.
+    A small nonzero mean order can also lose precision on the reported scale
+    (``numerical.small_mean_order``).
     """
 
     def __init__(

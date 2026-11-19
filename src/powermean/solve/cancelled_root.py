@@ -28,7 +28,7 @@ from powermean.solve.cancelled_certificate import (
     build_merit_cholesky,
     certify_cancelled,
     failed_root_result,
-    prepare_root_initializer,
+    root_initializer,
 )
 from powermean.solve.cancelled_operator import AttemptBounds
 from powermean.solve.cancelled_records import (
@@ -95,6 +95,7 @@ def _certify_stage_point(
         work=ctx.work,
         variance=stage_variance,
         merit_cholesky=ctx.merit_cholesky,
+        merit_metric=ctx.root_options.merit_metric,
     )
     ctx.history.append(certified.certificate)
     return certified
@@ -238,14 +239,33 @@ def solve_cancelled_root(
     )
     cb, ctrl = eb.certificate, certificate_controls(options)
     history: list[CancelledCertificate] = []
-    init_rec = prepare_root_initializer(
+    init_rec, init_lower = root_initializer(
         capture, options, eb, reported=reported, work=work, history=history, start=start
     )
+    if init_rec.kind == "gamma_tau2" and not init_rec.certified:
+        # The Gamma equation has no certified root on this sample; that says nothing
+        # of the target equation (owner's ruling 71: existence is decided per
+        # estimator).  The root stage starts from zero, as from a caller's start,
+        # without the continuation that needs a certified origin.
+        zero = np.zeros(capture.admission.geometry.n_identified, dtype=np.float64)
+        init_rec = replace(init_rec, kind="zero_start", _point=FloatStorage.store(zero))
+        init_lower = None
+        if ro.merit_metric == "gamma":
+            # The Gamma metric there is the tau = 2 Jacobian at a point that equation
+            # did not certify; where it is singular in exact arithmetic, whether its
+            # factor forms is decided by rounding, hence by the outcome's unit (ruling
+            # 68).  The Gram metric of the design is used at the zero start.
+            ro = replace(ro, merit_metric="gram")
     merit_chol: FloatArray | None = None
     if init_rec.kind != "gamma_tau2" or init_rec.certified:
         try:
             merit_chol = build_merit_cholesky(
-                capture, init_rec.point, ro.merit_metric, work
+                capture,
+                init_rec.point,
+                ro.merit_metric,
+                work,
+                init_rec.certificate,
+                lower=init_lower,
             )
         except (np.linalg.LinAlgError, FloatingPointError, ValueError):
             merit_chol = None

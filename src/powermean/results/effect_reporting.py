@@ -1,4 +1,4 @@
-"""Separate coefficient-target records/tables.
+"""Separate coefficient-target records/tables, design/04 Section 9.7.
 
 This is a result-layer presentation adapter over the small numeric effects engine.
 It neither changes coefficient tables nor implements the later shared export API.
@@ -22,6 +22,7 @@ from powermean.effects.targets import (
     ReportingContext,
     ReportingPoint,
     TargetEstimate,
+    _target_influence_rows,
     evaluate,
     reference_values,
 )
@@ -58,7 +59,7 @@ def context_snapshot(
 
 
 def target_label(omega: float) -> str:
-    """The target's symbol and conditional power-mean functional, for any fit order."""
+    """Section 9.1 symbol and conditional power-mean functional, for any fit order."""
     symbol = {1.0: "theta_N/NATE", 0.0: "theta_L", -1.0: "theta_H"}.get(
         omega, f"theta_omega (omega={order_text(omega)})"
     )
@@ -183,7 +184,9 @@ class EffectResult:
         source = self._influence_provider()
         if tuple(source.columns) != self.context.names:
             raise ValueError("target influence and coefficient basis differ")
-        values = source.to_numpy(dtype=np.float64) @ self.gradient
+        values = _target_influence_rows(
+            source.to_numpy(dtype=np.float64), self.gradient
+        )
         return pd.Series(
             np.array(values, dtype=np.float64, copy=True),
             index=source.index.copy(deep=True),
@@ -221,11 +224,11 @@ def effects_table(
 ) -> pd.DataFrame:
     """Selected regressor targets, or every coefficient's exp(beta)-1 convenience.
 
-    Without a selection, the table holds every reported coordinate. A coordinate
-    transformation is not a full regressor contrast: categorical, interacted, nonlinear
-    and intercept coordinates remain labeled as coordinates, with no claimed regressor
-    endpoints. Selected names retain their standalone one-unit semantics and
-    ambiguity/omission refusals.
+    Design/04 Section 9.7 explicitly defines the no-selection table for every
+    reported coordinate. A coordinate transformation is not a full regressor
+    contrast: categorical, interacted, nonlinear and intercept coordinates remain
+    labeled as coordinates, with no claimed regressor endpoints. Selected names
+    retain their standalone one-unit semantics and ambiguity/omission refusals.
     """
     reference_values(context.reference, level, math.nan)
     if ci not in ("transform", "delta"):
@@ -294,7 +297,7 @@ def _coefficient_row(
     level: float,
     ci: IntervalKind,
 ) -> dict[str, object]:
-    """The coordinate transformation, distinct from a regressor change."""
+    """Section 9.7 coordinate transformation, distinct from a regressor change."""
     target = LinearTarget(tuple(1.0 if name == term else 0.0 for name in context.names))
     numeric = evaluate(context, target, level=level, ci=ci)
     row = EffectResult(context, numeric, term, (0.0, 1.0), level, ci).to_dict()

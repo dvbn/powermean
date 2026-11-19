@@ -1,9 +1,10 @@
 """Support-only weighted least squares of a working outcome on ``B = [X, F]``.
 
-Internal module.  The iterative rectifier
+``design/02_computation.md``, Sections 4 and 5.2; ``plan/evidence/M1.7_contract.txt``,
+Section D; decision D51.  Task M1.7, private.  The iterative rectifier
 (:mod:`powermean.solve.support_rectifier`) projects its working outcome ``u`` with its
-auxiliary weights ``w``; nothing here is the statistical WLS, a
-collinearity or omission policy, or a sample rule.
+auxiliary weights ``w``; nothing here is the statistical WLS of task M1.13, a
+collinearity or omission policy (task M1.9), or a sample rule.
 
 Absorption.  ``[u, X / s]`` is projected through the accepted
 :func:`powermean.fe.absorb.absorb` with ``w`` and the explicit controls of
@@ -11,11 +12,24 @@ Absorption.  ``[u, X / s]`` is projected through the accepted
 status other than ``converged`` ends the projection with status ``absorption``.  The
 column scales ``s`` are powers of two with ``max_i |x_ij| / s_j`` in ``[1/2, 1)``, and
 ``s_j = 1`` for a zero column: LAPACK's ``xGEEQUB`` scales by powers of the radix so
-that scaling and unscaling round nothing.
-Without blocks the columns are taken as they are.
+that scaling and unscaling round nothing, where the S6 support LP and ``FixedDesign``
+divide by the largest magnitude (``references/pyiols_support.py.txt``,
+``pyiols_fixed.py.txt``).  Without blocks the columns are taken as they are.
 
-Slopes.  ``A = sqrt(w) X~`` and ``b = sqrt(w) u~``.  The rank is the number of singular
-values of ``A`` above ``eps max(n, p) sigma_max``; a
+Slopes.  ``A = sqrt(w) X~`` and ``b = sqrt(w) u~``.  The absorption noise of a slope
+that is in the span of the effects, or of the effects and other slopes, can count as
+rank: as the largest singular value when no other slope sets the scale, or as a small
+one above the cutoff when the slope is a combination of others, and the rectifier
+then ends without a conclusion.  For its second attempt on such a sample
+(:func:`powermean.solve.support.analyze_support`) the caller asks, with ``set_aside``,
+blocks and a dual tolerance ``e``, that a slope whose absorbed column, after the
+earlier slopes that are kept, is negligible against its column before absorption take
+no part in the rank decision: its column of ``A`` is set to zero (:func:`_set_aside`:
+the formula-order relative pivots of the collinearity step, at ``e``).  The slope
+keeps its equation in every recheck below and in the rectifier's dual check.  Without
+``set_aside``, the default, every column enters the rank decision.
+The rank is the number of singular
+values of ``A`` above ``eps max(n, p) sigma_max`` (the accepted M0 and S6 cutoff); a
 column-pivoted QR ``A P = Q R`` supplies the basic coordinates, its first ``r`` pivots,
 whose coefficients solve ``R_rr c = Q_r' b`` by back substitution while the nonbasic
 coordinates are zero.  ``||A - Q_r Q_r' A||_2 <= cutoff`` is checked for every input
@@ -25,7 +39,8 @@ cutoff or other solver is used, no column is omitted from any equation, and a
 rank-redundant representation still yields the unique fitted projection without a claim
 of identified coefficients.
 
-Refinement of ``u``.  The absorber's weighted level means bound
+Refinement of ``u`` (``CONTRACT_V1.txt``, the approved support-accuracy correction, as
+qualified by ``CONTRACT_V1_ADDENDUM2.txt``).  The absorber's weighted level means bound
 ``sum_g w u~`` only by ``tol sum_g w``, about ``K`` times what the rectifier's dual
 needs.  Given the dual's ``e``, the ``u`` column of the converged joint absorption must
 meet the requirement ``R_e``: on every level of every block, ``s = sum w u~`` and
@@ -67,6 +82,8 @@ from typing import Literal, Protocol, cast
 
 import numpy as np
 
+from powermean.data.collinearity import relative_pivots
+from powermean.data.collinearity_numeric import norm
 from powermean.fe.absorb import AbsorptionResult, AbsorptionState, absorb
 from powermean.fe.absorb_numeric import (
     Coefficients,
@@ -128,7 +145,7 @@ linalg = cast("Linalg", importlib.import_module("scipy.linalg"))
 
 @dataclass(frozen=True)
 class ProjectionControls:
-    """The explicit controls of one support projection.
+    """The explicit controls of one support projection (contract table).
 
     ``tolerance`` is the absolute weighted-mean tolerance of the absorption and of
     every equation recheck; ``max_sweeps`` the sweep budget of one absorber call,
@@ -381,6 +398,37 @@ class _Basis:
     status: Status = "solved"
 
 
+def _set_aside(absorbed: FloatArray, raw: FloatArray, tolerance: float) -> list[int]:
+    """The slopes that the effects and the earlier slopes absorb: no part in the rank.
+
+    In formula order, a slope whose absorbed column, after the earlier slopes that are
+    kept, is negligible against its column before absorption: the squared residual of
+    ``x~_j / ||x_j||`` is at most ``tolerance ** 2``, equality included.  These are the
+    relative pivots of the collinearity step (owner's ruling 92;
+    :func:`powermean.data.collinearity.relative_pivots`, the same routine), read on the
+    projection's own absorbed columns with the plain 2-norms of that step's
+    fixed-effect screen (:func:`powermean.data.collinearity_numeric.norm`), not
+    weighted by the auxiliary penalties: a slope that leaves the span on the zero rows
+    only is kept, whatever the penalty on the positive rows.  ``tolerance`` is the
+    dual's ``e``, far below the relative rule of the collinearity step
+    (``sqrt(1e-9)``).  The list decides the rank of this projection and nothing else:
+    which regressor is omitted by name is decided afterwards by the collinearity step,
+    by its own rule.  A slope listed because of the effects alone is one that step
+    omits on the same rows.  A slope listed because of earlier slopes is the one that
+    step omits, except where an earlier slope of the dependence passes that step's
+    fixed-effect screen: the step then omits the earlier slope and keeps this one, the
+    same span.  A column that the absorption left exactly zero needs nothing and is
+    not listed.
+    """
+    columns = [j for j in range(raw.shape[1]) if absorbed[:, j].any()]
+    if not columns:
+        return []
+    norms = np.array([norm(raw[:, j], f"slope {j}") for j in columns])
+    bound = tolerance * tolerance
+    pivots = relative_pivots(absorbed[:, columns] / norms, bound)
+    return [j for j, pivot in zip(columns, pivots, strict=True) if pivot <= bound]
+
+
 def _basis(a: FloatArray, b: FloatArray) -> _Basis:
     """SVD rank, pivoted QR, the all-column range check and the basic solve.
 
@@ -487,6 +535,7 @@ def project(
     controls: ProjectionControls,
     *,
     dual_tolerance: float | None = None,
+    set_aside: bool = False,
 ) -> Projection:
     """The support projection of ``u`` on ``[X, F]`` with auxiliary weights ``w``.
 
@@ -505,6 +554,10 @@ def project(
         The ``e`` of the dual that ``w r`` will meet: with blocks, the ``u`` column
         must then meet ``R_e`` (module docstring); none by default, the projection
         without a requirement.
+    set_aside : bool, default False
+        Whether, with blocks and a dual tolerance, the slopes that the effects and the
+        earlier slopes absorb at that tolerance take no part in the rank decision
+        (module docstring, "Slopes"; :func:`_set_aside`).
 
     Returns
     -------
@@ -547,6 +600,8 @@ def project(
         if problem.n_slopes:
             root = np.sqrt(weights)
             a = checked_product(root[:, None], absorbed.x, "weighted design")
+            if set_aside and absorbed.result is not None and dual_tolerance is not None:
+                a[:, _set_aside(absorbed.x, x, dual_tolerance)] = 0.0
             basis = _basis(a, checked_product(root, absorbed.u, "weighted outcome"))
             found = replace(
                 found,

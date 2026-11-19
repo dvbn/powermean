@@ -1,16 +1,20 @@
-"""Small numerical operations for inference: finite arrays and symmetric parts.
+"""Small numerical operations of the inference port: finite arrays and symmetric parts.
 
-:func:`finite_array` and :func:`immutable_array`, which
-:mod:`powermean.inference.influence` and :mod:`powermean.inference.vcov` import, and
-:func:`symmetric_part`, which the covariance of :mod:`powermean.inference.vcov` uses.
+Port of three functions of ``_numeric.py`` of pyiols (source S6 of
+``design/06_reuse_map.md``): :func:`finite_array` and :func:`immutable_array`, which
+the source modules ``inference/influence.py`` and ``inference/covariance.py`` import,
+and :func:`symmetric_part`, which decision D54 brings into the covariance of
+:mod:`powermean.inference.vcov`.  Their names, checks, messages and arithmetic are
+those of the source, with two changes recorded in ``PROVENANCE.md``, Section 10.
 
 - :func:`immutable_array` stores its copy in bytes of its own, as
   :func:`powermean.model.rows._immutable` does, so that the write flag of the result
-  cannot be set again.
-- :func:`symmetric_part` names its matrix ``matrix``; the package reserves ``a`` for
-  observation weights.
+  cannot be set again; S6 clears the flag of an ordinary copy, which a caller can set
+  back.  The values are unchanged.
+- :func:`symmetric_part` calls its matrix ``matrix`` where S6 writes ``a``, which the
+  package reserves for observation weights (``design/01_statistical_core.md``).
 
-The symmetric part.  Each entry of ``(A + A')/2`` is rounded once to the nearest
+The symmetric part (D54).  Each entry of ``(A + A')/2`` is rounded once to the nearest
 double.  Where both entries of a pair are at most half the largest double in absolute
 value, their sum is formed first and halved: below ``2^-1021`` the sum is exact and
 only the halving rounds, so that the mean of two equal subnormal entries is that entry,
@@ -34,12 +38,13 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import ArrayLike
 
+from powermean.model.matrix import symmetric_average
 from powermean.model.rows import _immutable
 from powermean.model.variance import FloatArray
 
 
 def finite_array(value: ArrayLike, name: str) -> FloatArray:
-    """A real array of finite doubles, or ``ValueError``.
+    """A real array of finite doubles, or ``ValueError`` (S6 ``finite_array``).
 
     Parameters
     ----------
@@ -62,7 +67,7 @@ def finite_array(value: ArrayLike, name: str) -> FloatArray:
 
 
 def immutable_array(value: ArrayLike) -> FloatArray:
-    """An owned read-only copy of a real array of doubles.
+    """An owned read-only copy of a real array of doubles (S6 ``immutable_array``).
 
     The copy holds bytes of its own, whose write flag cannot be set again.
 
@@ -82,7 +87,7 @@ def immutable_array(value: ArrayLike) -> FloatArray:
 
 
 def symmetric_part(value: ArrayLike) -> FloatArray:
-    """Average a finite square matrix and its transpose without range loss.
+    """Average a finite square matrix and its transpose without range loss (S6).
 
     Adding first preserves subnormal entries; halving first avoids overflow for large
     entries.  Neither a positive direction nor the diagonal is discarded merely to
@@ -101,12 +106,4 @@ def symmetric_part(value: ArrayLike) -> FloatArray:
     matrix = finite_array(value, "matrix")
     if matrix.ndim != 2 or matrix.shape[0] != matrix.shape[1]:
         raise ValueError("matrix must be square")
-    small = np.abs(matrix) <= np.finfo(float).max / 2
-    add_first = small & small.T
-    result = np.empty_like(matrix)
-    # Underflow of a genuinely unrepresentable average is ordinary rounding,
-    # unlike halving two equal subnormals before forming their sum.
-    with np.errstate(over="raise", invalid="raise", under="ignore"):
-        result[add_first] = (matrix[add_first] + matrix.T[add_first]) / 2
-        result[~add_first] = matrix[~add_first] / 2 + matrix.T[~add_first] / 2
-    return result
+    return symmetric_average(matrix)

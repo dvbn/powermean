@@ -1,17 +1,20 @@
 """The names printed for an estimator, a mean order and the coverage of the theory.
 
+``design/01_statistical_core.md``, Sections 6 (the coverage labels) and 7 (the naming
+rules); ``DESIGN.md``, Section 4.4 (the label of a prediction); decisions D41 and D58.
+
 - "PPML" and "GPML" name ``omega = 1`` with ``tau = 1`` and ``tau = 2`` only; the
   other cases are described by their indices.  "Log OLS" names ``omega = 0``.  An NB2
-  working variance is named with its ``kappa`` and marked as an element of the package
-  that is not in BBP.
+  working variance is named with its ``kappa`` and marked as an element of the design
+  that is not in BBP (file 01, Section 8, item 7).
 - A prediction is the fitted conditional power mean of order ``omega``: the conditional
   mean of ``Y`` at ``omega = 1`` only, the geometric mean at ``omega = 0``, the harmonic
   mean at ``omega = -1``.
 - The coverage label of a no-FE joint fit is ``unique_root`` for the power family with
   ``tau`` in ``[1, 2]`` at a positive order (``prop:iols-exact-sample-root``), at a
-  negative order on positive outcomes (the same transformed-problem
+  negative order on positive outcomes (decision D58: the same transformed-problem
   sample conditions, a package-design extension and not a new BBP theorem), for log
-  OLS and for joint NB2 (a convexity argument, not in BBP);
+  OLS and for joint NB2 (the convexity argument of file 01, Section 4.2, not in BBP);
   it is ``selected_root`` for the power family outside ``[1, 2]``, the root that root
   Newton reaches from the certified nearest convex fit of the same sample (PPML below
   1, Gamma above 2) or from the caller's recorded start, certified as a regular root
@@ -35,7 +38,7 @@ NOT_IN_BBP = "a design element not in BBP"
 
 @dataclass(frozen=True)
 class Coverage:
-    """A coverage label and its basis."""
+    """A coverage label and its basis, as file 01, Section 6, states them."""
 
     label: CoverageLabel
     basis: str
@@ -68,7 +71,7 @@ def variance_text(estimator: Estimator) -> str:
 
 
 def estimator_name(estimator: Estimator) -> str:
-    """The name of the estimator by the naming rules."""
+    """The name of the estimator by the rules of file 01, Section 7."""
     omega = estimator.mean.omega
     if estimator.route == "linear":
         return "log OLS (omega = 0)"
@@ -95,7 +98,7 @@ def prediction_label(omega: float) -> str:
 
 
 def coverage(estimator: Estimator) -> Coverage:
-    """The coverage label of a no-FE fit and its basis."""
+    """The coverage label of a no-FE fit and its basis (file 01, Section 6; D58)."""
     omega = estimator.mean.omega
     formulation = estimator.fixed_effects
     if (

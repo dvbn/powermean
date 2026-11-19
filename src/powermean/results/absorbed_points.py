@@ -1,9 +1,11 @@
 """Detachment helpers and temporary identity map for absorbed point records.
 
-This module defines :data:`RawPointRecord`, :data:`AbsorbedRoute`, :data:`PointMapper`,
+``design/02_computation.md``, Sections 5.2 and 7; ``plan/evidence/M1.15_contract.txt``,
+items 2, 3 and 7; ``brief/layout_C_ownership.txt`` (P05).  This module defines
+:data:`RawPointRecord`, :data:`AbsorbedRoute`, :data:`PointMapper`,
 :func:`snapshot_linear_normalization`, :func:`snapshot_fresh_equations`,
-:func:`_compute_beta`, :func:`snapshot_point_record`, and :class:`PointIdentityMap`, and
-re-exports record classes from :mod:`powermean.results.absorbed_point_records`.
+:func:`_compute_beta`, :func:`snapshot_point_record`, and :class:`PointIdentityMap`,
+and re-exports record classes from :mod:`powermean.results.absorbed_point_records`.
 """
 
 from __future__ import annotations
@@ -76,7 +78,7 @@ def snapshot_linear_normalization(
         pk = norm.point_key if point_key == 0 else point_key
         sk = norm.sample_key if sample_key == 0 else sample_key
         head = (pk, sk, norm.effects, norm.references, norm.shifts)
-        return RetainedLinearNormalization(*head, norm.index, norm.gap, norm.rank)
+        return RetainedLinearNormalization(*head, norm.index, norm.gap)
     pk, sk = point_key, sample_key
     if get_point is not None:
         pt_snap = get_point(norm.point)
@@ -85,9 +87,7 @@ def snapshot_linear_normalization(
         sk = sample_map.capture(norm.point.sample).key
     eff, refs = _tuple_arrays(norm.effects), _owned_references(norm.references)
     sh, idx = _tuple_arrays(norm.shifts), owned_array(norm.index)
-    return RetainedLinearNormalization(
-        pk, sk, eff, refs, sh, idx, float(norm.gap), norm.rank
-    )
+    return RetainedLinearNormalization(pk, sk, eff, refs, sh, idx, float(norm.gap))
 
 
 def snapshot_fresh_equations(
@@ -274,9 +274,21 @@ def snapshot_point_record(
         # Full effects and q remain detached and available to rich accessors.
         s, k = sample_snapshot, int(rec.theta.size)
         return RetainedPointSnapshot(
-            pkey, s.key, s.partition_key, "reduced", s, var, inn, k, None,
-            rec.theta, _compute_beta(s, rec.theta), rec.base, rec.index,
-            scalar_work=rec.scalar, _raw_effects=rec.state.coefficients,
+            pkey,
+            s.key,
+            s.partition_key,
+            "reduced",
+            s,
+            var,
+            inn,
+            k,
+            None,
+            rec.theta,
+            _compute_beta(s, rec.theta),
+            rec.base,
+            rec.index,
+            scalar_work=rec.scalar,
+            _raw_effects=rec.state.coefficients,
             _coordinates=rec.coordinates,
         )
     if isinstance(rec, IndexPoint):

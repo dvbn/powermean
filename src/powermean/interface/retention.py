@@ -1,6 +1,9 @@
-"""Internal prepared ownership, dependence declarations, and concrete outcome admission.
+"""Private prepared ownership, dependence declarations, and concrete outcome admission.
 
-This module
+``design/02_computation.md``, Section 2; ``design/04_inference_and_effects.md``, Section
+2.3; ``plan/evidence/M1_contract.txt``, Sections 3.4, 3.5 and 6(f);
+``plan/evidence/M1.15_revision_B.txt`` (L1, L2, F2, F3);
+``brief/layout_C_ownership.txt`` (P19); decisions D51, D55 and D65.  This module
 coordinates ``prepare_retained_problem`` and delegates :class:`RetainedPreparation` to
 :mod:`powermean.interface.retained_preparation` and concrete outcome, trace, trigger,
 and metadata binding to :mod:`powermean.interface.retained_admission` and
@@ -8,8 +11,6 @@ and metadata binding to :mod:`powermean.interface.retained_admission` and
 """
 
 from __future__ import annotations
-
-from typing import cast
 
 import pandas as pd
 from numpy.typing import ArrayLike
@@ -69,7 +70,6 @@ from powermean.results.absorbed_trace import (
     RetainedTraceSnapshot,
     RetainedTriggerSnapshot,
 )
-from powermean.results.primitive_snapshot import PRIMITIVE, MetadataParts
 from powermean.results.retained_input_values import (
     InputKey,
     SampleKey,
@@ -137,34 +137,34 @@ def bind_sample_metadata(
             sample_key=sample_key,
         )
     matched = ctx.matching_frame(sample) if type(sample) is FESample else None
-    parts: MetadataParts | PreparedFrame
-    if ctx.snapshot_route == PRIMITIVE:
-        # The live frame is identified and the live sample validated against the
-        # once-materialized parts of the immutable capture; the consumer reads the
-        # three parts it needs of those parts, not a rebuilt frame.
-        if matched is not None:
-            ctx.authenticate_frame(matched, sample=cast("FESample", sample))
-        parts = ctx._materialized_metadata()
-    else:
-        source = ctx._owned_template() if matched is None else matched
-        ctx.authenticate_frame(
-            source,
-            sample=sample if matched is not None and type(sample) is FESample else None,
-        )
-        parts = source
-    # Only the internal NumericExecution has admitted these exact final rows
-    # and copy-free source columns. Public/foreign/primitive routes remain checked.
+    parts = ctx._owned_template() if matched is None else matched
+    ctx.authenticate_frame(
+        parts,
+        sample=sample if matched is not None and type(sample) is FESample else None,
+    )
+    # Only the private NumericExecution has admitted these exact final rows
+    # and copy-free source columns. Unscoped and foreign frames are checked.
     operation = ctx._operation
-    if (operation is not None and operation.numeric is not None
-            and type(sample) is FESample and type(parts) is PreparedFrame):
+    if (
+        operation is not None
+        and operation.numeric is not None
+        and type(sample) is FESample
+        and type(parts) is PreparedFrame
+    ):
         owned = operation.maps.sample_map._owned_snapshot(sample)
-        final_key = sample_key if sample_key is not None else (
-            None if owned is None else owned.key
+        final_key = (
+            sample_key
+            if sample_key is not None
+            else (None if owned is None else owned.key)
         )
         return _bind_owned_metadata_parts(
-            parts, sample, weights=weights,
+            parts,
+            sample,
+            weights=weights,
             hac_request=ctx.hac_request if hac_request is None else hac_request,
-            conley_request=ctx.conley_request if conley_request is None else conley_request,
+            conley_request=ctx.conley_request
+            if conley_request is None
+            else conley_request,
             input_key=ctx.input_key if input_key is None else input_key,
             sample_key=final_key,
         )
@@ -261,14 +261,8 @@ def prepare_retained_problem(
     used_dependence: UsedDependence | None = None,
     positive_only: bool = False,
     vcov_request: ClusterRequest | HacRequest | ConleyRequest | None = None,
-    primitive_snapshot: bool = False,
 ) -> RetainedPreparation:
-    """Prepare a formula and dependence declarations once on an owned working copy.
-
-    ``primitive_snapshot`` (default off) is passed through to
-    :class:`RetainedPreparation`: the internal opt-in route; the route taken is
-    recorded on the context.
-    """
+    """Prepare a formula and dependence declarations once on an owned working copy."""
     if not isinstance(formula, str):
         raise TypeError("formula must be a string")
     if not isinstance(data, pd.DataFrame):
@@ -308,6 +302,4 @@ def prepare_retained_problem(
         hac_request=h_req,
         conley_request=sp_req,
         offset_design=off_design,
-        primitive_snapshot=primitive_snapshot,
     )
-

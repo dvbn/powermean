@@ -1,8 +1,11 @@
 """Temporary per-handoff input and problem identity maps and value re-exports.
 
-This module defines :class:`InputIdentityMap` and :class:`ProblemIdentityMap` with
-concrete typed caches and strong-reference anchors cleared after handoff capture, and
-re-exports input value helpers from :mod:`powermean.results.retained_input_values`.
+``design/02_computation.md``, Sections 2 and 7; ``design/03_fixed_effects.md``,
+Section 2; ``plan/evidence/M1.15_contract.txt``, items 1, 3 and 4;
+``brief/layout_C_ownership.txt`` (P01).  This module defines :class:`InputIdentityMap`
+and :class:`ProblemIdentityMap` with concrete typed caches and strong-reference anchors
+cleared after handoff capture, and re-exports input value helpers from
+:mod:`powermean.results.retained_input_values`.
 """
 
 from __future__ import annotations

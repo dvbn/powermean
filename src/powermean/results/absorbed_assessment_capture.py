@@ -1,10 +1,11 @@
-"""Owned replicas of the inputs of one absorbed point certificate (internal).
+"""Owned replicas of the inputs of one absorbed point certificate (private).
 
-Part of the internal within-fit full-assessment handoff, with the encoding and
-materialization discipline of :mod:`powermean.results.primitive_snapshot`.  Only the
-modules of the handoff (:mod:`powermean.results.absorbed_assessment_handoff`) import
-this module. Normal joint composition uses that handoff. WZ adds its source, numerical
-options and independent bounds to the same closed capture, sharing the replica's current
+The author's approval of 26 October 2026 of the private within-fit full-assessment
+handoff (task M1.25 prototype) and its ordinary ownership correction;
+``design/02_computation.md``, Section 7. Only the modules of the handoff
+(:mod:`powermean.results.absorbed_assessment_handoff`) import this module. Normal
+joint composition uses that handoff. WZ adds its source, numerical options and
+independent bounds to the same closed capture, sharing the replica's current
 grouping through the existing memo rather than retaining the caller's grouping.
 
 What a certificate reads.  :func:`~powermean.solve.absorbed_certificate.certify_point`
@@ -98,7 +99,7 @@ from powermean.solve.absorbed_certificate_scale import CovarianceRequest
 from powermean.solve.absorbed_direction import IndexPoint, Normalization, Recovery
 from powermean.solve.assessment import CertificateControls
 from powermean.solve.cancelled_operator import AttemptBounds
-from powermean.solve.absorbed import AbsorbedOptions
+from powermean.solve.m1_options import AbsorbedOptions
 from powermean.solve.options import SolverOptions
 from powermean.systems.profiled import PointProfile
 

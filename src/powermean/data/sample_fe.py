@@ -1,37 +1,41 @@
 """The fixed-effect steps of the sample: the labels of the blocks and steps 5 and 6.
 
-Internal module: accounting on arrays, integer codes and records below the coordinator
+``design/02_computation.md``, Section 2, steps 5 and 6, and Section 8.4; decisions D14,
+D51 and D66; the reviewed outline ``plan/evidence/M1.10_contract.txt`` and its
+correction A (``plan/evidence/M1.10_revision_A.txt``).  Task M1.10, private: accounting
+on arrays, integer codes and records below the coordinator
 :mod:`powermean.interface.sample`, which alone calls the diagnostics; no pandas,
 Formulaic or ``solve``.  The ledger and the completed sample are
 :mod:`powermean.data.sample_fe_state`, whose names this module still provides.
 
 Blocks.  :class:`EffectColumns` owns the raw labels of every component of every term
-(``a``, or the interaction ``a^b``: one block).  They are encoded by
+(``a``, or the interaction ``a^b``: one block).  They are encoded by the accepted
 :mod:`powermean.fe.groups` on given positions, as objects, never joined or coerced to
 strings; :meth:`EffectColumns.fixed` encodes them once on the rows of steps 3 and 4 and
 maps each input row to its first-occurrence code there, a level's identity on every
 later subset (:class:`FixedEffects` admits exactly those codes).  Counts of levels are
 not the rank of three or more blocks.  The encoded grouping is derived from its source,
-these owned columns on those rows (:class:`~powermean.data.sample_fe_state.Derived`), so
-that the blocks of a later subset keep their relation to it.
+these owned columns on those rows (:class:`~powermean.data.sample_fe_state.Derived`,
+correction C), so that the blocks of a later subset keep their relation to it.
 
-Step 5 (``reghdfe.mata`` 143-180 and 2683-2767, a convention; no code copied).
-:func:`singleton_closure` visits the blocks cyclically in formula order; a visit removes
-every row of its block's singleton levels, attributed to that block; ``remaining``
-starts at the number of blocks, falls by one after a visit without removal and is reset
-to that number minus one after a removal; the closure stops at zero or when no row is
-current.  A singleton level has one physical row, whose exact count is one with
-frequency weights (a replica total of one; counts are positive integers after step 4).
-Weight values never decide.
+Step 5 (S9 ``reghdfe.mata`` 143-180 and 2683-2767, a convention; no code copied).
+:func:`singleton_closure` visits the blocks cyclically in formula order; a visit
+removes every row of its block's singleton levels, attributed to that block;
+``remaining`` starts at the number of blocks, falls by one after a visit without
+removal and is reset to that number minus one after a removal; the closure stops at
+zero or when no row is current.  A singleton level has one physical row, whose exact
+count is one with frequency weights (a replica total of one; counts are positive
+integers after step 4).  Weight values never decide.
 
-Step 6.  :func:`level_separation` removes at once every row of every level, of any
-block, with no current row of positive RAW outcome (indicators, never sums or a
-transformed outcome: at ``omega = 0`` an outcome of one is positive), attributed to the
-first block whose level holding it is such a level, and records each block's levels.
-:func:`close` alternates steps 5 and 6 to their fixed point; ``keep_singletons`` skips
-step 5 only.  Both steps first check that the blocks are encoded on every current row;
-their records own exact rows and blocks, and a closure's ledger codes every row it
-removed with that removal's first cause.
+Step 6 (D14).  :func:`level_separation` removes at once every row of every level, of
+any block, with no current row of positive RAW outcome (indicators, never sums or a
+transformed outcome: at ``omega = 0`` an outcome of one is positive), attributed to
+the first block whose level holding it is such a level, and records each block's
+levels.  :func:`close` alternates steps 5 and 6 to their fixed point;
+``keep_singletons`` skips step 5 only.  Both steps first check that the blocks are
+encoded on every current row; their records own exact rows and blocks, and a
+closure's ledger codes every row it removed with that removal's first cause
+(correction A).
 """
 
 from __future__ import annotations
@@ -67,7 +71,7 @@ from powermean.fe.groups import Grouping
 from powermean.model.order import IndexArray
 from powermean.model.variance import FloatArray
 
-# The names of this module and of the state in data/sample_fe_state.py.
+# The names of this module and of the state that correction A moved from it.
 __all__ = [
     "FE_REASONS",
     "FIXED_EFFECT",
@@ -184,8 +188,10 @@ class EffectColumns:
 
     @classmethod
     def _from_native(
-        cls, terms: tuple[tuple[str, ...], ...],
-        columns: Mapping[str, Column], rows: int,
+        cls,
+        terms: tuple[tuple[str, ...], ...],
+        columns: Mapping[str, Column],
+        rows: int,
     ) -> EffectColumns | None:
         """Compose the actual integral owner; no public validity assertion."""
         if cls is not EffectColumns or not _fixed_original():
@@ -194,13 +200,17 @@ class EffectColumns:
         if native is None:
             return None
         found, runs = native
-        if (set(found) != {name for term in terms for name in term}
-                or any(column.size != rows for column in found.values())):
+        if set(found) != {name for term in terms for name in term} or any(
+            column.size != rows for column in found.values()
+        ):
             return None
         result = object.__new__(cls)
         for name, value in (
-            ("terms", terms), ("rows", rows), ("columns", None),
-            ("_native_columns", _OwnedMapping(found)), ("_native_runs", runs),
+            ("terms", terms),
+            ("rows", rows),
+            ("columns", None),
+            ("_native_columns", _OwnedMapping(found)),
+            ("_native_runs", runs),
         ):
             object.__setattr__(result, name, value)
         return result
@@ -211,7 +221,8 @@ class EffectColumns:
             state = object.__getattribute__(self, "__dict__")
             if state.get("columns") is None and "_native_columns" in state:
                 found = _storage.object_columns(
-                    state["_native_columns"], state["_native_runs"],
+                    state["_native_columns"],
+                    state["_native_runs"],
                 )
                 object.__setattr__(self, "columns", _OwnedMapping(found))
         return object.__getattribute__(self, name)
@@ -222,8 +233,11 @@ class EffectColumns:
         if type(self) is not _EFFECT_RECORD or "_native_columns" not in vars(self):
             return state
         state = dict(vars(self), columns=self.columns)
-        return {name: value for name, value in state.items()
-                if name not in ("_native_columns", "_native_runs")}
+        return {
+            name: value
+            for name, value in state.items()
+            if name not in ("_native_columns", "_native_runs")
+        }
 
     @property
     def names(self) -> tuple[str, ...]:
@@ -231,14 +245,14 @@ class EffectColumns:
         return tuple("^".join(term) for term in self.terms)
 
     def encode(self, positions: IndexArray) -> Grouping:
-        """The grouping of every block on the rows ``positions``, in order.
+        """The accepted grouping of every block on the rows ``positions``, in order.
 
         Each component by :func:`~powermean.fe.groups.encode_block`, an interaction by
         :func:`~powermean.fe.groups.interaction`; codes by first occurrence on these
         rows, their original positions kept.  The grouping is the
         :class:`~powermean.data.sample_fe_state.Derived` blocks of its own
         :class:`~powermean.data.sample_fe_state.Source`, these owned columns on these
-        rows, so that blocks derived from it later keep their relation.
+        rows, so that blocks derived from it later keep their relation (correction C).
         """
         source = Source(self.terms, self.columns, self.rows, positions)
         return Derived(source, positions)
@@ -440,6 +454,7 @@ def close(
             break
     return Closure(tuple(passes), ledger)
 
+
 def _native_parts(
     effects: EffectColumns,
 ) -> tuple[_OwnedMapping[Column], dict[str, _storage.ComponentRun]] | None:
@@ -450,21 +465,28 @@ def _native_parts(
     if set(state) != {"terms", "columns", "rows", "_native_columns", "_native_runs"}:
         return None
     native, runs = state.get("_native_columns"), state.get("_native_runs")
-    if (type(native) is not _OwnedMapping
-            or not _storage.matching_runs(runs, native._items)):
+    if type(native) is not _OwnedMapping or not _storage.matching_runs(
+        runs, native._items
+    ):
         return None
     shown = state.get("columns")
     if shown is not None and (
-        type(shown) is not _OwnedMapping or shown._items.keys() != native._items.keys()
-        or any(shown._items[name] is not runs[name].object_column()
-               for name in native._items)
+        type(shown) is not _OwnedMapping
+        or shown._items.keys() != native._items.keys()
+        or any(
+            shown._items[name] is not runs[name].object_column()
+            for name in native._items
+        )
     ):
         return None
     return native, runs
 
 
 def _owned_fixed(
-    effects: EffectColumns, positions: IndexArray, *, _encoder: KeyEncoder | None = None,
+    effects: EffectColumns,
+    positions: IndexArray,
+    *,
+    _encoder: KeyEncoder | None = None,
 ) -> FixedEffects:
     """Compose this native producer's exact grouping and full-input codes once."""
     if type(effects) is not EffectColumns or not _fixed_original():
@@ -473,17 +495,22 @@ def _owned_fixed(
     if native is None:
         if set(vars(effects)) != {"terms", "columns", "rows"}:
             return effects.fixed(positions)
-        grouping = _owned_derived(effects.terms, effects.columns, effects.rows, positions)
+        grouping = _owned_derived(
+            effects.terms, effects.columns, effects.rows, positions
+        )
     else:
         columns, runs = native
-        grouping = None
         try:
             grouping = _owned_derived(
-                effects.terms, columns, effects.rows, positions, _runs=runs,
+                effects.terms,
+                columns,
+                effects.rows,
+                positions,
+                _runs=runs,
                 _encoder=_encoder,
             )
         except MemoryError:
-            pass
+            grouping = None
         if grouping is None:
             for run in runs.values():
                 run.discard_presentation()
@@ -499,31 +526,66 @@ def _fixed_original() -> bool:
     """Unknown constructor/encoding hooks keep their original reads and errors."""
     return (
         all(globals()[name] is value for name, value in _FIXED_GLOBALS)
-        and all(vars(owner).get(name) is value
-                for owner, name, value in _FIXED_METHODS)
+        and all(vars(owner).get(name) is value for owner, name, value in _FIXED_METHODS)
         and _storage.original_producers is _STORAGE_ORIGINAL
         and _STORAGE_ORIGINAL()
     )
 
 
 _FIXED_GLOBALS = tuple(
-    (name, globals()[name]) for name in (
-        "FixedEffects", "EffectColumns", "Source", "Derived", "Grouping",
-        "Column", "_OwnedMapping",
-        "_row_codes", "_exact_index",
-        "frozen_index", "_owned_derived", "_owned_fixed", "_fixed_original",
+    (name, globals()[name])
+    for name in (
+        "FixedEffects",
+        "EffectColumns",
+        "Source",
+        "Derived",
+        "Grouping",
+        "Column",
+        "_OwnedMapping",
+        "_row_codes",
+        "_exact_index",
+        "frozen_index",
+        "_owned_derived",
+        "_owned_fixed",
+        "_fixed_original",
         "_native_parts",
     )
 )
 _FIXED_METHODS = tuple(
-    (owner, name, vars(owner).get(name)) for owner, names in (
-        (FixedEffects, ("__new__", "__init__", "__post_init__",
-                        "__getattribute__", "__getattr__", "grouping", "codes")),
-        (EffectColumns, ("__new__", "__init__", "__getattribute__", "__getattr__",
-                         "__getstate__", "_from_native",
-                         "encode", "fixed", "names", "terms", "columns", "rows")),
+    (owner, name, vars(owner).get(name))
+    for owner, names in (
+        (
+            FixedEffects,
+            (
+                "__new__",
+                "__init__",
+                "__post_init__",
+                "__getattribute__",
+                "__getattr__",
+                "grouping",
+                "codes",
+            ),
+        ),
+        (
+            EffectColumns,
+            (
+                "__new__",
+                "__init__",
+                "__getattribute__",
+                "__getattr__",
+                "__getstate__",
+                "_from_native",
+                "encode",
+                "fixed",
+                "names",
+                "terms",
+                "columns",
+                "rows",
+            ),
+        ),
         (_OwnedMapping, ("__new__", "__init__")),
-    ) for name in names
+    )
+    for name in names
 )
 
 _STORAGE_ORIGINAL = _storage.original_producers

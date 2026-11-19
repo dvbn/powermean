@@ -5,11 +5,11 @@
 
 """The backtracking line search of scikit-learn's Newton iteration, with its options.
 
-A full step first, contraction until the Armijo condition holds, a bounded number of
-trials, and near roundoff acceptance on a smaller gradient, scikit-learn's safeguard;
-the options ``armijo``, ``backtrack_factor`` and ``max_backtracks`` have the defaults
-``2**-11``, ``0.5`` and 21.
-``NewtonSolver.line_search`` of the carried files (scikit-learn's code,
+``design/02_computation.md``, Section 5.1 (full step first, contraction until the
+Armijo condition holds, a bounded number of trials, and near roundoff acceptance on a
+smaller gradient, scikit-learn's safeguard) and Section 5.7 (``armijo``,
+``backtrack_factor`` and ``max_backtracks``, of defaults ``2**-11``, ``0.5`` and 21).
+``NewtonSolver.line_search`` of the files carried at task M0.9 (scikit-learn's code,
 BSD-3-Clause, with the attribution above and the notice
 ``powermean/_vendor/SKLEARN_COPYING``) fixes its constants in its body;
 :func:`line_search` is that method with the three options in their place, and its
@@ -22,19 +22,20 @@ arithmetic in its order:
     refused trial          t *= backtrack_factor, at most max_backtracks trials
 
 ``eps`` is the spacing of the doubles at one, of the dtype of the loss, as in the
-source; the step starts at one, which multiplies as scikit-learn's integer one does.  At
-the defaults every operation is scikit-learn's, so that the line search is the carried
+source; the step starts at one, which multiplies as the source's integer one does.  At
+the defaults every operation is the source's, so that the line search is the carried
 one bit for bit, which the tests check.  The raw prediction ``X coef_newton`` of the
 displacement holds no offset: the offset enters the index once, in the pointwise loss.
 
-Two changes:
+Two changes, those of S1 ``DirectNewton.line_search`` and of decision D40:
 
 - the state that the solver holds (coefficients, raw prediction, loss and gradient) is
   replaced by a trial only when the trial is accepted; a search that refuses every
   trial, or that an exception interrupts, leaves the last accepted state, where the
-  source left the last refused trial;
+  source left the last refused trial and S1 restored the accepted one afterwards;
 - a trial that the pointwise loss cannot evaluate, because a value is not a double,
-  raises ``FloatingPointError`` and is refused.
+  raises ``FloatingPointError`` and is refused: the campaign's compiled losses
+  returned an infinite or NaN loss there, which the two tests refuse.
 
 The search is written on the attributes of the solver (:class:`SearchState`), so that
 it needs no class of a provider; the adapter supplies the evaluation of a trial
@@ -78,7 +79,7 @@ class TrialLoss(Protocol):
 
 
 class AbsoluteSum(Protocol):
-    """``sum |gradient|``, as scikit-learn's line search forms it."""
+    """``sum |gradient|``, as the source's line search forms it."""
 
     def __call__(self, gradient: FloatArray, /) -> float:
         """The sum of the absolute values of ``gradient``."""
@@ -126,11 +127,11 @@ def _acceptable(
     eps: float,
     absolute_sum: AbsoluteSum,
 ) -> bool:
-    """The two tests of scikit-learn: sufficient decrease, else the roundoff safeguard.
+    """The two tests of the source: sufficient decrease, else the roundoff safeguard.
 
     ``loss - loss_old <= bound``; else, within ``eps |loss_old|`` of roundoff, a
-    strictly smaller ``sum |gradient|``.  A NaN passes neither, as in scikit-learn.
-    scikit-learn forms ``sum |gradient_old|`` once per search and keeps it; it is formed
+    strictly smaller ``sum |gradient|``.  A NaN passes neither, as in the source.  The
+    source forms ``sum |gradient_old|`` once per search and keeps it; it is formed
     again here, the same reduction of the same array, hence the same double.
     """
     loss_improvement = trial.loss - state.loss_value_old

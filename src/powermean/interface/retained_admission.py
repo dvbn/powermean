@@ -1,6 +1,11 @@
 """Concrete interface-layer admission and detachment for outcomes, traces, and fits.
 
-This module coordinates interface-level admission across optional
+``design/02_computation.md``, Sections 2 to 4, 7 and 8.4;
+``plan/evidence/M1_contract.txt``, Sections 3.4, 3.5 and 6(f);
+``plan/evidence/M1.15_contract.txt``, items 2, 3, 7 and 9;
+``plan/evidence/M1.15_revision_B.txt`` (L1, L2, L4, F1, F2, F3, F8);
+``brief/layout_C_ownership.txt`` (P16, P17, P18); decisions D49, D51, D54, D55 and
+D68 to D72.  This module coordinates interface-level admission across optional
 preparation, ``SampleOutcome``, ``RecordedTrace``, ``TriggerRecord``, ``Estimator``,
 and ``BoundDependence`` and re-exports context, outcome, and trace helpers from
 :mod:`powermean.interface.retained_context`,
@@ -10,8 +15,8 @@ and ``BoundDependence`` and re-exports context, outcome, and trace helpers from
 
 from __future__ import annotations
 
-from contextlib import nullcontext
 from dataclasses import dataclass, replace
+from typing import cast
 
 from powermean._prepare.compose import PreparedFrame
 from powermean.data.sample_fe_source import Derived
@@ -61,12 +66,12 @@ from powermean.results.absorbed_sample_binding import (
     check_prepared_matches_sample,
 )
 from powermean.results.absorbed_trace import RetainedTriggerSnapshot
-from powermean.results.primitive_snapshot import PRIMITIVE, MetadataParts
 from powermean.results.retained_input_values import (
     RetainedInputSnapshot,
     SampleKey,
     _same_column_values,
 )
+from powermean.solve.absorbed_certificate import CandidateAudit
 from powermean.solve.absorbed_certificate_history import CandidateHistory
 from powermean.solve.absorbed_certificate_scale import CovarianceRequest
 from powermean.solve.absorbed_root_records import AbsorbedRootCandidate
@@ -116,32 +121,13 @@ def _resolve_dependence_parts(
     sample: FESample,
     context: PerFitPreparationContext | None,
     prepared: PreparedFrame | None,
-) -> MetadataParts | PreparedFrame:
-    """Resolve and authenticate the frame parts for dependence comparison.
-
-    An explicit ``prepared`` that the context did not issue (a caller's helper copy,
-    or any frame without a context) takes the reference unscoped path on every route,
-    and is read in the original validation order.  On a primitive snapshot route, an
-    explicit ``prepared`` issued by the context, or the issued frame matching
-    ``sample``, is identified and ``sample`` is validated afresh against the
-    once-materialized parts of the immutable capture; the parts returned for
-    comparison are the base, labels and dependence of those parts, never the live
-    frame and never a rebuilt frame.  On the general route the authenticated live
-    frame's parts are compared, as before.
-    """
-    if prepared is not None and not (
-        context is not None
-        and context.snapshot_route == PRIMITIVE
-        and context.owns_prepared(prepared)
-    ):
+) -> PreparedFrame:
+    """Resolve and authenticate the frame containing the dependence columns."""
+    if prepared is not None:
         authenticate_unscoped_frame(prepared, sample=sample)
         return prepared
     if context is not None:
-        matched = context.matching_frame(sample) if prepared is None else prepared
-        if context.snapshot_route == PRIMITIVE:
-            if matched is not None:
-                context.authenticate_frame(matched, sample=sample)
-            return context._materialized_metadata()
+        matched = context.matching_frame(sample)
         frame = context._owned_template() if matched is None else matched
         context.authenticate_frame(
             frame, sample=sample if matched is not None else None
@@ -162,7 +148,7 @@ def check_dependence_matches_sample(
     if type(dependence) is not BoundDependence:
         raise TypeError("dependence must be a concrete BoundDependence")
     if context is not None and context._operation is not None:
-        # Produced by this operation's metadata binder: an internal handoff.
+        # Produced by this operation's metadata binder, not a public handoff.
         context.authenticate_sample(sample)
         return dependence
     raw_w = sample.base.inputs.weights
@@ -255,15 +241,19 @@ def _resolve_interface_preparation(
     RetainedInputSnapshot | None,
 ]:
     """Validate optional preparation and outcome originals against ``sample``."""
-    if (type(preparation) is PerFitPreparationContext
-            and preparation._operation is not None):
+    if (
+        type(preparation) is PerFitPreparationContext
+        and preparation._operation is not None
+    ):
         frame, snapshot = preparation.authenticate_sample(sample)
-        if outcome is not None and (
-            outcome.prepared is not frame or outcome.status != "complete"
-            or outcome.sample is not sample
+        produced = cast("SampleOutcome | None", outcome)
+        if produced is not None and (
+            produced.prepared is not frame
+            or produced.status != "complete"
+            or produced.sample is not sample
         ):
             raise ValueError(UNBOUND)
-        return preparation, frame, outcome, snapshot
+        return preparation, frame, produced, snapshot
     context: PerFitPreparationContext | None = None
     prep_frame: PreparedFrame | None = None
     if preparation is not None:
@@ -306,11 +296,8 @@ def _authenticate_resolved_frame(
 ) -> RetainedInputSnapshot | None:
     """Authenticate the resolved ``prep_frame`` and ``sample`` at this entry.
 
-    General route (and no context): the live frame is what consumers read, so it is
-    compared against its evidence and then against the sample here as well.  Primitive
-    route: consumers read the once-materialized parts of the capture, which
-    ``authenticate_frame`` validated the sample against; the live frame is identified,
-    not re-read.
+    Consumers read the live frame, so authenticate it and verify the sample
+    against it before using either.
     """
     _authenticate_prepared_links(prep_frame, sample)
     if context is None:
@@ -318,8 +305,7 @@ def _authenticate_resolved_frame(
         check_prepared_matches_sample(prep_frame, sample)
         return in_snap
     in_snap = context.authenticate_frame(prep_frame, sample=sample)
-    if context.snapshot_route != PRIMITIVE:
-        check_prepared_matches_sample(prep_frame, sample)
+    check_prepared_matches_sample(prep_frame, sample)
     return in_snap
 
 
@@ -356,35 +342,31 @@ def admit_interface_graph(
     """Admit concrete interface and lower objects and detach shared snapshots.
 
     A call-local owned operation consumes its own scientific audit and reuses its
-    existing snapshot maps. No caller-supplied graph uses that execution path.
-    Otherwise this function is one external entry, which
-    :meth:`PerFitPreparationContext._primitive_entry` marks: on a context's primitive
-    snapshot route every authentication within it validates the live sample it
-    presents afresh against the immutable capture.
+    existing snapshot maps. Caller-supplied graphs use checked admission.
     """
-    operation = (preparation._operation
-                 if type(preparation) is PerFitPreparationContext else None)
+    operation = (
+        preparation._operation
+        if type(preparation) is PerFitPreparationContext
+        else None
+    )
     lower = (
         _consume_fit_audit(
-            audit, request=request, keep_influence=keep_influence,
-            sample_map=(operation.maps.sample_map
-                        if operation.numeric is not None else None),
+            cast("CandidateAudit", audit),
+            keep_influence=keep_influence,
+            sample_map=(
+                operation.maps.sample_map if operation.numeric is not None else None
+            ),
         )
-        if operation is not None else
-        admit_absorbed_graph(audit, request=request, keep_influence=keep_influence)
+        if operation is not None
+        else admit_absorbed_graph(audit, request=request, keep_influence=keep_influence)
     )
-    with (
-        preparation._primitive_entry()
-        if type(preparation) is PerFitPreparationContext
-        else nullcontext()
-    ):
-        return _admit_interface_graph(
-            lower,
-            preparation=preparation,
-            outcome=outcome,
-            dependence=dependence,
-            estimator=estimator,
-        )
+    return _admit_interface_graph(
+        lower,
+        preparation=preparation,
+        outcome=outcome,
+        dependence=dependence,
+        estimator=estimator,
+    )
 
 
 def _admit_interface_graph(
@@ -409,9 +391,11 @@ def _admit_interface_graph(
     )
     lower = replace(lower, receipt=updated_receipt)
 
-    maps = (context._operation.maps
-            if context is not None and context._operation is not None
-            else _AdmissionMaps())
+    maps = (
+        context._operation.maps
+        if context is not None and context._operation is not None
+        else _AdmissionMaps()
+    )
     in_snap: RetainedInputSnapshot | None = None
     if auth_snap is not None:
         in_snap = maps.input_map.register_snapshot(

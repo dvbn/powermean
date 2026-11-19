@@ -1,7 +1,11 @@
 """The same-point scale contract of the absorbed certificate and its owned evidence.
 
-Internal module: the contract implemented by the absorbed inference provider;
-nothing here imports inference.
+``design/02_computation.md``, Section 7 and D49; ``design/04_inference_and_effects.md``,
+Section 2.3; the M1.14 readiness revision A, Section 2, and the scale-ownership plan
+of implementation revision A (``plan/evidence/M1.14_*``); decisions D49, D51, D54, D55,
+D57, D76 and D77.
+Task M1.14 / M1.45, private: the contract implemented by the absorbed inference
+provider; nothing here imports inference.
 
 Input.  :class:`FEScaleInput` binds the fresh geometry by value, the requested
 covariance (:class:`CovarianceRequest`), the direct report map and the slope map ``W``;

@@ -1,9 +1,9 @@
 """Fresh numeric row-index snapshots for retained graph authentication.
 
-Current inputs are authenticated before results are detached. This replaces object
-boxing, not a live validation. Every comparison captures new numeric values before any
-name-equality callback. Object, tuple, extension and subclass indexes keep the ordered
-generic route.
+``plan/evidence/M1.15_contract.txt``, items 2 and 3: authenticate current inputs
+before detaching results. This replaces object boxing, not a live validation.
+Every comparison captures new numeric values before any name-equality callback.
+Object, tuple, extension and subclass indexes keep the ordered generic route.
 """
 
 from __future__ import annotations

@@ -1,6 +1,8 @@
 """Recorded trace and trigger record admission and lowering into detached snapshots.
 
-This module lowers concrete
+``design/02_computation.md``, Sections 2 to 4, 7 and 8.4;
+``plan/evidence/M1.15_contract.txt``, items 2, 3, 7 and 9;
+``brief/layout_C_ownership.txt`` (P18).  This module lowers concrete
 :class:`~powermean.interface.sample_records.RecordedEvent`,
 :class:`~powermean.interface.sample_records.RecordedTrace`, and
 :class:`~powermean.solve.profiled_trigger.TriggerRecord` objects into detached

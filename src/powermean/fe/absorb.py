@@ -1,17 +1,21 @@
 """Weighted alternating projection of all columns onto the fixed-effect complement.
 
-Internal module: the projection only.  No dense or sparse indicator matrix, no
-profiling, no slope solve, no sample, support, collinearity or rank policy, no outer
-schedule, no covariance, no certificate and no public path: other modules own those,
-and ``powermean`` exports nothing of this module.  The controls are those of
-:class:`powermean.solve.absorbed.AbsorbedOptions`, unchanged (``absorb_tol_start``
+``design/02_computation.md``, Sections 5.2, 5.7 and 8.1; ``design/06_reuse_map.md``,
+``fe/absorb`` (adapt S1 ``fe_direct.within``, S6 ``PreparedWithin`` and the integration
+context of S6 ``absorbed_glm``, with acceleration and warm starts added); the adopted
+contract ``plan/evidence/M1.4_contract.txt``; decision D51.  Task M1.4: the private
+projection only.  No dense or sparse indicator matrix, no profiling, no slope solve,
+no sample, support, collinearity or rank policy, no outer schedule, no covariance,
+no certificate and no public path: later rows own those, and ``powermean`` exports
+nothing of this module.  The controls are those of
+:class:`powermean.solve.m1_options.AbsorbedOptions`, unchanged (``absorb_tol_start``
 1e-4, ``absorb_tol_final`` 2e-11, ``absorb_max_sweeps`` 20000, ``absorb_acceleration``
 ``True``); this module takes them as explicit arguments and chooses no default.
 
 Three realizations, one authoritative state.  The fitted component is carried as
 one coefficient array per block (``a_b``, ``L_b``-by-``k``), the candidate is always
 ``z = Y - lift(a)`` and the returned residual is that candidate, so the residual and
-the warm state describe the same point.  With one block, every call uses
+the warm state describe the same point (contract B).  With one block, every call uses
 the direct projection of that block (one sweep, one visit), followed by the fresh
 check and repeated within the budget only if rounding leaves a mean above tolerance.
 With several blocks and ``acceleration=False``, complete forward sweeps
@@ -20,7 +24,7 @@ per-column symmetric conjugate gradient of :mod:`powermean.fe.absorb_acceleratio
 Columns that pass are held fixed while the others continue; every returned column is
 checked at the returned candidate.
 
-Stopping.  Success requires a completed range-valid evaluation of all
+Stopping (contract C).  Success requires a completed range-valid evaluation of all
 block means at the same candidate with the current weights, and a maximum absolute
 weighted group mean over every block, level and column at most the requested
 tolerance (equality passes).  No input-scale multiplier, displacement criterion,
@@ -42,7 +46,7 @@ the status; the unmet requirement is the caller's to report.  The predicate, the
 controls and the statuses are unchanged, and without a requirement every call is the
 one described above.
 
-Work.  A forward traversal is one sweep; a symmetric operator two sweeps;
+Work (contract C).  A forward traversal is one sweep; a symmetric operator two sweeps;
 every unit is reserved and charged against the budget before it starts, whether or not
 it completes.  Beside the reserved sweeps the record reports the work attempted: the
 block visits begun by the sweeps and operators (``G`` per completed forward sweep,
@@ -54,7 +58,7 @@ the accelerated path with several blocks reports ``budget`` at the checked initi
 point.
 
 Outcomes.  Malformed values, weights, controls or an unbound state raise built-in
-``ValueError``.
+``ValueError`` (their translation into interface messages is later interface work).
 A residual that is not representable at the start raises ``FloatingPointError``.
 Otherwise the result carries one of four statuses, ``converged``, ``budget``,
 ``range`` (a refused operation of the checked arithmetic) or ``breakdown`` (a
@@ -64,8 +68,8 @@ last candidate whose residual was formed, its fresh check when that check comple
 and the actual work.  No projection failure is reclassified as a statistical rank or
 sample failure, and nothing is retried.
 
-Warm state.  :class:`AbsorptionState` holds owned read-only block
-coefficients and the exact binding: the grouping (positions, block names,
+Warm state (contract D).  :class:`AbsorptionState` holds owned read-only block
+coefficients and the exact binding: the accepted grouping (positions, block names,
 codes, level counts) and the caller's column identity in order.  A call with another
 column tuple or another grouping refuses; no permutation is guessed.  The state holds
 no recurrence vector, tolerance, success flag or weight: changed weights are a new
@@ -101,14 +105,15 @@ from powermean.fe.absorb_acceleration import (
 from powermean.fe.absorb_numeric import (
     Attempted,
     Coefficients,
+    InputReductions,
     PreparedWeights,
+    _input_reductions,
     added,
     forward_order,
     replaced_columns,
     select_columns,
     walk,
     zero_coefficients,
-    _input_reductions,
 )
 from powermean.fe.groups import Block, Grouping
 from powermean.fe.reductions import immutable_array
@@ -311,9 +316,7 @@ def _bound(
         and mine is theirs
         and type(mine) is Grouping
         and not mine.positions.flags.writeable
-        and all(
-            type(b) is Block and not b.codes.flags.writeable for b in mine.blocks
-        )
+        and all(type(b) is Block and not b.codes.flags.writeable for b in mine.blocks)
     ):
         return state.coefficients
     same = (
@@ -341,7 +344,7 @@ def projection_sweeps(
     tolerance: float,
     max_sweeps: int,
     requirement: Requirement | None = None,
-    _inputs=None,
+    _inputs: InputReductions | None = None,
 ) -> Outcome:
     """Forward sweeps ``Q_1, ..., Q_G`` from the coefficients, checked after each.
 
@@ -355,9 +358,11 @@ def projection_sweeps(
     """
     required = require_requirement(requirement, values.shape[1])
     order = forward_order(prepared.n_blocks)
-    point = (evaluate_point(values, coefficients, prepared, _inputs=_inputs)
-             if _inputs is not None and evaluate_point is _INPUT_EVALUATE else
-             evaluate_point(values, coefficients, prepared))
+    point = (
+        evaluate_point(values, coefficients, prepared, _inputs=_inputs)
+        if _inputs is not None and evaluate_point is _INPUT_EVALUATE
+        else evaluate_point(values, coefficients, prepared)
+    )
     work = Work().checked(point.passes)
     while True:
         if point.check is None:
@@ -374,9 +379,15 @@ def projection_sweeps(
         attempted = Attempted()
         try:
             _, delta, _ = (
-                walk(point.residual[:, active], prepared, order, attempted, _inputs=_inputs)
-                if _inputs is not None and walk is _INPUT_WALK else
-                walk(point.residual[:, active], prepared, order, attempted)
+                walk(
+                    point.residual[:, active],
+                    prepared,
+                    order,
+                    attempted,
+                    _inputs=_inputs,
+                )
+                if _inputs is not None and walk is _INPUT_WALK
+                else walk(point.residual[:, active], prepared, order, attempted)
             )
             if not any(np.any(d) for d in delta):
                 return Outcome(point, CONVERGED, "", work.visited(attempted.count))
@@ -384,9 +395,11 @@ def projection_sweeps(
             updated = replaced_columns(
                 point.coefficients, active, added(current, delta)
             )
-            point = (evaluate_point(values, updated, prepared, _inputs=_inputs)
-                     if _inputs is not None and evaluate_point is _INPUT_EVALUATE else
-                     evaluate_point(values, updated, prepared))
+            point = (
+                evaluate_point(values, updated, prepared, _inputs=_inputs)
+                if _inputs is not None and evaluate_point is _INPUT_EVALUATE
+                else evaluate_point(values, updated, prepared)
+            )
         except FloatingPointError as error:
             return Outcome(point, RANGE, str(error), work.visited(attempted.count))
         work = work.visited(attempted.count).checked(point.passes)
@@ -484,25 +497,54 @@ def absorb(
         if state is None
         else _bound(state, prepared, names)
     )
-    inputs = (_input_reductions(prepared)
-              if required is None and _input_reductions is _INPUT_REDUCTIONS else None)
+    inputs = (
+        _input_reductions(prepared)
+        if required is None and _input_reductions is _INPUT_REDUCTIONS
+        else None
+    )
     # Only original loops receive the private local input lifetime. Changed hooks
     # keep their original argument lists and all numerical/requirement behavior.
     if accelerated and prepared.n_blocks > 1:
         outcome = (
-            conjugate_gradient(y, prepared, coefficients, tolerance=tol,
-                               max_sweeps=budget, requirement=required, _inputs=inputs)
-            if inputs is not None and conjugate_gradient is _INPUT_CG else
-            conjugate_gradient(y, prepared, coefficients, tolerance=tol,
-                               max_sweeps=budget, requirement=required)
+            conjugate_gradient(
+                y,
+                prepared,
+                coefficients,
+                tolerance=tol,
+                max_sweeps=budget,
+                requirement=required,
+                _inputs=inputs,
+            )
+            if inputs is not None and conjugate_gradient is _INPUT_CG
+            else conjugate_gradient(
+                y,
+                prepared,
+                coefficients,
+                tolerance=tol,
+                max_sweeps=budget,
+                requirement=required,
+            )
         )
     else:
         outcome = (
-            projection_sweeps(y, prepared, coefficients, tolerance=tol,
-                              max_sweeps=budget, requirement=required, _inputs=inputs)
-            if inputs is not None and projection_sweeps is _INPUT_SWEEPS else
-            projection_sweeps(y, prepared, coefficients, tolerance=tol,
-                              max_sweeps=budget, requirement=required)
+            projection_sweeps(
+                y,
+                prepared,
+                coefficients,
+                tolerance=tol,
+                max_sweeps=budget,
+                requirement=required,
+                _inputs=inputs,
+            )
+            if inputs is not None and projection_sweeps is _INPUT_SWEEPS
+            else projection_sweeps(
+                y,
+                prepared,
+                coefficients,
+                tolerance=tol,
+                max_sweeps=budget,
+                requirement=required,
+            )
         )
     return _result(outcome, prepared, names, tol, accelerated)
 

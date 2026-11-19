@@ -3,7 +3,8 @@
 A generator draws regressors, computes the conditional mean ``exp(index)`` and draws
 the outcome from one of the laws of :func:`draw_outcome`.  The laws are those of the
 simulation code of Benatia, Bellego and Pape, "Dealing with Logs and Zeros in
-Regression Models".
+Regression Models"; the function is a port of ``_draw_outcome`` in ``designs.py`` of
+the solver campaign and keeps its names.
 """
 
 from __future__ import annotations
@@ -68,9 +69,9 @@ class Synthetic:
     seed : str
         The seed recipe with its values.
     source : str
-        The simulation study that the design reproduces; empty for the showcase.
+        The simulation module that the design ports; empty for the showcase.
     fingerprint : str
-        Checksum of the data in the convention of the archive of the study,
+        Checksum of the data in the convention of the archive of the source study,
         so that a dataset can be matched to an archived draw.
     notes : tuple of str
         Properties of the design that a user or a test can rely on.
@@ -137,9 +138,9 @@ class Synthetic:
 def save(data: Synthetic, path: Path) -> None:
     """Write the data, and the metadata to a JSON file with the same stem.
 
-    The format follows the suffix of ``path``: ``.csv`` or ``.dta``; Parquet is not
-    supported.  The JSON file is strict JSON: ``allow_nan=False`` refuses the ``NaN``
-    and ``Infinity`` tokens that other languages do not parse.
+    The format follows the suffix of ``path``: ``.csv`` or ``.dta``.  The JSON
+    file is strict JSON: ``allow_nan=False`` refuses
+    the ``NaN`` and ``Infinity`` tokens that other languages do not parse.
     """
     if path.suffix == ".csv":
         data.frame.to_csv(path, index=False)
@@ -261,7 +262,8 @@ def inflate_zeros(y: FloatArray, share: float, rng: np.random.Generator) -> Floa
 def checksum(x: FloatArray, y: FloatArray) -> str:
     """SHA-256 of a regressor matrix and an outcome.
 
-    The value is the ``dataset_sha256`` stored in the archive of the solver study.
+    Port of ``dataset_checksums`` in ``designs.py``: the value is the
+    ``dataset_sha256`` stored in the archive of the solver campaign.
     """
     x = np.ascontiguousarray(x, dtype="<f8")
     y = np.ascontiguousarray(y, dtype="<f8")

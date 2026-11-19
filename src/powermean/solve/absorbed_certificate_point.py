@@ -1,6 +1,8 @@
 """Admitted absorbed points: their fresh rows and fixed-effect equations.
 
-Internal module; no history is read.
+``design/02_computation.md``, Section 7; the M1.14 readiness specification, Sections 2
+and 4, revision A, and the WLS binding (``plan/evidence/M1.14_readiness.txt``,
+``M1.14_WLS_binding.txt``); decision D51.  Task M1.14, private; no history is read.
 
 Admission (:func:`admit_point`) takes a matching pair: ``WholePoint[PointProfile]`` or
 ``WholePoint[IndexPoint]`` with ``AbsorbedOptions`` of that organization, or
@@ -29,7 +31,7 @@ Fresh rows (:func:`fresh_rows`) on the original sample at ``q``, raw typed weigh
 ``a``: ``b = a r``, ``C = a c`` with the OBSERVED curvature of the accepted row kernel,
 or WLS ``b = a (l - q)``, ``C = a``; checked products, ``FloatingPointError`` for a
 value not representable or a negative curvature.  A root point's observed curvature
-may be zero or negative on a row (the actual moment Jacobian of a
+may be zero or negative on a row (decision D57: the actual moment Jacobian of a
 nonconvex equation); every other check stands for it, and the convex kinds keep the
 refusal of a negative curvature.  Effect equations (:func:`effect_equations`) are the
 accepted raw-weight LEVEL means, never sums over the global weight total; a root
@@ -47,17 +49,17 @@ accepted routine returned, ``None`` when nothing was returned.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import TYPE_CHECKING, Literal, Protocol, TypeGuard, cast
 
 import numpy as np
 
-from powermean.data.sample_fe_state import FESample, same_bits
 from powermean.data.inputs import RegressionData
+from powermean.data.sample_fe_state import FESample, same_bits
 from powermean.data.weights import ObservationWeights
+from powermean.fe import profile_arithmetic as _profile_rows
 from powermean.fe.absorb_numeric import checked_difference, checked_product
 from powermean.fe.certificate_basis import embed, owned_basis
 from powermean.fe.profile import _bound
-from powermean.fe import profile_arithmetic as _profile_rows
 from powermean.fe.profile_arithmetic import (
     ProfileProblem,
     fresh_equations,
@@ -79,7 +81,7 @@ from powermean.solve.linear_absorbed_point import (
     LinearPoint,
     linear_sample,
 )
-from powermean.solve.absorbed import AbsorbedOptions
+from powermean.solve.m1_options import AbsorbedOptions
 from powermean.solve.profiled_trigger import WholePoint
 from powermean.solve.reduced_nonlinear import ConditionalPoint
 from powermean.systems.profiled import (
@@ -88,6 +90,31 @@ from powermean.systems.profiled import (
     _prepared,
     base_index,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from numpy.typing import ArrayLike
+
+    from powermean.fe.absorb_numeric import PreparedWeights as _PreparedWeights
+
+    type _PowerClass = type[PowerVariance]
+    type _NB2Class = type[NB2Variance]
+
+    class _RowKernelAliases(Protocol):
+        """Imported values read through the row module during identity checks."""
+
+        PowerVariance: _PowerClass
+        NB2Variance: _NB2Class
+        _finite_array: Callable[[ArrayLike, str], FloatArray]
+        _finite_result: Callable[[FloatArray, str], FloatArray]
+
+    class _ProfileRowAliases(Protocol):
+        """Imported values read through the profile module during identity checks."""
+
+        PreparedWeights: type[_PreparedWeights]
+        evaluate_rows: object
+
 
 PointKind = Literal["profiled", "reduced", "index", "linear", "root"]
 Family = PowerVariance | NB2Variance
@@ -185,8 +212,11 @@ def _nonlinear(
     if type(sample) is not FESample or sample.omega == 0:
         raise ValueError("a nonlinear point needs a sample at omega != 0")
     kind: PointKind = (
-        "profiled" if type(record) is PointProfile else
-        "reduced" if type(record) is ConditionalPoint else "index"
+        "profiled"
+        if type(record) is PointProfile
+        else "reduced"
+        if type(record) is ConditionalPoint
+        else "index"
     )
     requested = "profiled" if kind == "reduced" else kind
     if inner.absorbed != requested:
@@ -199,7 +229,9 @@ def _nonlinear(
         _same(base, record.base)
         if type(record) in (PointProfile, ConditionalPoint):
             prepared = _prepared(problem, base)
-            state = _bound(record.state, prepared)
+            state = _bound(
+                cast("PointProfile | ConditionalPoint", record).state, prepared
+            )
             _same(reconstruct_index(prepared, state.coefficients), q)
         elif numeric is not None:
             prepared = _prepared(problem, base)
@@ -215,7 +247,9 @@ def _nonlinear(
         profile_tol,
     )
     theta = immutable_array(record.theta)
-    point = AdmittedPoint(kind, sample, variance, theta, base, q, controls, record, numeric)
+    point = AdmittedPoint(
+        kind, sample, variance, theta, base, q, controls, record, numeric
+    )
     return point, prepared
 
 
@@ -390,9 +424,12 @@ def _admit_numeric_point(
     This factory is called only by normal NumericFit composition; every original
     point and final-equation check remains, while fixed inputs are not recopied.
     """
-    if type(whole) is WholePoint and type(inner) is AbsorbedOptions:
-        if type(whole.point) in (PointProfile, ConditionalPoint, IndexPoint):
-            return _nonlinear(whole, inner, problem)
+    if (
+        type(whole) is WholePoint
+        and type(inner) is AbsorbedOptions
+        and type(whole.point) in (PointProfile, ConditionalPoint, IndexPoint)
+    ):
+        return _nonlinear(whole, inner, problem)
     raise TypeError("numeric admission needs a matching nonlinear whole point")
 
 
@@ -411,11 +448,12 @@ class FreshRows:
 
 def fresh_rows(
     point: AdmittedPoint,
-    *, _evaluated: list[RowEvaluation | None] | None = None,
+    *,
+    _evaluated: list[RowEvaluation | None] | None = None,
 ) -> FreshRows:
     """The fresh observed rows (module docstring); ``FloatingPointError`` on range.
 
-    A negative observed curvature is refused, except at a root point:
+    A negative observed curvature is refused, except at a root point (decision D57):
     its rows keep the actual signed curvature of the nonconvex equation.
     """
     sample = point.sample
@@ -482,29 +520,41 @@ def prepared_effect_equations(
 
 
 def _prepared_effect_equations_from_rows(
-    prepared: ProfileProblem, q: FloatArray, rows: RowEvaluation,
+    prepared: ProfileProblem,
+    q: FloatArray,
+    rows: RowEvaluation,
 ) -> EffectEquations:
     """The same level equations from the immediately preceding fresh row consumer."""
     check = _profile_rows._fresh_equations_from_rows(prepared, q, rows)
     return EffectEquations(check.errors, check.maximum)
 
 
-def _immutable_row_array(value: object, shape: tuple[int, ...]) -> bool:
+def _immutable_row_array(
+    value: object, shape: tuple[int, ...]
+) -> TypeGuard[FloatArray]:
     """Accept complete immutable bytes storage, not a read-only flag alone."""
-    if (type(value) is not np.ndarray or value.dtype != np.float64
-            or value.shape != shape or value.flags.writeable
-            or not value.flags.c_contiguous):
+    if (
+        type(value) is not np.ndarray
+        or value.dtype != np.float64
+        or value.shape != shape
+        or value.flags.writeable
+        or not value.flags.c_contiguous
+    ):
         return False
     root = value
     while type(root.base) is np.ndarray:
         root = root.base
-    return type(root.base) is bytes and len(root.base) == value.nbytes
+    return (
+        type(cast("object", root.base)) is bytes
+        and len(cast("bytes", root.base)) == value.nbytes
+    )
 
 
 def _same_row_values(left: object, right: object, shape: tuple[int, ...]) -> bool:
     """Match actual owned float64 row headers and bits, not cached authority."""
     return (
-        _immutable_row_array(left, shape) and _immutable_row_array(right, shape)
+        _immutable_row_array(left, shape)
+        and _immutable_row_array(right, shape)
         and bool(np.array_equal(left.view(np.uint64), right.view(np.uint64)))
     )
 
@@ -515,42 +565,75 @@ _ROW_POWER = PowerVariance
 _ROW_NB2 = NB2Variance
 _ROW_EVALUATION = RowEvaluation
 _ROW_POINT = AdmittedPoint
-_ROW_WEIGHTS = _profile_rows.PreparedWeights
+_ROW_WEIGHTS = cast("_ProfileRowAliases", _profile_rows).PreparedWeights
 _ROW_DATA_TYPES = (FESample, RegressionData, ObservationWeights)
 _ROW_FIELDS = tuple(
-    (kind, name, vars(kind).get(name)) for kind, names in (
+    (kind, name, vars(kind).get(name))
+    for kind, names in (
         (ProfileProblem, ("z", "variance", "prepared", "_all_active")),
         (ProfiledProblem, ("z", "weights", "variance")),
         (AdmittedPoint, ("_numeric_problem", "q", "variance", "kind", "sample")),
         (_ROW_WEIGHTS, ("weights",)),
-        (FESample, ("data",)), (RegressionData, ("weights",)),
+        (FESample, ("data",)),
+        (RegressionData, ("weights",)),
         (ObservationWeights, ("frequency",)),
-    ) for name in names
+    )
+    for name in names
 )
 
 _FRESH_ROW_PRODUCERS = (
-    fresh_rows, prepared_effect_equations, _prepared_effect_equations_from_rows,
-    evaluate_rows, _row_kernel.evaluate_rows, _profile_rows.evaluate_rows,
-    _profile_rows._EVALUATE_ROWS, fresh_equations, _profile_rows.fresh_equations,
-    _profile_rows._fresh_equations_from_rows, _profile_rows._equations,
-    _profile_rows.active_scores, _profile_rows._cached_rows,
-    _profile_rows._checked_active_score, _profile_rows._detached_float,
-    _immutable_row_array, _same_row_values, checked_product, immutable_array,
-    _row_kernel._aligned_rows, _row_kernel._log_components, _row_kernel._exp,
-    _row_kernel._signed_sum, _row_kernel._finite_array, _row_kernel._finite_result,
-    _row_kernel._immutable, RowEvaluation.__new__, RowEvaluation.__init__, RowEvaluation.__post_init__,
-    RowEvaluation.__getattribute__, PowerVariance.__getattribute__,
-    getattr(PowerVariance, "__getattr__", None), NB2Variance.__getattribute__,
-    getattr(NB2Variance, "__getattr__", None), ProfileProblem.__getattribute__,
-    getattr(ProfileProblem, "__getattr__", None), ProfiledProblem.__getattribute__,
-    getattr(ProfiledProblem, "__getattr__", None), FreshRows.__init__,
-    AdmittedPoint.__getattribute__, getattr(AdmittedPoint, "__getattr__", None),
-    _ROW_WEIGHTS.__getattribute__, getattr(_ROW_WEIGHTS, "__getattr__", None),
+    fresh_rows,
+    prepared_effect_equations,
+    _prepared_effect_equations_from_rows,
+    evaluate_rows,
+    _row_kernel.evaluate_rows,
+    cast("_ProfileRowAliases", _profile_rows).evaluate_rows,
+    _profile_rows._EVALUATE_ROWS,
+    fresh_equations,
+    _profile_rows.fresh_equations,
+    _profile_rows._fresh_equations_from_rows,
+    _profile_rows._equations,
+    _profile_rows.active_scores,
+    _profile_rows._cached_rows,
+    _profile_rows._checked_active_score,
+    _profile_rows._detached_float,
+    _immutable_row_array,
+    _same_row_values,
+    checked_product,
+    immutable_array,
+    _row_kernel._aligned_rows,
+    _row_kernel._log_components,
+    _row_kernel._exp,
+    _row_kernel._signed_sum,
+    cast("_RowKernelAliases", _row_kernel)._finite_array,
+    cast("_RowKernelAliases", _row_kernel)._finite_result,
+    _row_kernel._immutable,
+    RowEvaluation.__new__,
+    RowEvaluation.__init__,
+    RowEvaluation.__post_init__,
+    RowEvaluation.__getattribute__,
+    PowerVariance.__getattribute__,
+    getattr(PowerVariance, "__getattr__", None),
+    NB2Variance.__getattribute__,
+    getattr(NB2Variance, "__getattr__", None),
+    ProfileProblem.__getattribute__,
+    getattr(ProfileProblem, "__getattr__", None),
+    ProfiledProblem.__getattribute__,
+    getattr(ProfiledProblem, "__getattr__", None),
+    FreshRows.__init__,
+    AdmittedPoint.__getattribute__,
+    getattr(AdmittedPoint, "__getattr__", None),
+    _ROW_WEIGHTS.__getattribute__,
+    getattr(_ROW_WEIGHTS, "__getattr__", None),
     ProfileProblem.__dict__["n_rows"],
-    PowerVariance.__dict__["tau"], NB2Variance.__dict__["kappa"],
-    FESample.__getattribute__, getattr(FESample, "__getattr__", None),
-    RegressionData.__getattribute__, getattr(RegressionData, "__getattr__", None),
-    ObservationWeights.__getattribute__, getattr(ObservationWeights, "__getattr__", None),
+    PowerVariance.__dict__["tau"],
+    NB2Variance.__dict__["kappa"],
+    FESample.__getattribute__,
+    getattr(FESample, "__getattr__", None),
+    RegressionData.__getattribute__,
+    getattr(RegressionData, "__getattr__", None),
+    ObservationWeights.__getattribute__,
+    getattr(ObservationWeights, "__getattr__", None),
 )
 
 
@@ -561,66 +644,107 @@ def _share_row_evaluation(point: AdmittedPoint, prepared: ProfileProblem) -> boo
     or selected-root inputs retain the original two consumers. Actual response
     and raw-weight bits are matched once here; no solver evaluation is consumed.
     """
-    if (ProfileProblem is not _ROW_PROFILE or ProfiledProblem is not _ROW_NUMERIC
-            or PowerVariance is not _ROW_POWER or NB2Variance is not _ROW_NB2
-            or RowEvaluation is not _ROW_EVALUATION
-            or _row_kernel.RowEvaluation is not _ROW_EVALUATION
-            or _row_kernel.PowerVariance is not _ROW_POWER
-            or _row_kernel.NB2Variance is not _ROW_NB2
-            or _profile_rows.ProfileProblem is not _ROW_PROFILE
-            or AdmittedPoint is not _ROW_POINT
-            or _profile_rows.PreparedWeights is not _ROW_WEIGHTS
-            or FESample is not _ROW_DATA_TYPES[0]
-            or RegressionData is not _ROW_DATA_TYPES[1]
-            or ObservationWeights is not _ROW_DATA_TYPES[2]):
+    if (
+        ProfileProblem is not _ROW_PROFILE
+        or ProfiledProblem is not _ROW_NUMERIC
+        or PowerVariance is not _ROW_POWER
+        or NB2Variance is not _ROW_NB2
+        or RowEvaluation is not _ROW_EVALUATION
+        or _row_kernel.RowEvaluation is not _ROW_EVALUATION
+        or cast("_RowKernelAliases", _row_kernel).PowerVariance is not _ROW_POWER
+        or cast("_RowKernelAliases", _row_kernel).NB2Variance is not _ROW_NB2
+        or _profile_rows.ProfileProblem is not _ROW_PROFILE
+        or AdmittedPoint is not _ROW_POINT
+        or cast("_ProfileRowAliases", _profile_rows).PreparedWeights is not _ROW_WEIGHTS
+        or FESample is not _ROW_DATA_TYPES[0]
+        or RegressionData is not _ROW_DATA_TYPES[1]
+        or ObservationWeights is not _ROW_DATA_TYPES[2]
+    ):
         return False
     current = (
-        fresh_rows, prepared_effect_equations, _prepared_effect_equations_from_rows,
-        evaluate_rows, _row_kernel.evaluate_rows, _profile_rows.evaluate_rows,
-        _profile_rows._EVALUATE_ROWS, fresh_equations, _profile_rows.fresh_equations,
-        _profile_rows._fresh_equations_from_rows, _profile_rows._equations,
-        _profile_rows.active_scores, _profile_rows._cached_rows,
-        _profile_rows._checked_active_score, _profile_rows._detached_float,
-        _immutable_row_array, _same_row_values, checked_product, immutable_array,
-        _row_kernel._aligned_rows, _row_kernel._log_components, _row_kernel._exp,
-        _row_kernel._signed_sum, _row_kernel._finite_array, _row_kernel._finite_result,
-        _row_kernel._immutable, RowEvaluation.__new__, RowEvaluation.__init__, RowEvaluation.__post_init__,
-        RowEvaluation.__getattribute__, PowerVariance.__getattribute__,
-        getattr(PowerVariance, "__getattr__", None), NB2Variance.__getattribute__,
-        getattr(NB2Variance, "__getattr__", None), ProfileProblem.__getattribute__,
-        getattr(ProfileProblem, "__getattr__", None), ProfiledProblem.__getattribute__,
-        getattr(ProfiledProblem, "__getattr__", None), FreshRows.__init__,
-        AdmittedPoint.__getattribute__, getattr(AdmittedPoint, "__getattr__", None),
-        _ROW_WEIGHTS.__getattribute__, getattr(_ROW_WEIGHTS, "__getattr__", None),
+        fresh_rows,
+        prepared_effect_equations,
+        _prepared_effect_equations_from_rows,
+        evaluate_rows,
+        _row_kernel.evaluate_rows,
+        cast("_ProfileRowAliases", _profile_rows).evaluate_rows,
+        _profile_rows._EVALUATE_ROWS,
+        fresh_equations,
+        _profile_rows.fresh_equations,
+        _profile_rows._fresh_equations_from_rows,
+        _profile_rows._equations,
+        _profile_rows.active_scores,
+        _profile_rows._cached_rows,
+        _profile_rows._checked_active_score,
+        _profile_rows._detached_float,
+        _immutable_row_array,
+        _same_row_values,
+        checked_product,
+        immutable_array,
+        _row_kernel._aligned_rows,
+        _row_kernel._log_components,
+        _row_kernel._exp,
+        _row_kernel._signed_sum,
+        cast("_RowKernelAliases", _row_kernel)._finite_array,
+        cast("_RowKernelAliases", _row_kernel)._finite_result,
+        _row_kernel._immutable,
+        RowEvaluation.__new__,
+        RowEvaluation.__init__,
+        RowEvaluation.__post_init__,
+        RowEvaluation.__getattribute__,
+        PowerVariance.__getattribute__,
+        getattr(PowerVariance, "__getattr__", None),
+        NB2Variance.__getattribute__,
+        getattr(NB2Variance, "__getattr__", None),
+        ProfileProblem.__getattribute__,
+        getattr(ProfileProblem, "__getattr__", None),
+        ProfiledProblem.__getattribute__,
+        getattr(ProfiledProblem, "__getattr__", None),
+        FreshRows.__init__,
+        AdmittedPoint.__getattribute__,
+        getattr(AdmittedPoint, "__getattr__", None),
+        _ROW_WEIGHTS.__getattribute__,
+        getattr(_ROW_WEIGHTS, "__getattr__", None),
         ProfileProblem.__dict__["n_rows"],
-        PowerVariance.__dict__["tau"], NB2Variance.__dict__["kappa"],
-        FESample.__getattribute__, getattr(FESample, "__getattr__", None),
-        RegressionData.__getattribute__, getattr(RegressionData, "__getattr__", None),
-        ObservationWeights.__getattribute__, getattr(ObservationWeights, "__getattr__", None),
+        PowerVariance.__dict__["tau"],
+        NB2Variance.__dict__["kappa"],
+        FESample.__getattribute__,
+        getattr(FESample, "__getattr__", None),
+        RegressionData.__getattribute__,
+        getattr(RegressionData, "__getattr__", None),
+        ObservationWeights.__getattribute__,
+        getattr(ObservationWeights, "__getattr__", None),
     )
     if not all(a is b for a, b in zip(current, _FRESH_ROW_PRODUCERS, strict=True)):
         return False
-    if not all(vars(kind).get(name) is original
-               for kind, name, original in _ROW_FIELDS):
+    if not all(
+        vars(kind).get(name) is original for kind, name, original in _ROW_FIELDS
+    ):
         return False
     if type(point) is not AdmittedPoint or type(prepared) is not ProfileProblem:
         return False
     numeric = point._numeric_problem
     family = type(point.variance)
-    if (type(numeric) is not ProfiledProblem
-            or type(prepared.prepared) is not _ROW_WEIGHTS
-            or type(point.sample) is not FESample
-            or type(point.sample.data) is not RegressionData
-            or (point.sample.data.weights is not None
-                and type(point.sample.data.weights) is not ObservationWeights)
-            or (family is not PowerVariance and family is not NB2Variance)
-            or point.kind == "root" or point.variance is None
-            or prepared.variance is not point.variance
-            or numeric.variance is not point.variance
-            or prepared._all_active is not True
-            or type(point.q) is not np.ndarray or point.q.dtype != np.float64
-            or point.q.ndim != 1
-            or not _immutable_row_array(point.q, point.q.shape)):
+    if (
+        type(numeric) is not ProfiledProblem
+        or type(prepared.prepared) is not _ROW_WEIGHTS
+        or type(point.sample) is not FESample
+        or type(point.sample.data) is not RegressionData
+        or (
+            point.sample.data.weights is not None
+            and type(point.sample.data.weights) is not ObservationWeights
+        )
+        or (family is not PowerVariance and family is not NB2Variance)
+        or point.kind == "root"
+        or point.variance is None
+        or prepared.variance is not point.variance
+        or numeric.variance is not point.variance
+        or prepared._all_active is not True
+        or type(point.q) is not np.ndarray
+        or point.q.dtype != np.float64
+        or point.q.ndim != 1
+        or not _immutable_row_array(point.q, point.q.shape)
+    ):
         return False
     return (
         _same_row_values(numeric.z, prepared.z, point.q.shape)

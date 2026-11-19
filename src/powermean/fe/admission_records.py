@@ -73,7 +73,7 @@ class WorkCount(NamedTuple):
 
 @dataclass(frozen=True)
 class AdmissionWork:
-    """Immutable structural record; point evaluations have a separate lifetime."""
+    """Immutable structural ledger; point evaluations have a separate lifetime."""
 
     counts: tuple[WorkCount, ...]
 
@@ -82,7 +82,7 @@ _Result = TypeVar("_Result")
 
 
 class WorkLog:
-    """One local construction log, never a cross-call cache."""
+    """One local construction ledger, never a cross-call cache."""
 
     def __init__(self) -> None:
         self._begun: dict[str, int] = {}

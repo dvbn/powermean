@@ -1,37 +1,62 @@
-"""Current sample of the internal joint transformed ``tau = 2`` recession diagnostic.
+"""The current sample of the private joint transformed ``tau = 2`` recession diagnostic.
 
-Internal module: ``powermean`` exports nothing of it.
-:mod:`powermean.solve.support_gamma` also provides this record under the name
-``GammaProblem``.
+``design/02_computation.md``, Section 4 (joint ``tau = 2``);
+``design/01_statistical_core.md``, Section 5.1; ``plan/evidence/M1.8_contract.txt``,
+Section 1, with its adoption ``plan/evidence/M1.8_adoption.txt``; decisions D14 and
+D51.  Task M1.8, private: ``powermean`` exports nothing of it.  Correction A moved this
+record here unchanged from :mod:`powermean.solve.support_gamma`, which still provides
+it under the name ``GammaProblem``.
 
 :class:`GammaProblem` keeps ``Z``, ``X`` and its column order, the grouping, the exact
 original positions (checked as exact nonnegative ``np.intp`` values before they are
 narrowed), the raw positive weights with their declared kind (frequency counts
 validated as exact counts by :class:`~powermean.data.weights.ObservationWeights`), the
 finite offset, ``PowerVariance(2)`` and the order ``omega``, each as an owned
-read-only copy.  It is not the separation record
-:class:`~powermean.solve.support_problem.SupportProblem`, which refuses ``tau = 2``.
+read-only copy.  It is not M1.7's separation record, which refuses ``tau = 2``.
 :meth:`GammaProblem.same` compares two samples bit for bit, weight kind and grouping
 included, and :meth:`GammaProblem.require_same` refuses another one: no stale reuse.
-Nothing is deleted: the all-zero level rule belongs to the sample construction.
+Nothing is deleted: D14's all-zero level rule belongs to the sample construction of
+task M1.10.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import numpy as np
 from numpy.typing import ArrayLike
 
 from powermean.data.weights import ObservationWeights
-from powermean.fe.groups import Grouping
+from powermean.fe.groups import Grouping, _distinct_integers
 from powermean.fe.reductions import immutable_array
 from powermean.model.order import IndexArray
 from powermean.model.variance import FloatArray, PowerVariance
 from powermean.solve.support_problem import LARGEST_POSITION, indices
 
+if TYPE_CHECKING:
+    from powermean.fe.certificate_basis import CertificateBasis
+
 VARIANCE = "the recession diagnostic is characterized for PowerVariance(2) only"
 STALE = "the record is bound to another sample than the current one"
+
+
+def identified_coordinates(
+    active: IndexArray,
+    n_slopes: int,
+    grouping: Grouping | None,
+    basis: CertificateBasis | None,
+) -> IndexArray:
+    """The chart of retained slopes and canonical FE pivots in the full design."""
+    selected = [active]
+    start = n_slopes
+    if grouping is not None:
+        if basis is None or basis.grouping is not grouping:
+            raise ValueError("identified coordinates need this sample's exact FE basis")
+        for block, position in zip(grouping.blocks, basis.positions, strict=True):
+            selected.append(start + np.flatnonzero(position >= 0))
+            start += block.n_levels
+    return np.concatenate(selected)
 
 
 def _real(value: ArrayLike, name: str, ndim: int) -> FloatArray:
@@ -49,7 +74,7 @@ def _positions(value: ArrayLike, n: int, grouping: Grouping | None) -> IndexArra
     found = np.asarray(value)
     if found.dtype.kind not in "iu" or found.shape != (n,):
         raise ValueError("positions must be an integer vector, one per row")
-    if (found < 0).any() or np.unique(found).size != n:
+    if (found < 0).any() or not _distinct_integers(found):
         raise ValueError("positions must be distinct nonnegative integers")
     if int(found.max()) > LARGEST_POSITION:
         raise ValueError("positions must be representable as np.intp")
@@ -107,6 +132,12 @@ class GammaProblem:
         A finite offset, bound to the sample, never in the cone.
     variance, omega : PowerVariance, float
         ``PowerVariance(2)`` and the nonzero order that formed ``Z``.
+    coordinates : array of int or None
+        Optional increasing original-column indices for the two bounded LPs.
+        The normal zero-containing sample producer supplies the existing retained
+        slopes and exact independent FE columns. None keeps the original layout.
+        This chart changes no stored sample field and grants no certificate:
+        every primal reconstruction and dual identity still uses all columns.
     """
 
     z: FloatArray
@@ -118,6 +149,7 @@ class GammaProblem:
     offset: FloatArray
     variance: PowerVariance
     omega: float
+    coordinates: IndexArray | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         """Validate every field and store owned read-only copies."""
@@ -148,6 +180,24 @@ class GammaProblem:
             ("omega", _order(self.omega)),
         ):
             object.__setattr__(self, name, value)
+        coordinates = self.coordinates
+        if coordinates is not None:
+            selected = np.asarray(coordinates)
+            if (
+                selected.dtype.kind not in "iu"
+                or selected.ndim != 1
+                or (selected < 0).any()
+                or (selected >= self.n_parameters).any()
+                or (selected[1:] <= selected[:-1]).any()
+            ):
+                raise ValueError(
+                    "coordinates must be increasing original column indices"
+                )
+            if not selected.size and (grouping is not None or np.any(design != 0)):
+                raise ValueError(
+                    "empty coordinates require an empty fitted-index space"
+                )
+            object.__setattr__(self, "coordinates", indices(selected))
 
     @property
     def n_rows(self) -> int:
@@ -175,6 +225,15 @@ class GammaProblem:
         """``P``: the current rows with ``Z > 0``, increasing."""
         return indices(np.flatnonzero(self.z > 0))
 
+    @property
+    def n_coordinates(self) -> int:
+        """The bounded LP dimension; all original columns remain in the checks."""
+        return (
+            self.n_parameters
+            if self.coordinates is None
+            else int(self.coordinates.size)
+        )
+
     def same(self, other: GammaProblem) -> bool:
         """Whether ``other`` holds this sample, bit for bit, kind and grouping too."""
         if self is other:
@@ -185,6 +244,11 @@ class GammaProblem:
         same = all(_same_bits(a, b) for a, b in pairs)
         same = same and self.weights.kind == other.weights.kind
         same = same and (self.columns, self.omega) == (other.columns, other.omega)
+        a, b = self.coordinates, other.coordinates
+        same = same and (
+            (a is None and b is None)
+            or (a is not None and b is not None and _same_bits(a, b))
+        )
         return same and _same_grouping(self.grouping, other.grouping)
 
     def require_same(self, other: object) -> None:

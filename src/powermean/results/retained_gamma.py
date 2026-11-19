@@ -1,13 +1,15 @@
 """Detached snapshots of GPML recession LP reports, solves, and results.
 
-This module detaches ``LPReport``, ``Solve``, and ``GammaResult`` into explicit finite
-typed records without retaining live ``Grouping``, live ``WarningMessage`` objects, or
-invoking diagnostic replay constructors.
+``design/02_computation.md``, Sections 2 and 4; ``plan/evidence/M1.15_contract.txt``;
+decision D51.  This module detaches ``LPReport``, ``Solve``, and ``GammaResult``
+into explicit finite typed records without retaining live ``Grouping``, live
+``WarningMessage`` objects, or invoking diagnostic replay constructors.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import ClassVar, Literal
 
 import numpy as np
 
@@ -167,6 +169,11 @@ def _detach_gamma_solve(
 class RetainedGammaResult:
     """Detached snapshot of ``GammaResult`` without invoking replay constructors."""
 
+    # A directional diagnostic never accepts an estimated point.
+    accepted: ClassVar[Literal[False]] = False
+    level: ClassVar[None] = None
+    strict: ClassVar[tuple[str, ...]] = ()
+
     problem_key: ProblemKey
     problem: RetainedGammaProblem
     controls: LPControls
@@ -191,12 +198,24 @@ class RetainedGammaResult:
 
     @property
     def sizes(self) -> tuple[int, int, int, int]:
-        """Return ``(n_rows, positive_rows, n_parameters, constraint_nonzeros)``."""
+        """Return rows, positive rows, actual LP width and inequality nonzeros."""
         prob = self.problem
         pos = prob.positive
-        per_row = np.count_nonzero(prob._design, axis=1)
-        nonzeros = int(per_row[pos].sum()) + int(pos.size) * prob.n_blocks
-        return (prob.n_rows, int(pos.size), prob.n_parameters, nonzeros)
+        selected = prob._coordinates
+        if selected is None:
+            per_row = np.count_nonzero(prob._design, axis=1)
+            nonzeros = int(per_row[pos].sum()) + int(pos.size) * prob.n_blocks
+        else:
+            kept = np.zeros(prob.n_parameters, dtype=bool)
+            kept[selected] = True
+            slopes = selected[selected < prob.n_slopes]
+            nonzeros = sum(int(np.count_nonzero(prob._design[pos, j])) for j in slopes)
+            start = prob.n_slopes
+            blocks = () if prob._grouping is None else prob._grouping.blocks
+            for block in blocks:
+                nonzeros += int(np.count_nonzero(kept[start + block._codes[pos]]))
+                start += block.n_levels
+        return (prob.n_rows, int(pos.size), prob.n_coordinates, nonzeros)
 
 
 def snapshot_gamma_result(

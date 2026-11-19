@@ -1,4 +1,4 @@
-"""Implicit B'B and prospective workspace budget.
+"""Implicit B'B and prospective workspace ledger (design/03, Section 3.1).
 
 The input design is already owned. Construction makes p forward and p transpose
 operator calls, with only row vectors, never a retained indicator matrix.
@@ -7,15 +7,99 @@ operator calls, with only row vectors, never a retained indicator matrix.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import cast
+from typing import Literal, cast
 
 import numpy as np
 
-from powermean.fe._cancel_storage import BuilderRecord, FloatStorage
+from powermean.fe._cancel_storage import BuilderRecord, FloatStorage, IndexArray
+from powermean.fe.admission_records import AdmissionWork
+from powermean.fe.cancel import CancelStructure, pair_positions
 from powermean.fe.geometry_errors import GeometryBudgetError
 from powermean.fe.geometry_storage import _build_record
 from powermean.fe.retained import CenteredDesign
+from powermean.model.matrix import symmetric_average
 from powermean.model.variance import FloatArray, _finite_scalar
+
+SelectionOutcome = Literal[
+    "not_requested",
+    "slopes_precheck_declined",
+    "quotient_refused",
+    "zero_columns_mismatch",
+    "assembly_refused",
+    "canonical_gram_refused",
+    "proof_refused",
+    "proof_declined",
+    "selected",
+]
+
+
+@dataclass(slots=True)
+class AssemblyWork:
+    """Attempted assembly passes, retained even when the resulting Gram declines."""
+
+    attempts: int = 0
+    pairs: int = 0
+    bincount_calls: int = 0
+    unique_calls: int = 0
+
+    def snapshot(self) -> tuple[int, int, int, int]:
+        """Return attempts, generated pairs, bincounts and level scans."""
+        return self.attempts, self.pairs, self.bincount_calls, self.unique_calls
+
+
+@dataclass(frozen=True, eq=False, init=False)
+class SelectionPreparation(BuilderRecord):
+    """Fit-local accounting of attempted selected-columns preparation work.
+
+    Records speculative pair-assembled Gram passes, exact-quotient attempts
+    (including partial work on refusal), dense proof Cholesky/triangular-solve
+    calls, Dekker/TwoSum compensated passes, exact split products, and per-block
+    level bincounts
+    whether selection succeeds or declines to canonical ``geometry_gram``.
+    Construction counts denote invocations, including a refused construction.
+    Expected terminal assembly/canonical/spectral refusals carry this same record
+    as ``error.selection_preparation`` without replacing their type or message.
+    """
+
+    __slots__ = (
+        "attempted",
+        "n_assembled_bincount_calls",
+        "n_assembled_gram_attempts",
+        "n_assembled_pairs",
+        "n_assembled_unique_calls",
+        "n_canonical_gram_builds",
+        "n_cholesky_calls",
+        "n_compensated_matmul_cols",
+        "n_compensated_twosum_calls",
+        "n_operator_level_bincounts",
+        "n_proof_attempts",
+        "n_quotient_attempts",
+        "n_residual_bound_passes",
+        "n_slope_gram_builds",
+        "n_split_products",
+        "n_triangular_solve_calls",
+        "outcome",
+        "quotient_work",
+    )
+
+    attempted: bool
+    outcome: SelectionOutcome
+    n_assembled_gram_attempts: int
+    n_assembled_pairs: int
+    n_assembled_bincount_calls: int
+    n_assembled_unique_calls: int
+    n_canonical_gram_builds: int
+    n_quotient_attempts: int
+    quotient_work: AdmissionWork
+    n_cholesky_calls: int
+    n_triangular_solve_calls: int
+    n_compensated_matmul_cols: int
+    n_compensated_twosum_calls: int
+    n_operator_level_bincounts: int
+    n_slope_gram_builds: int
+    n_proof_attempts: int
+    n_residual_bound_passes: int
+    n_split_products: int
 
 
 @dataclass(frozen=True, eq=False, init=False)
@@ -60,8 +144,10 @@ class GeometryBudget(BuilderRecord):
 class GeometryPasses(BuilderRecord):
     """Structural pass and work-array accounting for implicit Gram assembly.
 
-    Counts implicit operator evaluations and group reductions used to assemble
-    ``G = B' B``; this is structural accounting, not a wall-clock speed claim.
+    Top-level fields count operator evaluations, reductions, and spectral
+    deflation for the final stored ``G = B' B``; ``selection`` records fit-local
+    attempted selected-columns preparation (including discarded assembled Gram
+    and refused quotient work). This is structural accounting, not a speed claim.
     """
 
     __slots__ = (
@@ -77,6 +163,7 @@ class GeometryPasses(BuilderRecord):
         "n_eigenvector_lift_values",
         "n_matvec_sorted_calls",
         "n_rmatvec_sorted_calls",
+        "selection",
     )
 
     n_columns_evaluated: int
@@ -91,6 +178,60 @@ class GeometryPasses(BuilderRecord):
     n_deflated_eigh_calls: int
     n_canonical_zero_axes: int
     n_eigenvector_lift_values: int
+    selection: SelectionPreparation
+
+
+def default_selection_preparation() -> SelectionPreparation:
+    """Return the inactive fit-local selection preparation ledger."""
+    return cast(
+        SelectionPreparation,
+        _build_record(
+            SelectionPreparation,
+            attempted=False,
+            outcome="not_requested",
+            n_assembled_gram_attempts=0,
+            n_assembled_pairs=0,
+            n_assembled_bincount_calls=0,
+            n_assembled_unique_calls=0,
+            n_canonical_gram_builds=0,
+            n_quotient_attempts=0,
+            quotient_work=AdmissionWork(()),
+            n_cholesky_calls=0,
+            n_triangular_solve_calls=0,
+            n_compensated_matmul_cols=0,
+            n_compensated_twosum_calls=0,
+            n_operator_level_bincounts=0,
+            n_slope_gram_builds=0,
+            n_proof_attempts=0,
+            n_residual_bound_passes=0,
+            n_split_products=0,
+        ),
+    )
+
+
+def with_selection_preparation(
+    passes: GeometryPasses, selection: SelectionPreparation
+) -> GeometryPasses:
+    """Attach fit-local ``selection`` preparation counts to ``passes``."""
+    return cast(
+        GeometryPasses,
+        _build_record(
+            GeometryPasses,
+            n_columns_evaluated=passes.n_columns_evaluated,
+            n_matvec_sorted_calls=passes.n_matvec_sorted_calls,
+            n_rmatvec_sorted_calls=passes.n_rmatvec_sorted_calls,
+            n_center_sorted_calls=passes.n_center_sorted_calls,
+            n_bincount_calls=passes.n_bincount_calls,
+            max_row_work_shape=passes.max_row_work_shape,
+            max_matrix_work_shape=passes.max_matrix_work_shape,
+            exact_zero_columns=passes.exact_zero_columns,
+            eigh_complement_dimensions=passes.eigh_complement_dimensions,
+            n_deflated_eigh_calls=passes.n_deflated_eigh_calls,
+            n_canonical_zero_axes=passes.n_canonical_zero_axes,
+            n_eigenvector_lift_values=passes.n_eigenvector_lift_values,
+            selection=selection,
+        ),
+    )
 
 
 def _checked_max_bytes(max_bytes: object) -> int:
@@ -120,7 +261,7 @@ def geometry_budget(design: CenteredDesign) -> GeometryBudget:
     Parameters
     ----------
     design : CenteredDesign
-        Already owned input; its storage is excluded from this incremental budget.
+        Already owned input; its storage is excluded from this incremental ledger.
 
     Notes
     -----
@@ -146,7 +287,10 @@ def geometry_budget(design: CenteredDesign) -> GeometryBudget:
     eigenvectors (1), nullspace (1), retained eigenvectors/selection/basis (3),
     slope Schur/projection/solve (4), maps including slope aliases (4),
     products/projector/sign or QR intermediates (5), and immutable
-    finalization (6). Each is at most p^2;
+    finalization (6). On ``exact_selection``, small-side null-projection factors
+    (``r``-by-``m`` witnesses and ``min(r, m)``-square Cholesky) and proof
+    pencils reuse unused eigenvector/projector ``p^2`` slots, and selected/null
+    index vectors fit in ``metadata_bytes``. Each is at most p^2;
     mutually exclusive branches are deliberately summed. No input design,
     caller-owned custom basis, Python object/header or peak process memory
     is claimed here. Custom conversion is bounded by checking ndarray shape
@@ -203,6 +347,15 @@ def geometry_budget(design: CenteredDesign) -> GeometryBudget:
     )
 
 
+def symmetric_gram(matrix: FloatArray) -> FloatArray:
+    """Symmetrize a Gram in one pass unless paired entries overflow their sum."""
+    try:
+        with np.errstate(over="raise", under="ignore"):
+            return 0.5 * (matrix + matrix.T)
+    except FloatingPointError:
+        return symmetric_average(matrix)
+
+
 def geometry_gram(
     design: CenteredDesign, *, max_bytes: int
 ) -> tuple[FloatArray, GeometryBudget, GeometryPasses]:
@@ -218,7 +371,7 @@ def geometry_gram(
     Returns
     -------
     gram, budget, passes : tuple
-        Immutable p-square Gram, declared workspace budget and operator counts.
+        Immutable p-square Gram, declared workspace ledger and operator counts.
     """
     budget = reserve_geometry(design, max_bytes)
     p = budget.n_columns_full
@@ -233,7 +386,7 @@ def geometry_gram(
             zero_columns.append(col)
         gram[:, col] = design.rmatvec_sorted(u_sorted)
         unit[col] = 0.0
-    gram = 0.5 * (gram + gram.T)
+    gram = symmetric_gram(gram)
     if zero_columns:
         gram[zero_columns, :] = 0.0
         gram[:, zero_columns] = 0.0
@@ -255,6 +408,138 @@ def geometry_gram(
             n_deflated_eigh_calls=0,
             n_canonical_zero_axes=0,
             n_eigenvector_lift_values=0,
+            selection=default_selection_preparation(),
+        ),
+    )
+    return FloatStorage.store(gram).view(), budget, passes
+
+
+def _constant_levels(
+    design: CenteredDesign, work: AssemblyWork | None = None
+) -> IndexArray:
+    """The full columns of retained levels constant within every group they meet.
+
+    A level is so when, in every group with one of its rows, all the group's rows
+    have it; its centered column is then zero exactly, as is a slope column all of
+    whose centered values are zero. Decided from the integer codes, by the count of
+    every (group, level) cell that occurs, in memory linear in the rows.
+    """
+    structure = design.structure
+    groups, counts = structure.sorted_codes, structure.counts
+    found = [int(j) for j in np.flatnonzero(~np.any(design.centered_slopes, axis=0))]
+    for codes, start, size in zip(
+        structure.retained_sorted_codes,
+        design.block_starts,
+        structure.block_sizes,
+        strict=True,
+    ):
+        if work is not None:
+            work.unique_calls += 1
+        cells, seen = np.unique(
+            groups.astype(np.int64) * size + codes, return_counts=True
+        )
+        partial = np.zeros(size, dtype=bool)
+        partial[(cells % size)[seen != counts[cells // size]]] = True
+        found.extend(start + int(level) for level in np.flatnonzero(~partial))
+    return np.array(found, dtype=np.intp)
+
+
+def _fill_retained_gram(
+    structure: CancelStructure,
+    blocks: tuple[tuple[IndexArray, int, int], ...],
+    gram: FloatArray,
+    work: AssemblyWork | None = None,
+) -> None:
+    """Accumulate symmetric ``F_R' M_C F_R`` blocks from ordered within-group pairs."""
+    left, right = pair_positions(structure)
+    if work is not None:
+        work.pairs += int(left.size)
+    counts = structure.counts
+    weight = (
+        np.where(left == right, 1.0, 0.0) - 1.0 / counts[structure.sorted_codes[left]]
+    )
+    for b1, (rows, row, n_rows) in enumerate(blocks):
+        scaled = rows[left]
+        for b2 in range(b1, len(blocks)):
+            cols, col, n_cols = blocks[b2]
+            if work is not None:
+                work.bincount_calls += 1
+            block_mat = np.bincount(
+                scaled * n_cols + cols[right],
+                weights=weight,
+                minlength=n_rows * n_cols,
+            ).reshape(n_rows, n_cols)
+            gram[row : row + n_rows, col : col + n_cols] = block_mat
+            if b1 != b2:
+                gram[col : col + n_cols, row : row + n_rows] = block_mat.T
+
+
+def assembled_gram(
+    design: CenteredDesign, *, max_bytes: int, work: AssemblyWork | None = None
+) -> tuple[FloatArray, GeometryBudget, GeometryPasses] | None:
+    """``G = B' B`` summed from the rows of each group, after the same reservation.
+
+    ``X'X`` from the centered slopes, ``F_R' M_C X`` by level sums of them, and
+    ``F_R' M_C F_R`` with the entries ``[i = j] - 1/c`` of ``M_C`` over every
+    ordered pair of rows of a group: the entries of :func:`geometry_gram` with the
+    sums in another order, so equal to rounding. The columns of levels constant
+    within their groups are exact zeros (:func:`_constant_levels`), as there.
+    None where the pairs of rows number more than ``p**2`` (keeping pair buffers
+    inside the already reserved ``p**2`` slots of :func:`geometry_budget`).
+    """
+    budget = reserve_geometry(design, max_bytes)
+    if work is not None:
+        work.attempts += 1
+    structure, x = design.structure, design.centered_slopes
+    p, k = design.n_columns, design.n_slopes
+    counts = structure.counts
+    if float(np.dot(counts, counts.astype(np.float64))) > float(p) * p:
+        return None
+    n_pairs = int(np.dot(counts.astype(np.int64), counts.astype(np.int64)))
+    gram = np.zeros((p, p), dtype=np.float64)
+    gram[:k, :k] = x.T @ x
+    blocks = tuple(
+        zip(
+            structure.retained_sorted_codes,
+            design.block_starts,
+            structure.block_sizes,
+            strict=True,
+        )
+    )
+    for codes, start, size in blocks:
+        for column in range(k):
+            if work is not None:
+                work.bincount_calls += 1
+            gram[start : start + size, column] = np.bincount(
+                codes, weights=x[:, column], minlength=size
+            )
+    gram[:k, k:] = gram[k:, :k].T
+    if blocks:
+        _fill_retained_gram(structure, blocks, gram, work)
+    gram = symmetric_gram(gram)
+    zero_columns = _constant_levels(design, work)
+    gram[zero_columns, :] = 0.0
+    gram[:, zero_columns] = 0.0
+    if not np.all(np.isfinite(gram)):
+        return None
+    n_blocks = len(blocks)
+    passes = cast(
+        GeometryPasses,
+        _build_record(
+            GeometryPasses,
+            n_columns_evaluated=p,
+            n_matvec_sorted_calls=0,
+            n_rmatvec_sorted_calls=0,
+            n_center_sorted_calls=0,
+            n_bincount_calls=k * n_blocks + n_blocks * (n_blocks + 1) // 2,
+            max_row_work_shape=(n_pairs,),
+            max_matrix_work_shape=(p, p),
+            exact_zero_columns=tuple(zero_columns.tolist()),
+            eigh_complement_dimensions=(),
+            n_deflated_eigh_calls=0,
+            n_canonical_zero_axes=0,
+            n_eigenvector_lift_values=0,
+            selection=default_selection_preparation(),
         ),
     )
     return FloatStorage.store(gram).view(), budget, passes
@@ -290,6 +575,7 @@ def spectral_passes(passes: GeometryPasses, n_slopes: int) -> GeometryPasses:
             n_eigenvector_lift_values=sum(
                 (size - count) ** 2 + count for size, count in deflated
             ),
+            selection=passes.selection,
         ),
     )
 

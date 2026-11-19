@@ -1,9 +1,10 @@
 """Detached alarm, RHS check, RHS result, and Newton direction snapshots.
 
-This leaf module defines :class:`RetainedZeroRowAlarm`, :class:`RetainedChordAlarm`,
-:class:`RetainedAlarm`, :func:`_owned_alarm`, :class:`RetainedRHSCheck`,
-:class:`RetainedNativeCheck`, :class:`RetainedRHSResult`, :func:`_owned_rhs_result`, and
-:class:`RetainedDirection`.
+``design/02_computation.md``, Sections 5.2 and 7; ``plan/evidence/M1.15_contract.txt``;
+``brief/layout_C_ownership.txt`` (P04).  This leaf module defines
+:class:`RetainedZeroRowAlarm`, :class:`RetainedChordAlarm`, :class:`RetainedAlarm`,
+:func:`_owned_alarm`, :class:`RetainedRHSCheck`, :class:`RetainedNativeCheck`,
+:class:`RetainedRHSResult`, :func:`_owned_rhs_result`, and :class:`RetainedDirection`.
 """
 
 from __future__ import annotations

@@ -1,13 +1,14 @@
 """The accounting of the sample: reasons, codes, masks and the diagnostics of step 2.
 
-Every exclusion of a row or a column is counted and explained in the result.  The
-records of :mod:`powermean.data.sample` and :mod:`powermean.data.retained` share what is
-here: the four reasons of exclusion in the order of the steps, the code of each (one
-plus its index; zero where a row is retained), the seven variable groups of step 2 in
-the order of the design, the owned read-only copies of masks, codes and index arrays,
-and :class:`MissingAccount`, the masks of the rows that each group explains, which
-overlap where a row is invalid in several groups, beside their union, the rows that step
-2 excludes once each.
+``design/02_computation.md``, Section 2 (the steps and what each is reported as) and
+Section 1, rule 4 ("every exclusion of a row or a column is counted and explained in
+the result"); decision D41.  The records of :mod:`powermean.data.sample` and
+:mod:`powermean.data.retained` share what is here: the four reasons of exclusion in the
+order of the steps, the code of each (one plus its index; zero where a row is
+retained), the seven variable groups of step 2 in the order of the design, the owned
+read-only copies of masks, codes and index arrays, and :class:`MissingAccount`, the
+masks of the rows that each group explains, which overlap where a row is invalid in
+several groups, beside their union, the rows that step 2 excludes once each.
 """
 
 from __future__ import annotations
@@ -24,8 +25,8 @@ from powermean.data.raw import _OwnedMapping
 from powermean.model.order import BoolArray, IndexArray
 
 CodeArray = NDArray[np.int8]
-# The reasons of exclusion, in the order of the steps of the sample construction; a
-# row's code is the index of its reason plus one, and zero where the row is retained.
+# The reasons of exclusion, in the order of the steps of file 02, Section 2; a row's
+# code is the index of its reason plus one, and zero where the row is retained.
 EXCLUSION_REASONS: tuple[str, ...] = (
     "subset",
     "missing",
@@ -33,6 +34,8 @@ EXCLUSION_REASONS: tuple[str, ...] = (
     "zero_weight",
 )
 RETAINED, SUBSET, MISSING, ZERO_OUTCOME, ZERO_WEIGHT = 0, 1, 2, 3, 4
+# Step 7 has the same code whether the preceding fixed-effect steps apply or not.
+SEPARATED = 7
 # The variable groups of step 2, in the order of the design.
 MISSING_GROUPS: tuple[str, ...] = (
     "outcome",
@@ -82,6 +85,8 @@ def frozen_index(index: IndexArray) -> IndexArray:
 
 def reason_of(code: int) -> str | None:
     """The reason of a code: ``None`` where the row is retained."""
+    if code == SEPARATED:
+        return "separated"
     return None if code == RETAINED else EXCLUSION_REASONS[code - 1]
 
 

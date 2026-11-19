@@ -1,4 +1,4 @@
-"""Current robust/cluster/multiway absorbed inference with the eigenvalue adjustment."""
+"""Current robust/cluster/multiway absorbed inference and D4 composition."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import numpy as np
 from powermean.data.inference_requests import Multiway
 from powermean.data.request_values import OMITTED
 from powermean.fe.absorb_numeric import checked_product
-from powermean.inference.absorbed_adjusted import PsdInput, adjusted_scale
+from powermean.inference.absorbed_d4_scale import D4Input, adjusted_scale
 from powermean.inference.absorbed_hc_scale import hc_scale
 from powermean.inference.absorbed_preflight import (
     AbsorbedFrameRecord,
@@ -26,7 +26,6 @@ from powermean.inference.psd import PsdAdjustment, reported_errors
 from powermean.inference.ssc import direct_errors, primitive_estimate, scaled_covariance
 from powermean.model.rows import evaluate_rows
 from powermean.model.variance import FloatArray
-from powermean.solve.absorbed_certificate_geometry import SparseMatrix
 from powermean.solve.absorbed_certificate_geometry import hessian as assemble_hessian
 from powermean.solve.absorbed_certificate_scale import (
     FEScaleDetails,
@@ -35,6 +34,7 @@ from powermean.solve.absorbed_certificate_scale import (
     FEScaleResult,
 )
 from powermean.solve.reported import ReportedScale
+from powermean.solve.sparse_matrix import SparseMatrix
 
 
 def _bread_rows(
@@ -128,10 +128,8 @@ def generalized_scale(
         rep_cov = order.covariance(theta_cov)
     except FloatingPointError as exc:
         cov_err = str(exc)
-    if pre.psd == "cgm":
-        info = PsdInput(
-            scale_input, pre, active_rows, exp_curv, exp_hess, form, cov_err
-        )
+    if pre.psd in ("cgm", "fixest"):
+        info = D4Input(scale_input, pre, active_rows, exp_curv, exp_hess, form, cov_err)
         adjustment, frame_rec = adjusted_scale(info, rep_cov, held_warnings)
         rep_cov = adjustment.adjusted
         errors = reported_errors(rep_cov)

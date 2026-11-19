@@ -1,33 +1,37 @@
 """Per-fit preparation context and temporary interface admission identity maps.
 
-The opt-in primitive snapshot route of :class:`PerFitPreparationContext` captures its
-state in the immutable :class:`~powermean.results.primitive_snapshot.PrimitiveCapture`,
-read by its consumers through the once-materialized
-:class:`~powermean.results.primitive_parts.PrimitiveParts`.
+``design/02_computation.md``, Sections 2 to 4 and 7;
+``plan/evidence/M1.15_contract.txt``, items 2, 3, 7 and 9;
+``brief/layout_C_ownership.txt`` (P16).
 """
 
 from __future__ import annotations
 
 import weakref
-from collections.abc import Iterator
-from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import cast
 
 import numpy as np
 
-from powermean._prepare.compose import PreparedFrame
+from powermean._prepare.compose import PreparedFrame, _materialize_retained
 from powermean._prepare.dependence import DependenceProvenance, UsedDependence
 from powermean.data.inference_requests import (
     ClusterRequest,
     ConleyRequest,
     HacRequest,
 )
-from powermean.data.sample import SampleBase
 from powermean.data.numeric_fit import NumericFit
+from powermean.data.sample import SampleBase
 from powermean.data.sample_fe import EffectColumns
 from powermean.data.sample_fe_state import FESample, same_bits, same_missing
 from powermean.formula.frame import Design, ModelFrame
+from powermean.interface.owned_fit_state import (
+    normalized_fit_frame,
+    normalized_numeric_inputs,
+    own_prepared_once,
+    passive_preparation,
+    single_fit_frame,
+)
 from powermean.results.absorbed_groupings import GroupingIdentityMap
 from powermean.results.absorbed_handoff import CaptureMaps
 from powermean.results.absorbed_outcome_records import RetainedOutcomeSnapshot
@@ -40,13 +44,6 @@ from powermean.results.absorbed_sample_binding import (
     _same_index_values,
     check_prepared_matches_sample,
 )
-from powermean.results.primitive_parts import PrimitiveParts
-from powermean.results.primitive_snapshot import (
-    GENERAL,
-    PRIMITIVE,
-    MetadataParts,
-    PrimitiveCapture,
-)
 from powermean.results.retained_input_values import (
     InputKey,
     RetainedInputSnapshot,
@@ -56,10 +53,6 @@ from powermean.results.retained_input_values import (
 )
 from powermean.results.retained_inputs import InputIdentityMap, ProblemIdentityMap
 from powermean.results.retained_labels import _same_design_spec, _same_opt_bits
-from powermean.interface.owned_fit_state import (
-    own_prepared_once, passive_preparation, normalized_fit_frame, normalized_numeric_inputs,
-    single_fit_frame,
-)
 
 __all__ = [
     "PerFitPreparationContext",
@@ -72,15 +65,9 @@ __all__ = [
 ]
 
 type _Ref[T] = weakref.ref[T]
-# The evidence an issued frame is compared against: its detached ``PreparedFrame``
-# baseline (general route) or the immutable capture of its context (primitive route).
-type _Baseline = PreparedFrame | PrimitiveCapture
-# The once-materialized parts of a primitive capture, which validate a live sample
-# presented without the frame (``None`` on the general route).
-type _Parts = PrimitiveParts | None
-type _FrameEntry = tuple[_Ref[PreparedFrame], _Baseline, RetainedInputSnapshot, _Parts]
+type _FrameEntry = tuple[_Ref[PreparedFrame], PreparedFrame, RetainedInputSnapshot]
 type _BaseEntry = tuple[
-    _Ref[SampleBase], _Ref[PreparedFrame], _Baseline, RetainedInputSnapshot, _Parts
+    _Ref[SampleBase], _Ref[PreparedFrame], PreparedFrame, RetainedInputSnapshot
 ]
 
 _ISSUED_BY_FRAME_ID: dict[int, _FrameEntry] = {}
@@ -89,38 +76,41 @@ _ISSUED_BY_BASE_ID: dict[int, _BaseEntry] = {}
 
 @dataclass(frozen=True)
 class _IssuedFitFrame:
-    """Strong reference to an admitted ``PreparedFrame`` and its evidence.
-
-    ``baseline`` is the frame's detached copy on the general route, or the immutable
-    capture of its context on the primitive route.
-    """
+    """An admitted ``PreparedFrame``, its detached baseline and input snapshot."""
 
     frame: PreparedFrame
-    baseline: _Baseline
+    baseline: PreparedFrame
     input_snapshot: RetainedInputSnapshot
 
 
 def _register_weak_evidence(
-    f: PreparedFrame, b: _Baseline, s: RetainedInputSnapshot, parts: _Parts
+    f: PreparedFrame, b: PreparedFrame, s: RetainedInputSnapshot
 ) -> None:
-    """Index ``b``, ``s`` and ``parts`` by weak refs with cleanup callbacks."""
+    """Index the baseline and snapshot by weak refs with cleanup callbacks."""
     fid, bid = id(f), id(f.base)
 
     def _on_frame_dead(ref: _Ref[PreparedFrame]) -> None:
-        if (cf := _ISSUED_BY_FRAME_ID.get(fid)) is not None and cf[0] is ref:
-            del _ISSUED_BY_FRAME_ID[fid]
-        cb = _ISSUED_BY_BASE_ID.get(bid)
+        frames = cast("dict[int, _FrameEntry] | None", _ISSUED_BY_FRAME_ID)
+        bases = cast("dict[int, _BaseEntry] | None", _ISSUED_BY_BASE_ID)
+        if frames is None or bases is None:
+            return  # interpreter shutdown: the module globals are already cleared
+        if (cf := frames.get(fid)) is not None and cf[0] is ref:
+            del frames[fid]
+        cb = bases.get(bid)
         if cb is not None and cb[1] is ref and cb[0]() is None:
-            del _ISSUED_BY_BASE_ID[bid]
+            del bases[bid]
 
     def _on_base_dead(ref: _Ref[SampleBase]) -> None:
-        if (cb := _ISSUED_BY_BASE_ID.get(bid)) is not None and cb[0] is ref:
-            del _ISSUED_BY_BASE_ID[bid]
+        bases = cast("dict[int, _BaseEntry] | None", _ISSUED_BY_BASE_ID)
+        if bases is None:
+            return  # interpreter shutdown
+        if (cb := bases.get(bid)) is not None and cb[0] is ref:
+            del bases[bid]
 
     f_ref = weakref.ref(f, _on_frame_dead)
     b_ref = weakref.ref(f.base, _on_base_dead)
-    _ISSUED_BY_FRAME_ID[fid] = (f_ref, b, s, parts)
-    _ISSUED_BY_BASE_ID[bid] = (b_ref, f_ref, b, s, parts)
+    _ISSUED_BY_FRAME_ID[fid] = (f_ref, b, s)
+    _ISSUED_BY_BASE_ID[bid] = (b_ref, f_ref, b, s)
 
 
 def _same_model_frame(f_a: ModelFrame, f_b: ModelFrame) -> bool:
@@ -242,21 +232,19 @@ def _frames_match(frame: PreparedFrame, baseline: PreparedFrame) -> bool:
     )
 
 
-def _check_frame_matches_baseline(frame: PreparedFrame, baseline: _Baseline) -> None:
+def _check_frame_matches_baseline(
+    frame: PreparedFrame, baseline: PreparedFrame
+) -> None:
     """Validate that ``frame`` has not been mutated relative to ``baseline``.
 
-    A ``PreparedFrame`` baseline is compared part by part (:func:`_frames_match`); a
-    :class:`PrimitiveCapture` baseline re-encodes the live ``frame`` and requires the
-    identical capture (:meth:`PrimitiveCapture.check_frame`).  Both then verify the
-    live frame's own consistency.
+    The ``PreparedFrame`` baseline is compared part by part (:func:`_frames_match`);
+    then the live frame's own consistency is verified.
     """
     if type(frame) is not PreparedFrame:
         raise TypeError("frame and baseline must be concrete PreparedFrame instances")
-    if type(baseline) is PrimitiveCapture:
-        baseline.check_frame(frame)
-    elif type(baseline) is not PreparedFrame:
+    if type(baseline) is not PreparedFrame:
         raise TypeError("frame and baseline must be concrete PreparedFrame instances")
-    elif not _frames_match(frame, baseline):
+    if not _frames_match(frame, baseline):
         raise ValueError(
             f"PreparedFrame contents do not match issued baseline ({UNBOUND})"
         )
@@ -284,19 +272,14 @@ def authenticate_unscoped_sample(sample: FESample) -> None:
     rec = _ISSUED_BY_BASE_ID.get(id(sample.base))
     if rec is None or rec[0]() is not sample.base:
         return
-    baseline, parts = rec[2], rec[4]
+    baseline = rec[2]
     if (frame := rec[1]()) is not None:
         _check_frame_matches_baseline(frame, baseline)
         check_prepared_matches_sample(frame, sample)
-    elif type(baseline) is PrimitiveCapture:
-        if not baseline.matches_base(sample.base):
-            raise ValueError(f"SampleBase does not match issued baseline ({UNBOUND})")
-        assert parts is not None
-        parts.check_sample(sample)
-    elif not _same_sample_base(sample.base, cast("PreparedFrame", baseline).base):
+    elif not _same_sample_base(sample.base, baseline.base):
         raise ValueError(f"SampleBase does not match issued baseline ({UNBOUND})")
     else:
-        check_prepared_matches_sample(cast("PreparedFrame", baseline), sample)
+        check_prepared_matches_sample(baseline, sample)
 
 
 @dataclass(frozen=True)
@@ -313,31 +296,8 @@ class _OwnedOperation:
 class PerFitPreparationContext:
     """Reusable preparation context isolating template storage from per-fit frames.
 
-    ``snapshot_route`` records which route serves this context.  ``"general"`` (the
-    default): the owned template ``_template`` is copied for every issued frame and
-    for the input snapshot, every issued frame has a detached baseline, and every
-    authentication compares the live frame in full against it.  ``"primitive"``
-    (requested with ``primitive_snapshot=True`` and
-    granted only to an eligible frame): the original is validated afresh and captured
-    once into the immutable ``_capture``
-    (:class:`~powermean.results.primitive_snapshot.PrimitiveCapture`, owned bytes,
-    tuples and plain scalars; ``_template`` is ``None``); the parts of the capture
-    that internal consumers read are materialized once into ``_parts``
-    (:class:`~powermean.results.primitive_parts.PrimitiveParts`, read-only views of
-    the capture's bytes and plain tuples, shared by this context, its input snapshot
-    and the registry of its issued frames, never handed outward); every issued frame
-    is a fresh detached materialization of the capture (the first one the
-    materialization that proved the capture exact, ``_spare``); the capture is the
-    evidence of every issued frame; every authentication validates the live sample it
-    presents against ``_parts`` afresh, and the metadata consumer reads the base,
-    labels and dependence of ``_parts`` (:meth:`_materialized_metadata`), never the
-    live original graph and never a rebuilt frame.  ``snapshot_reason`` is the
-    eligibility text when a primitive request was served by the general route.
-
-    Ordinary passive preparation instead owns one private template. Each public
-    reuse makes an isolated operation from that owned state, without comparing
-    unexposed implementation records to prove our own construction again. Public
-    input normalization and the foreign/generic route keep their original checks.
+    The reusable context holds an owned template and tracks the frames it issues.
+    A private numeric fit uses its own operation, frame and snapshot maps.
     """
 
     input_key: InputKey
@@ -346,12 +306,7 @@ class PerFitPreparationContext:
     hac_request: HacRequest | None
     conley_request: ConleyRequest | None
     input_snapshot: RetainedInputSnapshot
-    snapshot_route: str
-    snapshot_reason: str | None
-    _template: PreparedFrame | None
-    _capture: PrimitiveCapture | None
-    _parts: PrimitiveParts | None
-    _spare: list[PreparedFrame]
+    _template: PreparedFrame
     _admitted_frames: list[PreparedFrame]
     _issued_frames: list[_IssuedFitFrame]
     _passive_template: PreparedFrame | None
@@ -367,7 +322,6 @@ class PerFitPreparationContext:
         cluster_request: ClusterRequest | None = None,
         hac_request: HacRequest | None = None,
         conley_request: ConleyRequest | None = None,
-        primitive_snapshot: bool = False,
         clean_fit: bool = False,
     ) -> None:
         """Store an owned template ``PreparedFrame`` and track derived fit frames.
@@ -375,46 +329,22 @@ class PerFitPreparationContext:
         ``clean_fit`` permits a single owned boundary capture for passive inputs.
         Each public fit then creates a separate operation with its own working
         records and construction maps; no public preparation is marked trusted.
-        Foreign inputs keep the ordered general route. ``primitive_snapshot``
-        requests the separate explicit primitive route (class docstring); it is
-        never taken implicitly.  The original is validated afresh first; a request
-        that the frame is not eligible for, or whose exact materialization does not
-        match the original under the accepted comparison, is served by the general
-        route with the reason recorded.
+        Foreign inputs keep the ordered general route.  The original is validated
+        afresh first.
         """
         if type(prepared) is not PreparedFrame:
             raise TypeError("prepared must be a PreparedFrame")
         _check_prepared_frame_and_provenance(prepared)
-        clean = clean_fit and not primitive_snapshot and passive_preparation(prepared)
-        route, reason = GENERAL, None
-        capture: PrimitiveCapture | None = None
-        parts: PrimitiveParts | None = None
-        spare: list[PreparedFrame] = []
-        if primitive_snapshot:
-            captured = PrimitiveCapture.capture(prepared)
-            if isinstance(captured, str):
-                reason = captured
-            elif _frames_match(prepared, captured[1]):
-                capture, detached = captured
-                # The materialization that proved the capture exact is held nowhere
-                # else: it is the first fit frame this context issues.  The parts the
-                # consumers read are materialized once more, of their own, so that no
-                # issued frame shares an object with them.
-                spare.append(detached)
-                parts = PrimitiveParts.of(capture)
-                route = PRIMITIVE
-            else:
-                reason = "primitive materialization does not match the original"
-        template: PreparedFrame | None = None
-        dependence: DependenceProvenance | None
-        if parts is not None:
-            in_snap = RetainedInputSnapshot._from_parts(parts)
-            dependence = parts.dependence
-        else:
-            template = own_prepared_once(prepared) if clean else _owned_prepared_frame(prepared)
-            in_snap = (RetainedInputSnapshot._from_owned_prepared(template) if clean
-                       else RetainedInputSnapshot.from_prepared(template))
-            dependence = template.dependence
+        clean = clean_fit and passive_preparation(prepared)
+        template = (
+            own_prepared_once(prepared) if clean else _owned_prepared_frame(prepared)
+        )
+        in_snap = (
+            RetainedInputSnapshot._from_owned_prepared(template)
+            if clean
+            else RetainedInputSnapshot.from_prepared(template)
+        )
+        dependence = template.dependence
         resolved_used = (
             dependence.used
             if used_dependence is None and dependence is not None
@@ -426,12 +356,7 @@ class PerFitPreparationContext:
         object.__setattr__(self, "hac_request", hac_request)
         object.__setattr__(self, "conley_request", conley_request)
         object.__setattr__(self, "input_snapshot", in_snap)
-        object.__setattr__(self, "snapshot_route", route)
-        object.__setattr__(self, "snapshot_reason", reason)
         object.__setattr__(self, "_template", template)
-        object.__setattr__(self, "_capture", capture)
-        object.__setattr__(self, "_parts", parts)
-        object.__setattr__(self, "_spare", spare)
         object.__setattr__(self, "_admitted_frames", [])
         object.__setattr__(self, "_issued_frames", [])
         object.__setattr__(self, "_passive_template", template if clean else None)
@@ -440,21 +365,23 @@ class PerFitPreparationContext:
         object.__setattr__(self, "_normal_origin", None)
         if clean:
             # One detached boundary capture, not a copy for each registry entry.
-            assert template is not None
             entry = _IssuedFitFrame(prepared, template, in_snap)
             self._admitted_frames.append(prepared)
             self._issued_frames.append(entry)
-            _register_weak_evidence(prepared, template, in_snap, None)
+            _register_weak_evidence(prepared, template, in_snap)
         else:
             self._register_issued_frame(prepared, snapshot=in_snap)
-            if template is not None:
-                self._register_issued_frame(template, snapshot=in_snap)
+            self._register_issued_frame(template, snapshot=in_snap)
 
     @classmethod
     def _from_normalized(
-        cls, prepared: PreparedFrame, *, used_dependence: UsedDependence,
+        cls,
+        prepared: PreparedFrame,
+        *,
+        used_dependence: UsedDependence,
         cluster_request: ClusterRequest | None,
         single_fit: bool = False,
+        deferred_retained: bool = False,
     ) -> PerFitPreparationContext | None:
         """Own one fresh canonical producer; do not replay a second private graph.
 
@@ -463,33 +390,51 @@ class PerFitPreparationContext:
         Direct/foreign constructors retain their original comparisons and copies.
         A single_fit producer is never exposed as a reusable public preparation:
         eligible rows transfer into the existing operation without a second frame.
+        deferred_retained is an unstored instruction from that producer only;
+        actual deferred records are completed only if their consumer declines.
         """
         if not normalized_numeric_inputs(prepared):
+            if single_fit and deferred_retained:
+                _materialize_retained(prepared)
             return None
         transferred = single_fit_frame(prepared) if single_fit else None
+        if transferred is None and single_fit and deferred_retained:
+            # own_prepared_once eagerly copies provenance, but copies only the
+            # metadata keys already present. Complete BOTH before it captures.
+            _materialize_retained(prepared)
         template = own_prepared_once(prepared) if transferred is None else transferred
         snapshot = RetainedInputSnapshot._from_owned_prepared(template)
         operation = (
-            None if transferred is None
+            None
+            if transferred is None
             else _OwnedOperation(template, snapshot, _AdmissionMaps())
         )
         result = object.__new__(cls)
-        entries = [_IssuedFitFrame(prepared, template, snapshot),
-                   _IssuedFitFrame(template, template, snapshot)]
+        entries = [
+            _IssuedFitFrame(prepared, template, snapshot),
+            _IssuedFitFrame(template, template, snapshot),
+        ]
         for name, value in (
-            ("input_key", snapshot.key), ("used_dependence", used_dependence),
-            ("cluster_request", cluster_request), ("hac_request", None),
-            ("conley_request", None), ("input_snapshot", snapshot),
-            ("snapshot_route", GENERAL), ("snapshot_reason", None),
-            ("_template", template), ("_capture", None), ("_parts", None),
-            ("_spare", []), ("_admitted_frames", [prepared, template]),
-            ("_issued_frames", entries), ("_passive_template", None),
+            ("input_key", snapshot.key),
+            ("used_dependence", used_dependence),
+            ("cluster_request", cluster_request),
+            ("hac_request", None),
+            ("conley_request", None),
+            ("input_snapshot", snapshot),
+            ("_template", template),
+            ("_admitted_frames", [prepared, template]),
+            ("_issued_frames", entries),
+            ("_passive_template", None),
             ("_operation", operation),
             ("_normal_template", template if operation is None else None),
             ("_normal_origin", snapshot),
         ):
             object.__setattr__(result, name, value)
-        _register_weak_evidence(prepared, template, snapshot, None)
+        if transferred is None:
+            # A transferred template shares ``prepared.base``: registered as the
+            # baseline it would keep that base, and so its own entry, alive for good.
+            # The transferred frame is never handed out, so nothing can present it.
+            _register_weak_evidence(prepared, template, snapshot)
         return result
 
     def _after_numeric_admission(
@@ -502,29 +447,40 @@ class PerFitPreparationContext:
         unchanged. No passive eligibility result is changed or inferred here.
         """
         previous = self._operation
-        if (type(previous) is _OwnedOperation and previous.numeric is None
-                and previous.frame is frame and previous.input_snapshot is snapshot):
+        if (
+            type(previous) is _OwnedOperation
+            and previous.numeric is None
+            and previous.frame is frame
+            and previous.input_snapshot is snapshot
+        ):
             # This is the SAME unexposed operation that admitted the sample and
             # populated these maps, not a new owner of a public/foreign graph.
-            object.__setattr__(self, "_operation",
-                               _OwnedOperation(frame, snapshot, previous.maps, numeric))
+            object.__setattr__(
+                self,
+                "_operation",
+                _OwnedOperation(frame, snapshot, previous.maps, numeric),
+            )
             # Earlier private headers can share this base. Retain the actual
             # issued fit frame, as the original fresh-context composition did.
             object.__setattr__(self, "_admitted_frames", [frame])
-            object.__setattr__(self, "_issued_frames",
-                               [_IssuedFitFrame(frame, frame, snapshot)])
+            object.__setattr__(
+                self, "_issued_frames", [_IssuedFitFrame(frame, frame, snapshot)]
+            )
             return self
         operation = _OwnedOperation(frame, snapshot, _AdmissionMaps(), numeric)
         result = object.__new__(PerFitPreparationContext)
         for name in self.__dataclass_fields__:
             object.__setattr__(result, name, getattr(self, name))
         for name, value in (
-            ("input_key", snapshot.key), ("input_snapshot", snapshot),
-            ("_template", frame), ("_capture", None), ("_parts", None),
-            ("_spare", []), ("_admitted_frames", [frame]),
+            ("input_key", snapshot.key),
+            ("input_snapshot", snapshot),
+            ("_template", frame),
+            ("_admitted_frames", [frame]),
             ("_issued_frames", [_IssuedFitFrame(frame, frame, snapshot)]),
-            ("_passive_template", None), ("_operation", operation),
-            ("_normal_template", None), ("_normal_origin", self._normal_origin),
+            ("_passive_template", None),
+            ("_operation", operation),
+            ("_normal_template", None),
+            ("_normal_origin", self._normal_origin),
         ):
             object.__setattr__(result, name, value)
         return result
@@ -542,20 +498,28 @@ class PerFitPreparationContext:
         template = self._passive_template if normal is None else normal
         if template is None:
             return self
-        frame = own_prepared_once(template) if normal is None else normalized_fit_frame(template)
+        frame = (
+            own_prepared_once(template)
+            if normal is None
+            else normalized_fit_frame(template)
+        )
         snapshot = RetainedInputSnapshot._from_owned_prepared(frame, key=self.input_key)
         operation = _OwnedOperation(frame, snapshot, _AdmissionMaps())
         ctx = object.__new__(PerFitPreparationContext)
         for name, value in (
-            ("input_key", self.input_key), ("used_dependence", self.used_dependence),
-            ("cluster_request", self.cluster_request), ("hac_request", self.hac_request),
-            ("conley_request", self.conley_request), ("input_snapshot", snapshot),
-            ("snapshot_route", GENERAL), ("snapshot_reason", None),
-            ("_template", frame), ("_capture", None), ("_parts", None),
-            ("_spare", []), ("_admitted_frames", [frame]),
+            ("input_key", self.input_key),
+            ("used_dependence", self.used_dependence),
+            ("cluster_request", self.cluster_request),
+            ("hac_request", self.hac_request),
+            ("conley_request", self.conley_request),
+            ("input_snapshot", snapshot),
+            ("_template", frame),
+            ("_admitted_frames", [frame]),
             ("_issued_frames", [_IssuedFitFrame(frame, frame, snapshot)]),
-            ("_passive_template", None), ("_operation", operation),
-            ("_normal_template", None), ("_normal_origin", self._normal_origin),
+            ("_passive_template", None),
+            ("_operation", operation),
+            ("_normal_template", None),
+            ("_normal_origin", self._normal_origin),
         ):
             object.__setattr__(ctx, name, value)
         return ctx
@@ -563,7 +527,11 @@ class PerFitPreparationContext:
     def release_fit_state(self) -> None:
         """Release temporary construction anchors even when a fit raises."""
         if self._operation is not None:
-            self._operation.maps.clear_anchors()
+            maps = self._operation.maps
+            # Lazy outcomes keep their maps for diagnostic expansion. Keeping
+            # them in the completed fit's memo would create a reference cycle.
+            maps.outcome_memo.clear()
+            maps.clear_anchors()
 
     def _register_issued_frame(
         self,
@@ -571,21 +539,11 @@ class PerFitPreparationContext:
         *,
         snapshot: RetainedInputSnapshot | None = None,
     ) -> _IssuedFitFrame:
-        """Record strong references and the comparison evidence for ``frame``.
-
-        General route: a detached deep copy of ``frame`` is its baseline.  Primitive
-        route: the immutable capture is the evidence of every issued frame (each is a
-        materialization of the capture, or the validated original it was captured
-        from), and the one input snapshot and the once-materialized parts are shared.
-        """
-        baseline: _Baseline
-        if self._capture is not None:
-            baseline, snap = self._capture, self.input_snapshot
-        else:
-            baseline = _owned_prepared_frame(frame)
-            snap = snapshot or RetainedInputSnapshot(
-                baseline.base, key=self.input_key, prepared=baseline
-            )
+        """Register the frame with a detached baseline and the shared snapshot."""
+        baseline = _owned_prepared_frame(frame)
+        snap = snapshot or RetainedInputSnapshot(
+            baseline.base, key=self.input_key, prepared=baseline
+        )
         entry = _IssuedFitFrame(frame=frame, baseline=baseline, input_snapshot=snap)
         self._admitted_frames.append(frame)
         self._issued_frames.append(entry)
@@ -593,72 +551,25 @@ class PerFitPreparationContext:
             # The module registries hold the evidence strongly until the frame dies;
             # the template as its own baseline would never die.  It is never handed
             # out, so no unscoped entry can present it: it lives with this context.
-            _register_weak_evidence(frame, baseline, snap, self._parts)
+            _register_weak_evidence(frame, baseline, snap)
         return entry
 
     def _owned_template(self) -> PreparedFrame:
-        """The owned template of the general route."""
-        template = self._template
-        assert template is not None
-        return template
-
-    def _materialized(self) -> PreparedFrame:
-        """A fresh detached ``PreparedFrame`` materialized from the capture."""
-        capture = self._capture
-        assert capture is not None
-        return capture.prepared_frame()
-
-    def _materialized_metadata(self) -> MetadataParts:
-        """The base, labels and dependence of the once-materialized parts.
-
-        What the metadata consumer of the primitive route reads, its own (class
-        docstring): the three parts that binding and checking dependence metadata
-        read, and nothing else, materialized once with the context's parts, so no
-        model frame, effect columns, ``PreparedFrame`` or second copy of those parts
-        is rebuilt for it (:attr:`PrimitiveParts.metadata`).  The general route's
-        consumer keeps its original frame and reads its parts lazily, in validation
-        order, so it does not copy custom labels before earlier refusals.
-        """
-        parts = self._parts
-        assert parts is not None
-        return parts.metadata
+        """The private template of this context."""
+        return self._template
 
     @property
     def template_frame(self) -> PreparedFrame:
-        """Return a fresh deeply owned copy of the template ``PreparedFrame``.
-
-        Primitive route: a fresh detached materialization of the capture.
-        """
-        if self._capture is not None:
-            return self._materialized()
+        """Return a fresh deeply owned copy of the template frame."""
         return _owned_prepared_frame(self._owned_template())
 
     def new_fit_frame(self) -> PreparedFrame:
-        """Create and register an isolated ``PreparedFrame`` for one fit.
-
-        Primitive route: one detached materialization of the immutable capture (the
-        first fit the verified materialization the capture was proved exact with,
-        every later fit a fresh one), registered with the capture as its evidence; no
-        baseline copy is made.
-        """
+        """Create and register an isolated frame for one fit."""
         if self._operation is not None:
             return self._operation.frame
-        if self._capture is None:
-            frame = _owned_prepared_frame(self._owned_template())
-        else:
-            frame = self._spare.pop() if self._spare else self._materialized()
+        frame = _owned_prepared_frame(self._owned_template())
         self._register_issued_frame(frame)
         return frame
-
-    @contextmanager
-    def _primitive_entry(self) -> Iterator[None]:
-        """Mark one external entry (``admit_interface_graph``); holds no state.
-
-        Every authentication within the entry that presents a live sample validates
-        that sample afresh against the capture (:meth:`authenticate_frame`): a prior
-        success within the entry is not evidence that the sample is unchanged.
-        """
-        yield
 
     def owns_prepared(self, other: object) -> bool:
         """Return True if ``other`` is the template or a registered fit frame."""
@@ -679,23 +590,15 @@ class PerFitPreparationContext:
 
         An unexposed owned operation consumes the records made by its own sample
         coordinator, with no repeated implementation-verification scans. It is
-        never the state of a reusable public preparation. General route: the live
-        frame is compared in full against its detached
-        baseline, then ``sample`` against the live frame.  Primitive route: the frame
-        is identified as issued, and ``sample`` is validated afresh, on every call,
-        against the once-materialized parts of the immutable capture that consumers
-        read (:meth:`PrimitiveParts.check_sample`); the live frame's contents are not
-        consumed and so are not re-observed.
+        never the state of a reusable public preparation. For reusable contexts the
+        live frame is compared in full against its detached baseline, then the sample
+        against the live frame.
         """
         for entry in self._issued_frames:
             if entry.frame is frame:
                 if self._operation is not None:
                     if sample is not None and sample.base is not entry.frame.base:
                         raise ValueError(UNBOUND)
-                    return entry.input_snapshot
-                if self._parts is not None:
-                    if sample is not None:
-                        self._parts.check_sample(sample)
                     return entry.input_snapshot
                 _check_frame_matches_baseline(entry.frame, entry.baseline)
                 if sample is not None:

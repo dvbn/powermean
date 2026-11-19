@@ -1,6 +1,9 @@
 """The fitted-index state of a Newton attempt: full rows, provider view, trials, seams.
 
-Internal module: the explicitly selected organization ``absorbed='index'``,
+``design/02_computation.md``, Sections 4, 5.1, 5.2 and 5.7; the M1.12 contract
+(``plan/evidence/M1.12_contract.txt``: the scope, Sections 2 to 4; the mechanics,
+Sections 2 to 4; the engineering and mathematical reviews); decisions D10, D24, D50 and
+D51.  Task M1.12, private: the explicitly selected organization ``absorbed='index'``,
 for the power family with ``tau`` in ``[1, 2]`` and NB2.  This module imports the
 adapter, never the carried files: the adapter hands it the provider's carried
 ``LinearModelLoss`` and the carried ``sandwich_dot``
@@ -32,7 +35,7 @@ calculation and creates no slope state; accepting it clears the old seed.  The f
 solve, the recovery and the final work stay cold; without slopes there is no slope
 state.
 
-The full score.  ``v = (-a r) / A`` is formed row by row in the
+The full score (mechanics, Section 2).  ``v = (-a r) / A`` is formed row by row in the
 carried loss's order, and
 
     G = (X'v, group_sums(v) of every original block, every level in code order)
@@ -60,7 +63,7 @@ failure staying charged; the inner tolerance follows
 :func:`~powermean.solve.profiled_loss.next_tolerance` with ``s = max |G|`` of each
 accepted point, constant within a direction and its search.
 
-The forcing factor of the full-RHS solve.  The attempt
+The forcing factor of the full-RHS solve (correction A, decision D74).  The attempt
 keeps one history, the last issued pair ``(s, eta)`` and the accepted origin it was
 issued at.  Each direction, before its inner work, issues at a NEW accepted origin:
 ``s = max |G|`` of the origin's full score already formed, ``eta = 1e-3`` for the
@@ -77,20 +80,20 @@ stop.  Every initializer (profile or local start), slope absorption, full-RHS so
 completed direction is logged (:class:`~powermean.solve.absorbed_direction.IndexLog`),
 refused calls included.
 
-The guard of the full-RHS exception.  The rows records carry the
+The guard of the full-RHS exception (correction B).  The rows records carry the
 raw-weight total ``A = np.sum(a)`` that their own native arithmetic forms for ``v =
 (-a r) / A`` (:class:`OriginRows`, :class:`FinalRows`), and the direction hands that
 same value to the full-RHS call: no second sum, never ``sum(C)``, no new row evaluation
 or admission.  The automatic start is the context's
 (:meth:`~powermean.solve.absorbed_direction.IndexContext.initialized`): a profile, or in
-its local domain the local start; either returns the opening point.
+its local domain the local start of decision D75; either returns the opening point.
 """
 
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Protocol, Unpack, cast
+from typing import Protocol, TypedDict, Unpack, cast
 
 import numpy as np
 
@@ -104,7 +107,7 @@ from powermean.fe.profile_arithmetic import (
 )
 from powermean.fe.reductions import immutable_array
 from powermean.model.rows import evaluate_criterion, evaluate_rows
-from powermean.model.variance import FloatArray, PowerVariance
+from powermean.model.variance import FloatArray, PowerVariance, score_unit
 from powermean.solve.absorbed_direction import (
     CallSite,
     Direction,
@@ -149,6 +152,10 @@ from powermean.systems.profiled import (
 ROWS = "the full rows are not representable in float64"
 _ACCEPTED_CRITERION = evaluate_criterion
 _ACCEPTED_ROWS = evaluate_rows
+
+
+class _IndexArgument(TypedDict, total=False):
+    index: FloatArray
 
 
 # ---------------------------------------------------------------------- records
@@ -230,9 +237,7 @@ def trial_rows(
     problem = context.problem
     point = context.point
     initial = (
-        _point_initial(point, problem, problem.z)
-        if type(point) is PointLoss
-        else None
+        _point_initial(point, problem, problem.z) if type(point) is PointLoss else None
     )
     if initial is not None:
         point.budget.charge("loss_gradient")
@@ -282,9 +287,7 @@ def final_rows(
     ``FloatingPointError`` where a value is not representable (nothing is clipped).
     """
     initial: ProfileProblem | None = (
-        getattr(problem, "_initial", None)
-        if type(problem) is ProfiledProblem
-        else None
+        getattr(problem, "_initial", None) if type(problem) is ProfiledProblem else None
     )
     if (
         initial is not None
@@ -529,6 +532,9 @@ class IndexEvaluator:
         variance = context.problem.variance
         self.gpml = type(variance) is PowerVariance and variance.tau == 2
         self.tolerance = context.controls.absorb_tol_start
+        self.unit = score_unit(
+            context.problem.z, context.problem.weights, context.problem.variance
+        )
         self.score: float | None = None
         self.issued: tuple[float, float] | None = None
         self.issued_origin: Bundle | None = None
@@ -629,8 +635,9 @@ class IndexEvaluator:
         produced: AbsorptionResult | None = None
         if self.factorized:
             seed, site = self.slope_seed, self._site()
-            bound = (
-                {} if self.context.problem.__dict__.get("_reduced_execution") is None
+            bound: _IndexArgument = (
+                {}
+                if self.context.problem.__dict__.get("_reduced_execution") is None
                 else {"index": self._accepted().index}
             )
             if seed is None:
@@ -657,7 +664,7 @@ class IndexEvaluator:
         return absorbed
 
     def _issue(self, rows: OriginRows) -> float:
-        """The forcing factor of the accepted origin, issued once there.
+        """The forcing factor of the accepted origin, issued once there (D74).
 
         At an origin other than the last issued one: ``s = max |G|`` of ``rows``, and
         ``1e-3`` for the attempt's first direction or :func:`next_forcing` of the last
@@ -782,7 +789,7 @@ class IndexEvaluator:
     def converged(self, solver: Solver) -> bool:
         """``max |G| <= tol`` at the accepted trial, then ``0.5 decrement2 <= tol``.
 
-        The two formulas of scikit-learn's test at its place, on the full score and on
+        The two formulas of the source's test at its place, on the full score and on
         the unhalved direction's decrement at its origin.
         """
         if not np.max(np.abs(self._view().gradient)) <= solver.tol:
@@ -831,7 +838,7 @@ class IndexEvaluator:
         controls = self.context.controls
         self.tolerance = next_tolerance(
             self.tolerance,
-            score,
+            score / self.unit,
             start=controls.absorb_tol_start,
             final=controls.absorb_tol_final,
         )
@@ -861,7 +868,9 @@ class IndexEvaluator:
         converged: bool,
     ) -> Alarm | None:
         """ZC at ``index`` and ``chord`` coalesced into one kept alarm, or ``None``."""
-        zero = zero_row_alarm(self.context.problem.z, index, self.context.positions)
+        zero = None
+        if where != "accepted" or converged:  # not at an iterate that is no root
+            zero = zero_row_alarm(self.context.problem.z, index, self.context.positions)
         if zero is None and chord is None:
             return None
         self.alarm = Alarm(where, self.attempt, self.steps, converged, zero, chord)

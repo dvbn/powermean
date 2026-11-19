@@ -1,4 +1,13 @@
-"""The eigenvalue adjustment of an indefinite signed multiway covariance.
+"""Decision D4: the eigenvalue adjustment of an indefinite signed multiway covariance.
+
+``design/04_inference_and_effects.md``, Sections 2.1, 2.1.1 to 2.1.4 and 3 (the four
+rules, the two native sequences, the frame map and its records, as amended by the
+author's third-round answer of 17 October 2026); ``DESIGN.md``, Section 8;
+``plan/evidence/M1_contract.txt``, Section 3.3;
+``plan/evidence/M1_validation_plan.txt``, MW-2, its mutants and amendment G (G1,
+G2(g)); ``brief/G_NATIVE_SEQUENCE_FACTS.txt``
+and ``brief/NATIVE_PSD_FACTS.txt`` (the pinned sources, read, never copied); decisions
+D4, D49, D54 and D65.  Task M1.17, private.
 
 The operation is separate from every covariance kernel: it takes the reported, factor
 scaled covariance of a signed multiway request with two or more dimensions, the frame
@@ -8,9 +17,9 @@ it replaced and the diagnostics of the final matrix.  It is never applied to a
 component, to a summand before the signed sum, to a DDG estimate, to HC, HAC or Conley,
 or inside an objective, and the ``"none"`` preset and ``"psd": "none"`` leave the
 estimate raw.  Neither the scales nor the sequence has a default: the caller declares
-both.
+both (G4), and a test of an exact witness declares ``T = 1`` explicitly.
 
-The frame.  The native programs form the covariance on standardized
+The frame (Section 2.1.2).  The native programs form the covariance on standardized
 columns and undo the standardization afterwards; the equivalent operation on the
 package's factor-scaled reported covariance ``V_q`` is a diagonal congruence,
 
@@ -27,12 +36,12 @@ deviation without centering the column itself, floored at ``1e-3`` for every col
 zero and near-zero columns included, a missing computed scale (a negative rounded
 variance) refused as the programs refuse it.  The frame map and its inverse are the
 entrywise product and quotient by ``s_j s_k``, the scale product formed once per pair
-so that the images are exactly symmetric, range-safe: an entry that is not
+so that the images are exactly symmetric, range-safe (D54): an entry that is not
 representable, or a nonzero entry that would become zero, raises
 ``FloatingPointError`` and nothing is replaced.  With every scale equal to one both maps
-are the identity bit for bit.
+are the identity bit for bit, so the exact witnesses of MW-2 are unchanged.
 
-The sequences, on the frame matrix:
+The sequences (Section 2.1.1), on the frame matrix:
 
 1. ``"modern"`` (``reghdfe`` 6.13.1; the ``"regression"`` preset, and ``"none"`` with an
    explicit ``"psd": "cgm"`` or a custom record with ``psd="cgm"``): the frame matrix is
@@ -43,33 +52,46 @@ The sequences, on the frame matrix:
    coefficients, backed up before the clip, is clipped on its own by the same rule (if
    its own smallest eigenvalue is negative, else kept raw) and written over that block.
    No second full repair follows, so the final matrix need not be positive
-   semidefinite.  Witness (exact): the raw ``[[-1, 2], [2, -1]]`` with the
+   semidefinite.  Witness
+   (exact; ``brief/NATIVE_PSD_FACTS.txt``): the raw ``[[-1, 2], [2, -1]]`` with the
    intercept first and ``T = 1`` clips to all entries ``1/2``, its raw slope block
    ``[-1]`` becomes ``0``, and the final ``[[1/2, 1/2], [1/2, 0]]`` has determinant
    ``-1/4``.
 2. ``"legacy"`` (``ppmlhdfe`` 2.3.4 through its ``reghdfe5`` callee; the ``"stata"``
    preset): the same clip of the full frame matrix and no block rule.  For a fit whose
    reported coefficients hold no intercept (an absorbed fit) the frame matrix holds,
-   beside the reported coefficients, the private reporting constant
+   beside the reported coefficients, the private reporting constant of Section 2.1.3
    (``constant``: its raw cross-covariances with the reported coefficients and its raw
    variance, in reported coordinates, factor applied once, scale one), because the
    program forces one and its clip acts on the full matrix; the reported result is the
    inverse frame map restricted to the reported coefficients, and the private row is
    retained in the record, never reported.
 
+3. ``"fixest"`` (``fixest`` 0.13.2, ``vcov.fixest`` with its default ``vcov_fix =
+   TRUE``, ``R/VCOV.R``, and ``mat_posdef_fix``, ``R/miscfuns.R``; the explicit
+   ``"psd": "fixest"`` of a request or a custom record with ``psd="fixest"``): on the
+   reported matrix itself, with no frame (``T = 1``), no private constant and no
+   block rule.  ``fixest`` decomposes the symmetric matrix ``V = U diag(w) U'``; if
+   any eigenvalue is below ``1e-12`` (an absolute threshold on the matrix as
+   reported), every eigenvalue below it is replaced by ``1e-12`` and the matrix is
+   rebuilt as ``U diag(max(w, 1e-12)) U'``.  The final matrix is positive definite.
+   Witness: the raw ``[[1, 2], [2, 1]]`` (eigenvalues ``-1`` and ``3``) becomes
+   ``[[(3 + 1e-12) / 2, (3 - 1e-12) / 2], [(3 - 1e-12) / 2, (3 + 1e-12) / 2]]``; the
+   raw ``diag(4, 0)`` becomes ``diag(4, 1e-12)``; ``diag(4, 1e-11)`` is kept raw.
+
 When the adjustment is inactive the reported matrix is the raw one, bit for bit.  A
 diagonal congruence preserves inertia, so the final reported matrix is indefinite
 exactly when the final frame matrix is, and no final diagonal is negative in either
-sequence (each diagonal comes from one projection).  The caller prints the note
-``covariance.psd_adjusted`` whenever the adjustment is active (the clip of the frame
+sequence (each diagonal comes from one projection).  The caller prints the approved
+note ``covariance.psd_adjusted`` whenever the adjustment is active (rule 2 on the frame
 matrix, the private constant included for the legacy sequence) and
 ``covariance.indefinite`` when the final reported matrix is not positive semidefinite;
 neither is issued here.  Diagnostics are recorded truthfully for the FINAL matrices as
 well as the raw and frame ones, with the port's indefiniteness tolerance
 (``eps * n * max |w|``) beside the exact native trigger.  Nothing is floored, no
 threshold is added, no universal positive semidefiniteness is claimed, and a zero
-diagonal that the clipping creates stays zero (a zero standard error, degenerate).
-Whole-stack treatment of stacked fits is not done here.
+diagonal that the clipping creates stays zero (a zero standard error, degenerate under
+D49).  Whole-stack treatment of stacked fits belongs to task M1.30.
 """
 
 from __future__ import annotations
@@ -87,13 +109,15 @@ from powermean.model.variance import FloatArray
 EMPTY: FloatArray = immutable_array(np.zeros(0))
 FLOOR = 1e-3
 """The native floor of every frame scale (``compute_stdevs`` and its legacy twin)."""
-Sequence = Literal["modern", "legacy"]
-SEQUENCES: tuple[Sequence, ...] = ("modern", "legacy")
+Sequence = Literal["modern", "legacy", "fixest"]
+SEQUENCES: tuple[Sequence, ...] = ("modern", "legacy", "fixest")
+FIXEST_TOL = 1e-12
+"""``mat_posdef_fix``'s ``tol`` and the trigger of ``vcov.fixest`` (fixest 0.13.2)."""
 BoolArray = NDArray[np.bool_]
 
 
 def _square(matrix: ArrayLike) -> FloatArray:
-    """A finite real square matrix, as its symmetric part."""
+    """A finite real square matrix, as its symmetric part (D4 rule 2, D54)."""
     values = finite_array(matrix, "covariance")
     if values.ndim != 2 or values.shape[0] != values.shape[1] or not values.size:
         raise ValueError("covariance must be a nonempty square matrix")
@@ -115,10 +139,16 @@ def _intercept(intercept: object, size: int) -> int | None:
 
 
 def _sequence(sequence: object) -> Sequence:
-    """One of the two native sequences, by exact string (no default)."""
+    """One of the three rules, by exact string (no default)."""
     if sequence not in SEQUENCES:
-        raise ValueError("sequence must be 'modern' or 'legacy'")
-    found: Sequence = "modern" if sequence == "modern" else "legacy"
+        raise ValueError("sequence must be 'modern', 'legacy' or 'fixest'")
+    found: Sequence = (
+        "modern"
+        if sequence == "modern"
+        else "legacy"
+        if sequence == "legacy"
+        else "fixest"
+    )
     return found
 
 
@@ -161,14 +191,14 @@ def _outer(scales: FloatArray) -> FloatArray:
 
 
 def _range_safe(found: FloatArray, matrix: FloatArray, name: str) -> FloatArray:
-    """``found`` finite, with no zero made of a nonzero entry."""
+    """``found`` finite, with no zero made of a nonzero entry (D54)."""
     if not np.isfinite(found).all() or np.any((found == 0) & (matrix != 0)):
         raise FloatingPointError(f"{name} is not representable in float64")
     return found
 
 
 def frame_image(matrix: ArrayLike, scales: ArrayLike) -> FloatArray:
-    """``T V T``: the entrywise product ``(s_j s_k) V_jk``.
+    """``T V T``: the entrywise product ``(s_j s_k) V_jk`` (Section 2.1.2).
 
     Parameters
     ----------
@@ -200,7 +230,7 @@ def frame_image(matrix: ArrayLike, scales: ArrayLike) -> FloatArray:
 
 
 def frame_inverse(matrix: ArrayLike, scales: ArrayLike) -> FloatArray:
-    """``T^-1 F T^-1``: the entrywise quotient ``F_jk / (s_j s_k)``.
+    """``T^-1 F T^-1``: the entrywise quotient ``F_jk / (s_j s_k)`` (Section 2.1.2).
 
     The inverse of :func:`frame_image` with the same scales; the same refusals.
     """
@@ -215,7 +245,7 @@ def frame_inverse(matrix: ArrayLike, scales: ArrayLike) -> FloatArray:
 
 @dataclass(frozen=True, eq=False)
 class FrameScales:
-    """The frame scales of a set of reported regressor columns.
+    """The frame scales of a set of reported regressor columns (Section 2.1.2).
 
     Attributes
     ----------
@@ -308,7 +338,7 @@ def clip_negative_eigenvalues(
 
 @dataclass(frozen=True, eq=False)
 class PsdAdjustment:
-    """The record of one eigenvalue adjustment of a reported signed multiway covariance.
+    """The record of one D4 operation on a reported signed multiway covariance.
 
     Attributes
     ----------
@@ -324,8 +354,8 @@ class PsdAdjustment:
         the private constant last.  Retained, never reported.
     intercept : int or None
         The index of the reported intercept, or ``None`` when none is reported.
-    sequence : {"modern", "legacy"}
-        The native sequence applied.
+    sequence : {"modern", "legacy", "fixest"}
+        The native sequence applied, or ``fixest``'s rule.
     scales : array
         The frame scales ``T`` of every frame coordinate, the intercept's or the private
         constant's exactly one.
@@ -336,13 +366,14 @@ class PsdAdjustment:
         The frame matrix ``T V T`` handed to the sequence's operation, the private
         constant included where the legacy sequence requires it.
     active : bool
-        Whether the smallest eigenvalue of the frame matrix was negative, so that the
-        clip rebuilt it.
+        Whether the smallest eigenvalue of the frame matrix was negative (below
+        ``1e-12`` under ``fixest``'s rule), so that the rule rebuilt it.
     eigenvalues : array
         The eigenvalues of the frame matrix, ascending (those of ``raw`` when ``T = 1``
         and no constant enters).
     replaced : array
-        The negative eigenvalues of the frame matrix set to zero; empty when inactive.
+        The negative eigenvalues of the frame matrix set to zero (under ``fixest``'s
+        rule, those below ``1e-12`` raised to it); empty when inactive.
     block_eigenvalues : array or None
         The eigenvalues of the backed-up RAW frame block of the other coefficients when
         the modern block rule ran (an intercept reported, the adjustment active, at
@@ -415,6 +446,27 @@ def _full_raw(
     return symmetric_part(full), np.append(scales, 1.0)
 
 
+def fixest_fix(matrix: FloatArray) -> tuple[FloatArray, FloatArray, FloatArray]:
+    """``fixest``'s rule on one symmetric matrix: the fixed matrix, ``w``, the replaced.
+
+    ``mat_posdef_fix(X, tol = 1e-12)`` of ``fixest`` 0.13.2 as ``vcov.fixest`` calls
+    it: if any eigenvalue is below :data:`FIXEST_TOL`, ``U diag(max(w, tol)) U'``
+    (symmetric part), else the symmetric part unchanged; the eigenvalues ``w`` in
+    ascending order; those below the tolerance, which were raised to it (empty when
+    none).
+    """
+    symmetric = _square(matrix)
+    found, vectors = np.linalg.eigh(symmetric)
+    eigenvalues: FloatArray = np.asarray(found, dtype=np.float64)
+    below = eigenvalues < FIXEST_TOL
+    if not np.any(below):
+        return symmetric, eigenvalues, EMPTY
+    kept = np.where(below, FIXEST_TOL, eigenvalues)
+    with np.errstate(over="raise", invalid="raise", under="ignore"):
+        rebuilt = (vectors * kept) @ vectors.T
+    return symmetric_part(rebuilt), eigenvalues, eigenvalues[below]
+
+
 def _operation(
     frame: FloatArray, sequence: Sequence, index: int | None, size: int
 ) -> tuple[FloatArray, FloatArray, FloatArray, FloatArray | None, FloatArray]:
@@ -423,6 +475,10 @@ def _operation(
     Returns the final frame matrix, the eigenvalues of the frame matrix, those
     replaced, the raw block's eigenvalues (or ``None``) and those replaced.
     """
+    if sequence == "fixest":
+        fixed, eigenvalues, replaced = fixest_fix(frame)
+        final_fixed = fixed if replaced.size else frame
+        return final_fixed, eigenvalues, replaced, None, EMPTY
     clipped, eigenvalues, replaced = clip_negative_eigenvalues(frame)
     block_eigenvalues: FloatArray | None = None
     block_replaced = EMPTY
@@ -459,9 +515,10 @@ def adjust_psd(
         The index of the reported intercept, or ``None`` when none is reported.
     scales : array
         The frame scales of the reported coefficients, one positive finite double
-        each, the intercept's exactly one.
-    sequence : {"modern", "legacy"}
-        The native sequence of the convention in force.
+        each, the intercept's exactly one; ones for the exact witnesses of MW-2.
+    sequence : {"modern", "legacy", "fixest"}
+        The native sequence of the convention in force (Section 2.1.1), or
+        ``fixest``'s rule (module docstring), whose scales are all one.
     constant : array, optional
         For the legacy sequence of a fit without a reported intercept: the private
         constant's raw cross-covariances with the reported coefficients followed by its
@@ -489,6 +546,10 @@ def adjust_psd(
     index = _intercept(intercept, size)
     chosen = _sequence(sequence)
     reported_scales = _scales(scales, size, index)
+    if chosen == "fixest" and not np.all(reported_scales == 1.0):
+        raise ValueError(
+            "fixest's rule acts on the reported matrix: every scale is one"
+        )
     private: FloatArray | None = None
     if constant is not None:
         if chosen != "legacy" or index is not None:
@@ -535,7 +596,7 @@ def adjust_psd(
 
 
 def reported_errors(covariance: FloatArray) -> FloatArray:
-    """``sqrt(V_jj)`` of a matrix already in reported coordinates (no floor).
+    """``sqrt(V_jj)`` of a matrix already in reported coordinates (D49, no floor).
 
     NaN where a variance is negative, zero where it is zero.  The direct map of the
     order scale does not apply to an adjusted matrix: the adjustment acts in the frame
@@ -550,6 +611,7 @@ def reported_errors(covariance: FloatArray) -> FloatArray:
 
 
 __all__ = [
+    "FIXEST_TOL",
     "FLOOR",
     "SEQUENCES",
     "FrameScales",
@@ -558,6 +620,7 @@ __all__ = [
     "adjust_psd",
     "clip_negative_eigenvalues",
     "column_scales",
+    "fixest_fix",
     "frame_image",
     "frame_inverse",
     "reported_errors",

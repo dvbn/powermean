@@ -1,6 +1,6 @@
 """Implicit unit-multiplier tau=2 criterion for the shared Newton attempt.
 
-Ordinary centering gives
+01 Section 5.2 and 03 Sections 3.1--3.3: ordinary centering gives
 S=B't and H=B'diag(t)B at tau=2, t=z exp(-q). The criterion used here is
 sum(t)/n, with gradient -B_id't/n and Hessian B_id'diag(t)B_id/n. The original
 unnormalized cancelled equations remain in systems.cancelled for fresh caller
@@ -8,7 +8,9 @@ assessment; this optimization loss makes no certificate or existence decision.
 
 The accepted row_components kernel supplies t, including its log-scale checks.
 No cancellation row/group equations or ownership machinery are duplicated.
-Curvature is formed one implicit column at a time in the provider's d-by-d buffer.
+Curvature is written into the provider's d-by-d buffer: assembled from the rows
+where ``systems.cancelled.assembled_jacobian`` applies, and otherwise formed one
+implicit column at a time.
 
 Admission covers the complete evaluation, including its earliest raw product.
 Setup's raw helper reserves a loss; search's raw direction reserves its first
@@ -25,10 +27,12 @@ from typing import Literal, NotRequired, TypedDict, Unpack
 import numpy as np
 
 from powermean.fe._cancel_storage import finite_product
+from powermean.fe.cancel import to_sorted
 from powermean.model.variance import FloatArray, PowerVariance
 from powermean.solve.cancelled_operator import CancelledOperator, CancelledProblem
 from powermean.solve.point_loss import Budget, Call
 from powermean.systems._cancel_rows import row_components
+from powermean.systems.cancelled import assembled_jacobian
 
 
 class CancelledCall(TypedDict):
@@ -63,6 +67,19 @@ def _buffer(values: FloatArray, shape: tuple[int, ...]) -> None:
         raise ValueError("provider derivative buffer has the wrong dtype or shape")
     if not values.flags.writeable:
         raise ValueError("provider derivative buffers must be writable")
+
+
+def _column_hessian(
+    operator: CancelledOperator, rows: FloatArray, hess: FloatArray
+) -> None:
+    """Write ``B_id'diag(t)B_id/n`` into ``hess``, one implicit column at a time."""
+    basis = np.zeros(operator.shape[1], dtype=np.float64)
+    for j in range(basis.size):
+        basis[j] = 1.0
+        column = operator.matvec(basis)
+        column *= rows
+        hess[:, j] = finite_product(operator.rmatvec(column) / rows.size)
+        basis[j] = 0.0
 
 
 class CancelledLinearLoss:
@@ -186,13 +203,17 @@ class CancelledLinearLoss:
         rows = self._rows(call)
         with np.errstate(over="raise", invalid="raise"):
             gradient = finite_product(-operator.rmatvec(rows) / rows.size)
-            basis = np.zeros(d, dtype=np.float64)
-            for j in range(d):
-                basis[j] = 1.0
-                column = operator.matvec(basis)
-                column *= rows
-                hess[:, j] = finite_product(operator.rmatvec(column) / rows.size)
-                basis[j] = 0.0
+            assembled = assembled_jacobian(
+                operator.design,
+                to_sorted(operator.design.structure, rows),
+                None,
+                operator.expansion,
+                operator.selected,
+            )
+            if assembled is None:
+                _column_hessian(operator, rows, hess)
+            else:
+                hess[:] = finite_product(assembled / rows.size)
         # Leave the last accepted gradient intact if any Hessian product failed.
         grad[:] = gradient
         return grad, hess, False

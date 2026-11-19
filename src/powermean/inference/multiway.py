@@ -1,9 +1,12 @@
 """Multiway cluster covariances of retained influence rows: two forms, one factor owner.
 
-Internal module: nothing here parses a public keyword or touches the raw port
-:mod:`powermean.inference.vcov`, whose ``cluster_covariance`` forms both multiway
-forms with its own conventions (its internal spelling ``"cgm2"`` is the ``"ddg"`` of
-this package).  This module hands it the influence rows of the active rows
+``design/04_inference_and_effects.md``, Sections 2, 2.1 and 3; ``DESIGN.md``, Section
+8; ``plan/evidence/M1_contract.txt``, rules B4, B5 and B9 and Section 3.3;
+``plan/evidence/M1_validation_plan.txt``, MW-1 and MW-4; decisions D4, D40, D54, D60
+and D65.  Task M1.17, private: nothing here parses a public keyword or touches the
+accepted raw port :mod:`powermean.inference.vcov`, whose ``cluster_covariance`` forms
+both multiway forms with its own conventions (its internal spelling ``"cgm2"`` is the
+``"ddg"`` of the design).  This module hands it the influence rows of the active rows
 and the integer codes of the requested dimensions, with every factor off
 (``correction="none"``), and then applies the convention's factors once, by their one
 owner (:mod:`powermean.inference.ssc`).
@@ -26,23 +29,23 @@ the signed sum collapses to the one-way estimate in exact arithmetic, the DDG su
 it twice) and a dimension nested in another keeps its own component and count.  The
 port numbers the columns ``cluster_0``, ``cluster_1``, ... ; the records here carry the
 requested names by position.  ``G_min`` is the smallest count over the requested
-dimensions, repetitions kept, never an intersection count.
+dimensions, repetitions kept, never an intersection count (rule B5).
 
-Factors.  Under ``cluster_count="min"`` (the ``"stata"`` and
+Factors (Section 3.3).  Under ``cluster_count="min"`` (the ``"stata"`` and
 ``"regression"`` presets) one factor, formed with ``G_min``, multiplies the whole signed
 or DDG sum once: ``q * estimate.covariance``, the composition of
 :func:`powermean.inference.ssc.scaled_covariance`.  Under ``cluster_count="each"`` of a
 custom record every component takes the convention's cluster factor with its own
 cluster count, intersections included (``G_T``, the count of the intersection
 clusters of ``T``), and the signed sum of the scaled components is formed here with its
-symmetric part rounded once.  No factor is applied twice, no component is
+symmetric part rounded once (D54).  No factor is applied twice, no component is
 clipped, and the raw port estimate with its components, eigenvalues and diagnostics is
 kept untouched.  Weights enter the rows once, before this module: analytic and
 probability weights multiply the scores, and frequency rows are literal replicas whose
-cluster total is ``sum_{i in g} f_i r_i x_i`` (the rows are not
+cluster total is ``sum_{i in g} f_i r_i x_i`` (file 04, Section 2.2; the rows are not
 divided by ``sqrt(f)`` for a cluster total).
 
-The eigenvalue adjustment is a separate operation on the reported
+The eigenvalue adjustment of decision D4 is a separate operation on the reported
 covariance (:mod:`powermean.inference.psd`), never applied here, to a component, or to a
 DDG estimate.
 """
@@ -146,7 +149,7 @@ def multiway_estimate(
     ValueError
         Rows that are not a matrix of at least two rows; a dimension that is not one
         nonnegative integer code per row, or with fewer than two clusters; a form
-        outside the two.
+        outside the design's two.
     FloatingPointError
         A source-average row that is not representable.
     """

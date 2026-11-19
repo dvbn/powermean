@@ -1,4 +1,4 @@
-"""Detached coefficient combinations and restriction reports.
+"""Detached coefficient combinations and restriction reports, design/04 Section 6.
 
 Every call consumes one accepted immutable reporting context. Output records own
 only coefficient-sized tuples; arrays, metadata and tables are fresh copies.

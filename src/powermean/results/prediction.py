@@ -1,44 +1,44 @@
 """The fitted conditional power mean, from the owned fitted right-hand side.
 
-``predict(type="power_mean")`` returns the fitted conditional power mean ``exp(X'beta +
-effects)``, the conditional mean of ``Y`` only at ``omega = 1``, and the label says so.
-The index of the log power mean is ``X'beta + offset``, the offset with unit
-coefficient; an exposure ``e`` is the offset ``log e``.
+``DESIGN.md``, Section 4.4 (``predict(type="power_mean")`` returns the fitted
+conditional power mean ``exp(X'beta + effects)``, the conditional mean of ``Y`` only
+at ``omega = 1``, and the label says so); ``design/01_statistical_core.md``, Section
+3.1 (the index of the log power mean is ``X'beta + offset``, the offset with unit
+coefficient; an exposure ``e`` is the offset ``log e``); decisions D41 and D56.
 
     power mean    exp(X beta + o)     o the raw log-power-mean offset, log e for an
                                       exposure, formed once; never omega X beta nor
                                       omega o, which belong to the transformed problem
 
-Without data the prediction is formed on the retained rows of the fit, from the original
-unscaled trained design and the raw offset of the sample's numeric record.  With data,
-the fitted right-hand side of the formula is replayed on its rows by
-:func:`powermean.formula.frame.replay_design`, with the categorical levels, contrasts
-and stateful-transform states (a centering, a polynomial, a spline basis) that it
-learned on the training frame, with the explicit empty context, and never learned again;
-the offset or the exposure is read from the column of the same name, as the preparation
-read it.  The replayed columns are checked to be the fitted ones, in their order.  A row
-is missing where the replayed design says so, by the two masks that the preparation
-reads for the training rows: a data column that the regressors read is missing or
-infinite on it (``referenced_invalid``: a Boolean transform such as ``I(x > 0)`` hides a
-missing or infinite ``x`` behind a ``False``, and a missing category is coded as the
-baseline), or an evaluated factor is null by Formulaic's own check or a value of the
-matrix is not finite (``evaluated_invalid``).  Such a row has a missing prediction and
-keeps its position; no row is dropped or reordered, and no coding is invented for it.
-Formulaic's own coding of a category outside the learned levels is kept, its
-``DataMismatchWarning`` included, which reaches the caller.  A row whose offset is
-missing has a missing prediction as well.  An exposure that is not strictly positive is
-refused, as the numeric record refuses it.  An offset or exposure given as an expression
-is replayed the same way from its own fitted design on the original columns of the data
-(:func:`expression_offset`): one column, the same masks, the logarithm of an exposure
-formed once; no internal column of the caller is required.
+Without data the prediction is formed on the retained rows of the fit, from the
+original unscaled trained design and the raw offset of the sample's numeric record.
+With data, the fitted right-hand side of the formula is replayed on its rows by
+:func:`powermean.formula.frame.replay_prediction_design`, with fitted levels, contrasts
+and stateful transforms (a centering, polynomial or spline basis) that it
+learned on the training frame, with the explicit empty context, and never learned
+again; the offset or the exposure is read from the column of the same name, as the
+preparation read it.  The replayed columns are checked to be the fitted ones, in their
+order.  A row is missing where the replayed design says so, by the two masks that the
+preparation reads for the training rows (``design/02``, Section 2, step 2): a data
+column that the regressors read is missing or infinite on it (``referenced_invalid``:
+a Boolean transform such as ``I(x > 0)`` hides a missing or infinite ``x`` behind a
+``False``, and a missing category is coded as the baseline), or an evaluated factor is
+null by Formulaic's own check or a value of the matrix is not finite
+(``evaluated_invalid``).  Such a row has a missing prediction and keeps its position.
+A categorical value outside the fitted levels raises a package specification error.
+A missing offset also gives a missing prediction. An exposure must be strictly
+positive.  An offset or exposure given as an expression (task
+M0.22) is replayed the same way from its own fitted design on the original columns
+of the data (:func:`expression_offset`): one column, the same masks, the logarithm
+of an exposure formed once; no internal column of the caller is required.
 
 A prediction uses the reported coefficients ``beta`` of the point.  Where the index is
 finite and its exponential is not representable in float64, because it overflows or
 because a positive value rounds to zero (an index below about ``-745.13``), the
-``FloatingPointError`` of the other layers is raised: a representable subnormal power
-mean is kept as it is, and nothing is clipped, floored or replaced by zero.  The
-caller's data are read by position and never modified; the retained design is never
-handed out.
+``FloatingPointError`` of the other layers is raised: a representable subnormal
+power mean is kept as it is, and nothing is clipped, floored or replaced by zero
+(decisions D49 and D54).  The caller's data are read by position and never modified;
+the retained design is never handed out.
 """
 
 from __future__ import annotations
@@ -48,7 +48,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from powermean.formula.frame import Design, replay_design
+from powermean.formula.frame import Design, replay_prediction_design
 from powermean.model.variance import FloatArray
 
 
@@ -122,7 +122,7 @@ def expression_offset(
         A replayed design with other columns than the one of the fit, or an
         exposure that is not strictly positive on a row where it is present.
     """
-    evaluated = replay_design(design, data)
+    evaluated = replay_prediction_design(design, data)
     if evaluated.columns != design.columns or len(design.columns) != 1:
         raise ValueError("the replayed expression has not the column of the fit")
     values = np.array(
@@ -146,11 +146,10 @@ def replayed_matrix(design: Design, data: pd.DataFrame) -> FloatArray:
     """The fitted right-hand side replayed on ``data``, as doubles, NaN where missing.
 
     The columns must be the fitted ones, in their order; the spec is reused and
-    learns nothing (:func:`powermean.formula.frame.replay_design`).  A row that the
-    replayed design marks invalid, in a raw column that the regressors read or in an
+    learns nothing. A row marked invalid in a raw regressor column or in an
     evaluated factor (module docstring), is NaN throughout, at its position.
     """
-    replayed = replay_design(design, data)
+    replayed = replay_prediction_design(design, data)
     if replayed.columns != design.columns:
         raise ValueError("the replayed design has not the columns of the fit")
     matrix = np.array(

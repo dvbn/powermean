@@ -1,14 +1,16 @@
 """Offset and exposure expressions, and the cluster interaction ``a^b``.
 
-``offset`` and ``exposure`` take a column or an expression.  A cluster term can be an
+``DESIGN.md``, Section 4.1 (``offset``, ``exposure``: "column or expression") and
+4.2; ``design/04_inference_and_effects.md``, Section 2.2 ("a cluster term can be an
 interaction ``a^b``, which clusters on the observed combinations of the two
-variables.
+variables"); ``design/02_computation.md``, Section 2, steps 1 and 2; decisions D41,
+D51 and D56; task M0.22.
 
-An offset or an exposure names a column of the data, which the preparation
+An offset or an exposure names a column of the data, which the accepted preparation
 reads as it is (:mod:`powermean._prepare.compose`), or, where no column has that
 name, a Formulaic expression of the columns of the data: ``log(dist)``,
 ``np.log(dist)``, ``I(x > 0)``.  :func:`evaluate_expression` evaluates it with the
-Formulaic adapter, once, on every row of the data and with the explicit
+established Formulaic adapter, once, on every row of the data and with the explicit
 empty context (no variable of a caller is read; no ``eval`` and no grammar of this
 package), as the one-sided formula ``0 + expression``, so that no intercept is added,
 and keeps the fitted ``ModelSpec`` of that evaluation as a
@@ -30,7 +32,7 @@ the exact values that the data hold, missing where either is missing or infinite
 (:mod:`powermean.formula.validity`), so that the preparation excludes such rows as
 missing clusters and the result's recomputation numbers the pairs by first
 appearance.  The column is retained under the requested name ``a^b``; ``a + b`` is a
-multiway cluster, not an interaction.  The data are
+multiway cluster of milestone M1 and is refused before this module.  The data are
 read by position and never modified: the columns are added to the working copy of
 the interface.
 """

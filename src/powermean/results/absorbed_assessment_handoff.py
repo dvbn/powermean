@@ -1,12 +1,17 @@
-"""The internal within-fit handoff of an owned full point assessment to its audit.
+"""The private within-fit handoff of an owned full point assessment to its audit.
 
-Only on this explicitly activated route is the complete fresh certificate that the retry
-assessor forms at the unchanged selected point, computed on owned inputs, passed to the
-candidate's audit instead of being discarded and formed again.
+The author's approval of 26 October 2026 (private within-fit full-assessment handoff,
+task M1.25 prototype) and its ordinary ownership correction.  Only on this explicitly
+activated route is the complete fresh certificate that the retry assessor forms at the
+unchanged selected point, computed on owned inputs, passed to the candidate's audit
+instead of being discarded and formed again.
 
-The point-only retry assessor :class:`~powermean.solve.absorbed_certificate.FEAssessor`,
-the audit :func:`~powermean.solve.absorbed_certificate.certify_candidate` and every
-default are unchanged and separately executable. Normal joint composition activates this
+References: ``design/02_computation.md``, Sections 5.1 and 7; the M1.14 readiness
+revision A, Section 1 (``plan/evidence/M1.14_readiness.txt``); decisions D49 and D51.
+The point-only retry assessor
+:class:`~powermean.solve.absorbed_certificate.FEAssessor`, the audit
+:func:`~powermean.solve.absorbed_certificate.certify_candidate` and every default are
+unchanged and separately executable. Normal joint composition activates this
 handoff for the current covariance provider.
 
 Activation.  The caller builds one :class:`AssessmentHandoff` per fit, with the absorbed
@@ -84,9 +89,11 @@ from typing import cast
 
 from powermean.data.sample_fe_state import FESample
 from powermean.inference.absorbed import AbsorbedScale
+from powermean.inference.wz_absorbed import _WZInformation
 from powermean.inference.wz_binding import layout
 from powermean.inference.wz_binding import unavailable as wz_unavailable
 from powermean.inference.wz_covariance import WZControls
+from powermean.inference.wz_operator import Information
 from powermean.model.variance import NB2Variance, PowerVariance
 from powermean.results.absorbed_assessment_binding import Anchors, bound_certificate
 from powermean.results.absorbed_assessment_capture import (
@@ -116,10 +123,10 @@ from powermean.solve.assessment import (
     CertificateControls,
     certificate_controls,
 )
-from powermean.solve.absorbed import AbsorbedOptions
+from powermean.solve.m1_options import AbsorbedOptions
 from powermean.solve.newton_absorbed import IndexCandidate
 from powermean.solve.newton_profiled import ProfiledCandidate
-from powermean.solve.profiled_trigger import WholePoint
+from powermean.solve.profiled_trigger import PointView, WholePoint
 from powermean.systems.profiled import PointProfile
 
 AUDITED = "the handoff has already audited a candidate"
@@ -168,6 +175,7 @@ class _Kept:
     tokens: tuple[Token, ...]
     replica: Replica
     certificate: FEPointCertificate
+    wz_information: Information | None = None
 
 
 def _built_in(scale: object) -> CovarianceRequest | None:
@@ -238,7 +246,7 @@ class AssessmentHandoff:
 
     def __call__(
         self,
-        whole: WholePoint[PointProfile] | WholePoint[IndexPoint],
+        whole: WholePoint[PointView],
         controls: CertificateControls,
         /,
     ) -> Assessment:
@@ -257,6 +265,9 @@ class AssessmentHandoff:
         replica, record = owned
         assert self._fit is not None
         mine = _anchors(replica)
+        handoff = self._fit.scale._wz_information
+        if handoff is not None:
+            handoff.take()
         found = certify_point(
             WholePoint(mine.sample, mine.variance, mine.record),
             mine.controls,
@@ -264,12 +275,20 @@ class AssessmentHandoff:
             scale=self._fit.scale,
         )
         tokens = replica.capture.rest(FIT)
-        self._kept.append(_Kept(record, tokens, replica, found))
+        self._kept.append(
+            _Kept(
+                record,
+                tokens,
+                replica,
+                found,
+                None if handoff is None else handoff.take(),
+            )
+        )
         return assessment(found)
 
     def _owned(
         self,
-        whole: WholePoint[PointProfile] | WholePoint[IndexPoint],
+        whole: WholePoint[PointView],
         controls: CertificateControls,
     ) -> tuple[Replica, PointProfile | IndexPoint] | None:
         """The exact replica of an owned call and its record, else ``None``.
@@ -303,6 +322,11 @@ class AssessmentHandoff:
                 rep_req,
                 self._scale.preflight if type(self._scale) is AbsorbedScale else None,
                 cast("WZControls | None", pref.roots[5]),
+                _wz_information=(
+                    _WZInformation()
+                    if cast("AbsorbedScale", self._scale)._wz_information is not None
+                    else None
+                ),
             )
             self._fit = _Fit(anchors, pref, rep_scale)
         return replica, point
@@ -396,6 +420,9 @@ class AssessmentHandoff:
             controls,
         )
         bound = bound_certificate(found.certificate, _anchors(found.replica), live)
+        active_scale = cast("AbsorbedScale", scale)
+        if bound is not None and active_scale._wz_information is not None:
+            active_scale._wz_information.latest = found.wz_information
         return (None, UNBOUND) if bound is None else (bound, "")
 
 
@@ -406,9 +433,7 @@ def _reserve_wz(
     if wz is not None and request.adjustment == "wz":
         if sample.design is None or request.name is None:
             raise ValueError("WZ requires current slopes and one pair source")
-        layout(
-            wz.source, request.name, sample.design.matrix.shape, wz.absorbed, wz.bounds
-        )
+        layout(wz.source, request.name, sample.design.matrix.shape, wz.bounds)
 
 
 def _wz_provider(scale: object) -> bool:

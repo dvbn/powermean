@@ -1,8 +1,10 @@
 """The reported scale of the certificate under a named HC covariance, at the fit.
 
-The coefficient gate measures the coefficient correction in units of its standard
-error.  The initial coefficient gate reads the standard errors of the covariance
-requested at the fit: for a named HC method, that
+``design/02_computation.md``, Section 7 (the coefficient correction in units of its
+standard error); ``design/04_inference_and_effects.md``, Sections 2.3 and 3;
+``plan/evidence/M1_contract.txt``, rules B1, B3, B5 and B12(a) and Sections 3.1 and
+3.2; decisions D49, D51, D57 and D60.  The initial coefficient gate reads the standard
+errors of the covariance requested at the fit (B12(a)): for a named HC method, that
 method's covariance at the certificate's candidate.  The providers below supply them
 through the callbacks of the solve stage, as :mod:`powermean.inference.provider` and
 :mod:`powermean.inference.linear_provider` supply the robust and one-way ones; the
@@ -13,8 +15,8 @@ fit certifies.  The convex initializer and every continuation stage of a selecte
 root outside ``[1, 2]`` hold the rows, the design, the offset and the weights of the
 target and differ from it in the working variance alone
 (:func:`powermean.solve.joint_root.same_system`), so the provider holds those rows and
-reads the rest from the evaluation it receives: its expected curvature gives the hats,
-its observed Jacobian, or the expected one, the bread.  Each call binds the
+reads the rest from the evaluation it receives: its expected curvature gives the hats
+(D57), its observed Jacobian, or the expected one, the bread.  Each call binds the
 evaluation to the held rows (its raw weights, and its contributions formed again from
 the held design and its residuals, bit for bit) and forms the hats, the influence rows
 and the adjusted meat afresh by the internal composition of
@@ -24,16 +26,18 @@ once on its rows before it solves, so that a refusal costs no solve; the preflig
 depends on the design, the weights, the method and the convention alone, which every
 equation of the fit shares.
 
-:class:`LinearHCScale` serves the linear path: the
+:class:`LinearHCScale` serves the linear path: the accepted
 :func:`~powermean.inference.hc.linear_hc` of the solve captured before it ran
 (:class:`~powermean.inference.hc.LinearSolve`), at the fresh evaluation's point, which
 must be the captured candidate's (its coefficients, weights and units, bit for bit).
 
 The standard errors are those of the direct map of the order scale
-(:func:`~powermean.inference.ssc.direct_errors`): zero where a variance is zero,
-NaN where it is negative, nothing floored.  An error of the covariance (a computed hat
-at one on a row that is not structural, a value out of range) is raised, not caught,
-and nothing of one call is kept for another.  The handoff forms the fit-time
+(:func:`~powermean.inference.ssc.direct_errors`): zero where a variance is zero (D49),
+NaN where it is negative, nothing floored; a request undefined by a hat above the
+near-one criterion reports the unadjusted estimate of the same rows to the gate
+(:attr:`~powermean.inference.hc.HCCovariance.gate_covariance`, ruling 74).  An error of
+the covariance (a value out of range) is raised, not caught, and nothing of one call is
+kept for another.  The handoff forms the fit-time
 covariance again by the entry points of :mod:`powermean.inference.hc` and requires the
 certificate's standard errors to be its own, bit for bit.
 """
@@ -89,10 +93,10 @@ class HCScale:
     frequency : bool
         Whether the weights are frequency counts.
     order : OrderScale
-        The order scale of the candidate's coordinates, the direct map.
+        The accepted order scale of the candidate's coordinates, the direct map.
     bread : {"observed", "expected"}, default "observed"
         The bread of the influence rows; the hats are those of the expected
-        information either way.
+        information either way (D57).
 
     Notes
     -----
@@ -168,7 +172,7 @@ class HCScale:
         found = self.covariance(evaluation)
         return ReportedScale(
             gamma=evaluation.gamma,
-            standard_errors=direct_errors(found.covariance, self.order),
+            standard_errors=direct_errors(found.gate_covariance, self.order),
             order=self.order,
         )
 
@@ -243,7 +247,7 @@ class LinearHCScale:
         found = self.covariance(evaluation)
         return ReportedScale(
             gamma=evaluation.gamma,
-            standard_errors=direct_errors(found.covariance, self.order),
+            standard_errors=direct_errors(found.gate_covariance, self.order),
             order=self.order,
         )
 

@@ -1,12 +1,14 @@
 """Detached snapshots of iterative rectifier projections, summaries, and attempts.
 
-This module defines :class:`RetainedProjectionRefinement`,
-:class:`RetainedProjectionSolve`, :class:`RetainedRectifierSummary`,
-:class:`RetainedRectifierFinal`, :class:`RetainedRectifierAttempt`,
-:func:`_detach_projection`, and :func:`_detach_rectifier_outcome`.  Each witness and
-absorption state inside a rectifier outcome detaches its own problem/grouping; the
-refinement call's state, like the joint call's, through the projection's grouping
-snapshot or map.
+``design/02_computation.md``, Sections 2 and 4; ``plan/evidence/M1.15_contract.txt``;
+``brief/layout_C_ownership.txt`` (P09).  This module defines
+:class:`RetainedProjectionRefinement`, :class:`RetainedProjectionSolve`,
+:class:`RetainedRectifierSummary`, :class:`RetainedRectifierFinal`,
+:class:`RetainedRectifierAttempt`, :func:`_detach_projection`, and
+:func:`_detach_rectifier_outcome`.  Each witness and absorption state inside a
+rectifier outcome detaches its own problem/grouping; the refinement call's state, like
+the joint call's, through the projection's grouping snapshot or map
+(``CONTRACT_V1.txt``, Section 2.4).
 """
 
 from __future__ import annotations
@@ -32,6 +34,7 @@ from powermean.results.retained_support_witnesses import (
     RetainedDualCheck,
     RetainedPrimalWitness,
 )
+from powermean.solve.support_overlap_lp import OverlapLP
 from powermean.solve.support_projection import (
     Projection,
     Refinement,
@@ -215,6 +218,7 @@ class RetainedRectifierAttempt:
     dual: RetainedDualCheck | None
     completion: str
     reason: str
+    overlap_lp: OverlapLP | None = None
 
     @property
     def weights(self) -> FloatArray | None:
@@ -361,4 +365,5 @@ def _detach_rectifier_outcome(
         du,
         str(ir.completion),
         str(ir.reason),
+        ir.overlap_lp,
     )

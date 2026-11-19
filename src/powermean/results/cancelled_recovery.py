@@ -1,9 +1,9 @@
 """Lazy cancelled-effect recovery at one whole stored reporting point.
 
-BBP ``app:fe-postestimation``: for the original working index v excluding the cancelled
-effect, log C = log mean_g(Z exp(-v)), log A = log C + mean_g(v), and the reported
-effect is log C / omega. The arithmetic scale A uses the centered index M_C v. No
-variance enters.
+Design 03, Section 6 (BBP ``app:fe-postestimation``): for the original working
+index v excluding the cancelled effect, log C = log mean_g(Z exp(-v)),
+log A = log C + mean_g(v), and the reported effect is log C / omega.
+The arithmetic scale A uses the centered index M_C v. No variance enters.
 """
 
 from __future__ import annotations
@@ -64,7 +64,7 @@ def _log_group_mean(
 def recover_scales(
     z: FloatArray, v: FloatArray, structure: CancelStructure, omega: float
 ) -> RecoveredScale:
-    """Recover the cancelled-effect scales from already admitted, segment-sorted rows.
+    """Recover Section 6 scales from already admitted, segment-sorted rows.
 
     Positive terms use group log-sum-exp, never exp(v) or exp(M_C v).
     Compute log A directly at M_C v to avoid cancellation of a common offset;
@@ -158,7 +158,7 @@ def _working_point(
     """Read the original T point, or invert BOTH stored BBP reporting vectors."""
     geometry = envelope.geometry
     if not isinstance(bias, CancelledBias):
-        return geometry.expand(envelope._point.view())
+        return geometry.normalized_full(envelope._point.view())
     slopes = np.zeros(geometry.n_slopes_full, dtype=np.float64)
     slopes[geometry.kept_slope_indices] = envelope.order.solver_coefficients(
         bias.coefficients()

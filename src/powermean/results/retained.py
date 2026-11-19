@@ -1,8 +1,10 @@
 """The state that a result retains, bound to one point, equation, sample and basis.
 
-A :class:`RetainedFit` is formed once by :func:`powermean.results.handoff.bind` from the
-records that the earlier stages made, and never changed afterwards.  What it holds, and
-why:
+``design/04_inference_and_effects.md``, Section 2.3, "Retained state and staged
+capabilities" (decision D55), Sections 1 to 3 and 5; ``design/02_computation.md``,
+Section 9; decisions D41, D49 and D57.  A :class:`RetainedFit` is formed once by
+:func:`powermean.results.handoff.bind` from the records that the earlier stages made,
+and never changed afterwards.  What it holds, and why:
 
 - the estimator (mean order, working variance, moment, formulation) and the requested
   inference, as records; the resolved numerical settings as the storage-only snapshot
@@ -22,14 +24,15 @@ why:
   row residuals, the observed curvature and the expected information, the raw
   weights, the sums ``S``, ``C`` and ``H``, the contributions and the units), the
   solver's candidate and native reason when a conclusion was handed over, and the
-  status composed by the status rules; on the linear route, the candidate of the
-  least-squares solve with its residuals and factorization and
+  status composed by the accepted rules; on the linear route, the candidate of the
+  least-squares solve with its residuals and factorization and, since task M0.22,
   the fresh :class:`~powermean.solve.linear_certificate.LinearCertificate` of its
   point with the status of :mod:`powermean.solve.linear_status` where a conclusion
-  was handed over (a bare candidate keeps no certificate and no status);
+  was handed over (a bare candidate keeps no certificate and no status, as before);
   or, on the power route, the :class:`~powermean.solve.no_point.StartFailure` of an
-  automatic start that had no finite value, with its status and no point;
-- on the linear route, the
+  automatic start that had no finite value, or a measured IOLS scale-floor
+  refusal, with its status and no point;
+- on the linear route, since task M1.22, the
   :class:`~powermean.inference.hc.LinearSolve` that the dispatch formed before its
   solve (the owned equation as the solve received it, paired with the candidate that
   solve returned), where one was handed over and the influence is kept: the owner
@@ -53,7 +56,7 @@ why:
   a typed cluster request of the expanded menu, the same applied convention and the
   typed answer of the convention engine (:mod:`powermean.results.retained_inference`):
   the bound request, the multiway components with their signs, cluster counts and
-  factors, the raw port estimate with its diagnostics, the ``psd`` treatment and,
+  factors, the raw port estimate with its diagnostics, decision D4's treatment and,
   where it ran, its adjustment and frame records; no row array either.
 
 Counts are kept apart: the input rows, the retained rows that enter the estimating
@@ -85,6 +88,7 @@ from powermean.inference.ssc import AppliedConvention, ReferenceDistribution
 from powermean.model.variance import FloatArray
 from powermean.solve.certificate import Certificate, Level
 from powermean.solve.iols.candidate import IolsCandidate
+from powermean.solve.iols.normalization import IolsScaleFailure
 from powermean.solve.joint_root_records import JointRootCandidate
 from powermean.solve.linear import LinearCandidate
 from powermean.solve.linear_certificate import LinearCertificate
@@ -93,7 +97,11 @@ from powermean.solve.no_point import StartFailure
 from powermean.solve.status import Status
 
 if TYPE_CHECKING:
+    from powermean.data.sample_fe_state import RowLedger
+    from powermean.results.retained_gamma import RetainedGammaResult
     from powermean.results.retained_inference import RetainedInference
+    from powermean.results.retained_support import RetainedSupportResult
+    from powermean.results.saturated import SaturatedCovariance
 
 AnyCertificate = Certificate | LinearCertificate
 AnyCandidate = NewtonCandidate | IolsCandidate | JointRootCandidate
@@ -121,12 +129,12 @@ class CovarianceRecord:
         the convention applied once (:mod:`powermean.inference.convention`), or the
         method's own factor once for a named HC method.
     reported : array
-        ``V`` on the reported scale, each entry mapped once by the range-safe
+        ``V`` on the reported scale, each entry mapped once by the accepted range-safe
         order scale: ``V_jk / (d_j d_k) / omega^2``; for a signed multiway request
-        whose ``psd`` treatment is ``"cgm"``, the final matrix of that operation.
+        whose decision D4 treatment is ``"cgm"``, the final matrix of that operation.
     standard_errors : array
         ``sqrt`` of the reported variances, NaN where a variance is negative and
-        zero where it is zero.
+        zero where it is zero (decision D49).
     factor : float or tuple of float
         ``N/(N - 1)`` or ``G/(G - 1)``; a named method's own factor, ``N/(N - K)``
         for HC1 and one otherwise; the convention's one factor of a cluster request,
@@ -142,7 +150,7 @@ class CovarianceRecord:
     diagnostics : tuple of str
         The diagnostics of the primitive: singular, zero, indefinite or negative
         diagonal, as it reported them; nothing was repaired.  For a signed multiway
-        request whose ``psd`` adjustment was active, the notes that describe the
+        request whose D4 adjustment was active, the approved notes that describe the
         reported matrix (``covariance.psd_adjusted``, and ``covariance.indefinite``
         where the final matrix is not positive semidefinite); the raw estimate's
         diagnostics stay in ``answer``.
@@ -150,22 +158,23 @@ class CovarianceRecord:
         The bread, the reported coordinate of ``reported``, the convention in force
         (a preset name, or the custom record of a named HC request or of a typed
         cluster request) and the reference: the observed bread, ``"stata"`` and the
-        normal reference for the default robust and cluster covariances.
+        normal reference for the robust and cluster covariances of the first
+        milestone.
     method : HC method or None
         The named HC method, or ``None``.
     applied : AppliedConvention or None
         For a named HC or a recomputed conventional request, its applied convention:
         and the resolved convention with its source, ``N`` and the exact rank ``K``,
-        the factor with its owner, the reference with its degrees of freedom;
-        a record of integers and strings, without an array.
+        the factor with its owner, the reference with its degrees of freedom
+        (contract, Section 3.1); a record of integers and strings, without an array.
     hat_geometry : str or None
         For a named HC method, the geometry of its leverage: the expected
-        information, beside the bread of the influence rows.
+        information (decision D57), beside the bread of the influence rows.
     answer : RetainedInference or None
         For a request answered by the convention engine
         (:mod:`powermean.results.retained_inference`), its typed answer: the bound
         request, the multiway components with their signs, counts and factors, the
-        raw port estimate with its diagnostics, the ``psd`` treatment and, where it
+        raw port estimate with its diagnostics, decision D4's treatment and, where it
         ran, its adjustment and frame records; ``None`` otherwise.
     """
 
@@ -211,7 +220,7 @@ class CovarianceRecord:
 
     @property
     def degenerate(self) -> bool:
-        """Whether a reported standard error is exactly zero."""
+        """Whether a reported standard error is exactly zero (decision D49)."""
         return bool((self.standard_errors == 0).any())
 
     @property
@@ -224,14 +233,16 @@ class CovarianceRecord:
     def to_dict(self) -> dict[str, object]:
         """The method, factors, counts and convention, without the matrices.
 
-        An applied convention adds its records: the method, the convention in force (its
-        preset name, or ``"custom"``) with its values, the requested ``ssc`` (``None``
-        where the request gave none) and the source of the convention in force, the
-        factor's formula and owner, the exact rank ``K``, the degrees of freedom of a
-        ``t`` reference and the leverage geometry for named HC.  A multiway answer adds
-        its form, the cluster count of each requested dimension and the ``psd``
-        treatment resolved for it (``None`` where it does not apply).  Unchanged default
-        records retain their schema.
+        An applied convention adds its records (contract, Sections 3.1 and 6(e), (j)):
+        the
+        method, the convention in force (its preset name, or ``"custom"``) with its
+        values, the requested ``ssc`` (``None`` where the request gave none) and the
+        source of the convention in force, the factor's formula and owner, the exact
+        rank ``K``, the degrees of freedom of a ``t`` reference and the leverage
+        geometry for named HC.  A multiway answer adds its form, the cluster count of
+        each requested dimension and decision D4's treatment resolved for it
+        (``None`` where D4 does not apply).  Unchanged first-milestone records retain
+        their schema.
         """
         record: dict[str, object] = {
             "kind": self.kind,
@@ -290,24 +301,31 @@ class CovarianceRecord:
         }
 
 
+FitStatus = (
+    Status | Literal["not_identified", "separation_unresolved", "recession_unresolved"]
+)
+
+
 @dataclass(frozen=True, eq=False)
 class RetainedFit:
     """What a result holds, bound once (module docstring).
 
     ``theta`` is the point in the coordinates of the solver, or ``None`` where the
-    linear path formed no coefficients or the automatic start failed; ``status`` is the
-    status of the solve, or of the supplied point by the gates of its certificate, that
-    of the linear conclusion or of the start failure, and ``None`` for a bare linear
-    candidate handed over without its conclusion; ``reason`` is the native reason of the
-    retained attempt of a Newton conclusion (of the target stage of a joint root
-    conclusion outside ``[1, 2]``, whose candidate also records its initializer, merit
-    metric and stages).  ``certificate`` is the joint certificate on the power route and
-    the fresh linear certificate on the linear route, ``failure`` the record of an
-    automatic start that had no finite value, ``requested_start`` the start on the
-    reported scale where one was given, and ``offset_design`` the fitted design of an
-    offset or exposure expression.  ``influence`` is ``None`` where it was discarded or
-    could not be formed, ``default`` where no covariance was formed.  ``linear_solve``
-    is the captured equation and solve of the linear route, ``None`` on the power route,
+    solve stopped before producing a point; ``status`` is
+    the status of the solve, or of the supplied point by the gates of its
+    certificate, that of the linear conclusion or of the no-point failure, and ``None``
+    for a bare linear candidate handed over without its conclusion; ``reason`` is the
+    native reason of the retained attempt of a Newton conclusion (of the target stage
+    of a joint root conclusion outside ``[1, 2]``, whose candidate also records its
+    initializer, merit metric and stages).  ``certificate`` is
+    the joint certificate on the power route and the fresh linear certificate on the
+    linear route, ``failure`` the record of a nonfinite automatic start or an IOLS
+    scale-floor
+    refusal, ``requested_start`` the start on the reported scale where one was given,
+    and ``offset_design`` the fitted design of an offset or exposure expression.
+    ``influence`` is ``None`` where it was discarded or could not be formed,
+    ``default`` where no covariance was formed.  ``linear_solve`` is the captured
+    equation and solve of the linear route (task M1.22), ``None`` on the power route,
     for a candidate handed over without it, or after ``keep_influence=False``.
     """
 
@@ -324,15 +342,17 @@ class RetainedFit:
     candidate: AnyCandidate | None
     linear: LinearCandidate | None
     reason: NativeReason | None
-    status: Status | None
+    status: FitStatus | None
     theta: FloatArray | None
     influence: Influence | None
-    default: CovarianceRecord | None
+    default: CovarianceRecord | SaturatedCovariance | None
     keep_influence: bool
-    failure: StartFailure | None = None
+    failure: StartFailure | IolsScaleFailure | None = None
     requested_start: FloatArray | None = None
     offset_design: Design | None = None
     linear_solve: LinearSolve | None = None
+    sample_failure: RetainedSupportResult | RetainedGammaResult | None = None
+    exhausted: RowLedger | None = None
 
     @property
     def level(self) -> Level | None:

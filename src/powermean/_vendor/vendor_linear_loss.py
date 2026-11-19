@@ -1,7 +1,7 @@
 """Loss functions for linear models with raw_prediction = X @ coef.
 
-Carried from scikit-learn under the notice ``SKLEARN_COPYING`` of this folder.  The
-arithmetic, the
+Carried from the solver campaign under the scikit-learn notice ``SKLEARN_COPYING`` of
+this folder; ``PROVENANCE.md``, Section 6, lists every edit.  The arithmetic, the
 names and the structure are those of the source; the local ``safe_sparse_dot`` and
 ``squared_norm`` replace scikit-learn's.
 """

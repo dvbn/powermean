@@ -1,19 +1,22 @@
 """The binding of a sample to the preparation and the estimator that it came from.
 
-The following information is bound to the same coefficient point, equation, sample and
-coordinates: the sample fingerprint and exclusion accounting, the original positional
-IDs, the typed weights with their kind and values, the requested classifications.  The
-handoff of a fit (:mod:`powermean.results.handoff`) carries a prepared frame and a
-sample derived from it, as two records: the sample holds the retained rows with their
-positions and accounting, the prepared frame the owned frame and the order-neutral base
-of the construction (:class:`~powermean.data.sample.SampleBase`), with the raw inputs of
+``design/04_inference_and_effects.md``, Section 2.3 ("binds the following information
+to the same coefficient point, equation, sample and coordinates": the sample
+fingerprint and exclusion accounting, the original positional IDs, the typed weights
+with their kind and values, the requested classifications); ``design/02_computation.
+md``, Section 2 (the steps of the sample construction, which the accounting records)
+and Section 1, rule 4; decisions D41 and D55.  The handoff of a fit
+(:mod:`powermean.results.handoff`) carries a prepared frame and a sample derived from
+it, as two records: the sample holds the retained rows with their positions and
+accounting, the prepared frame the owned frame and the order-neutral base of the
+construction (:class:`~powermean.data.sample.SampleBase`), with the raw inputs of
 every input row.  Neither record names the other, and the retained rows of the frame's
 design and outcome are not enough to tell them apart: two preparations of the same
 regressors and outcome under another offset, another exposure, other weights, another
-subset or other classifications give samples whose design and outcome agree row for row
-while their equation, their counts or their covariances differ.  So :func:`check_sample`
-compares the sample with the owned inputs of the preparation itself, by position and
-without fitting, selecting or training anything:
+subset or other classifications give samples whose design and outcome agree row for
+row while their equation, their counts or their covariances differ.  So
+:func:`check_sample` compares the sample with the owned inputs of the preparation
+itself, by position and without fitting, selecting or training anything:
 
 - the counts: the sample has as many input rows as the frame and the base;
 - the estimator: the mean order and the route of the sample are the estimator's, and
@@ -50,11 +53,12 @@ from typing import Any
 import numpy as np
 
 from powermean._prepare.compose import Columns, PreparedFrame
-from powermean.data.accounting import RETAINED, ZERO_OUTCOME
+from powermean.data.accounting import RETAINED, SEPARATED, ZERO_OUTCOME
 from powermean.data.raw import AlignedColumns, Column, RawInputs
 from powermean.data.retained import OrderSample
 from powermean.data.sample import SampleBase
 from powermean.data.specs import Estimator
+from powermean.data.weights import ObservationWeights
 from powermean.formula.frame import ModelFrame
 from powermean.model.order import IndexArray
 from powermean.model.variance import FloatArray
@@ -79,20 +83,64 @@ def _check_order(estimator: Estimator, sample: OrderSample) -> None:
         raise refuse("the transformed problem does not retain every row of the sample")
 
 
+def _columns(names: tuple[str, ...], sample: OrderSample) -> list[int]:
+    """The places in ``names`` of the columns of the sample, increasing.
+
+    ``names`` are the columns of the fitted design, which are those of the
+    preparation's inputs.  The sample holds them in their order: every one, or, on
+    a fit without fixed effects that omitted collinear regressors
+    (:func:`powermean.data.retained.without_columns`), every one but those.  A
+    column of the sample that is not one of ``names``, or another order, is refused.
+    """
+    held = sample.data.column_names
+    kept = [j for j, name in enumerate(names) if name in held]
+    if tuple(names[j] for j in kept) != held:
+        raise refuse("the columns of the sample are not those of the fitted design")
+    return kept
+
+
 def _check_frame(sample: OrderSample, frame: ModelFrame) -> None:
     """The retained rows of the frame's design and outcome are the sample's record."""
     if sample.nobs != frame.outcome.size:
         raise refuse("the sample has another number of input rows than the frame")
     design = frame.design
-    if sample.data.column_names != design.columns:
-        raise refuse("the columns of the sample are not those of the fitted design")
     matrix = design.matrix.to_numpy(dtype=np.float64, na_value=np.nan)
     outcome = frame.outcome.to_numpy(dtype=np.float64, na_value=np.nan)
     rows = sample.positions
-    if not np.array_equal(matrix[rows], sample.data.design) or not np.array_equal(
-        outcome[rows], sample.data.y
+    retained = _taken(matrix, rows)
+    if sample.data.column_names != design.columns:
+        retained = retained[:, _columns(design.columns, sample)]
+    if not np.array_equal(retained, sample.data.design) or not (
+        np.array_equal(_taken(outcome, rows), sample.data.y)
     ):
         raise refuse("the retained rows are not those of the frame")
+
+
+def _every_row(rows: IndexArray, count: int) -> bool:
+    """Whether ``rows`` is the integer vector ``0, 1, ..., count - 1`` exactly.
+
+    ``count`` strictly increasing integers from ``0`` to ``count - 1`` are those.
+    """
+    return bool(
+        rows.ndim == 1
+        and rows.dtype.kind in "iu"
+        and rows.size == count > 0
+        and rows[0] == 0
+        and rows[-1] == count - 1
+        and (rows[1:] > rows[:-1]).all()
+    )
+
+
+def _taken(values: Any, rows: IndexArray) -> Any:
+    """``values[rows]``, or the array ``values`` itself when ``rows`` are all its rows.
+
+    With ``rows`` the positions ``0, ..., n - 1`` of the ``n`` rows of ``values``, the
+    selection holds the rows of ``values`` in their order: the comparisons that read
+    the result compare the same elements.
+    """
+    if type(values) is np.ndarray and values.ndim and _every_row(rows, len(values)):
+        return values
+    return values[rows]
 
 
 def _check_accounting(base: SampleBase, sample: OrderSample) -> None:
@@ -101,7 +149,17 @@ def _check_accounting(base: SampleBase, sample: OrderSample) -> None:
         raise refuse("the sample has another number of input rows than the preparation")
     codes, given = sample.codes, base.codes
     removed = codes == ZERO_OUTCOME
-    if not np.array_equal(codes[~removed], given[~removed]):
+    changed = removed
+    if sample.separation is not None:
+        separated = codes == SEPARATED
+        if (
+            not np.array_equal(sample.separation.codes, codes)
+            or not np.all(given[separated] == RETAINED)
+            or not np.all(base.inputs.y[separated] == 0)
+        ):
+            raise refuse("the separated rows do not match the admitted sample")
+        changed = removed | separated
+    if not np.array_equal(codes[~changed], given[~changed]):
         raise refuse("the exclusions of the sample are not those of the preparation")
     if not base.complete[removed].all() or np.any(base.inputs.y[removed] != 0):
         raise refuse("a zero outcome was removed from a row the preparation excluded")
@@ -166,8 +224,11 @@ def _same_counts(values: Any, rows: IndexArray, counts: FloatArray) -> bool:
 def _check_values(inputs: RawInputs, columns: Columns, sample: OrderSample) -> None:
     """The outcome, design, offset or exposure and weights are the preparation's."""
     rows, data = sample.positions, sample.data
-    if not np.array_equal(inputs.y[rows], data.y) or not np.array_equal(
-        inputs.design[rows], data.design
+    design = _taken(inputs.design, rows)
+    if len(data.column_names) != len(inputs.column_names):
+        design = design[:, _columns(inputs.column_names, sample)]
+    if not np.array_equal(_taken(inputs.y, rows), data.y) or not np.array_equal(
+        design, data.design
     ):
         raise refuse("the numeric record of the sample is not that of the preparation")
     if (columns.offset is None) != (inputs.offset is None) or (
@@ -176,15 +237,30 @@ def _check_values(inputs: RawInputs, columns: Columns, sample: OrderSample) -> N
         raise refuse("the offset or exposure read is not the one the preparation holds")
     exposure = data.exposure
     if inputs.exposure is not None:
-        if exposure is None or not np.array_equal(inputs.exposure[rows], exposure):
+        if exposure is None or not np.array_equal(
+            _taken(inputs.exposure, rows), exposure
+        ):
             raise refuse("the exposure of the sample is not that of the preparation")
     else:
         if exposure is not None:
             raise refuse("the sample holds an exposure that the preparation did not")
-        offset = np.zeros(rows.size) if inputs.offset is None else inputs.offset[rows]
+        offset = (
+            np.zeros(rows.size)
+            if inputs.offset is None
+            else _taken(inputs.offset, rows)
+        )
         if not np.array_equal(offset, data.offset):
             raise refuse("the offset of the sample is not that of the preparation")
-    weights = data.weights
+    _check_weights(inputs, columns, rows, data.weights)
+
+
+def _check_weights(
+    inputs: RawInputs,
+    columns: Columns,
+    rows: IndexArray,
+    weights: ObservationWeights | None,
+) -> None:
+    """Verify that sample weights match the preparation's retained weights."""
     if (columns.weights is None) != (weights is None) or (inputs.weights is None) != (
         weights is None
     ):

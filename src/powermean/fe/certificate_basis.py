@@ -1,9 +1,11 @@
 """Exact incidence coordinates of the fixed effects for the absorbed certificate.
 
-Internal module: the coordinates of the full joint system, fixed from the codes alone,
-before any score or curvature.
+``design/03_fixed_effects.md``, Section 2; ``design/02_computation.md``, Section 7; the
+M1.14 readiness specification, Section 1 (``plan/evidence/M1.14_readiness.txt``) and
+its dispatch; decision D51.  Task M1.14, private: the coordinates of the full joint
+system, fixed from the codes alone, before any score or curvature.
 
-``D = [D_1 ... D_G]`` holds every level indicator of a grouping; it is never
+``D = [D_1 ... D_G]`` holds every level indicator of an accepted grouping; it is never
 formed.  The reference-reduced incidence ``E`` keeps every first-block level and omits,
 in each later block, the smallest level code of each connected component of all
 blocks: the references of :func:`powermean.solve.absorbed_direction.normalize`.  Its
@@ -12,7 +14,7 @@ their order.  A reference of block ``k`` in component ``K`` is the sum of the
 first-block columns of ``K`` minus the other block-``k`` columns of ``K``: the integer
 map ``M`` with ``D = E M``.
 
-Kept columns ``J``.  Where the exact indicator rank equals the columns of ``E``
+Kept columns ``J``.  Where the accepted exact indicator rank equals the columns of ``E``
 (always for one and two blocks) ``J`` is every column (route ``connectivity``).
 Otherwise (``elimination``) the distinct code rows are reduced by exact integer row
 elimination, never a dummy matrix: each existing pivot present in a row, in increasing
@@ -37,7 +39,7 @@ positive the rows are the structural rows, of rank ``|J|`` by construction.
 :func:`lift` gathers them by row in block order with checked sums.  No effect is
 overwritten and no unique three-plus-block effect is claimed.
 
-Owned construction (:func:`owned_basis`).
+Owned construction (:func:`owned_basis`, ``design/02_computation.md``, Section 8.4).
 The basis is a deterministic function of what it reads of the grouping: the blocks in
 order, the codes of each and its number of levels.  An owner (the admitted sample)
 keeps, as a private attribute, the values of the one construction made for its
@@ -76,11 +78,11 @@ from __future__ import annotations
 import heapq
 import importlib
 import math
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from fractions import Fraction
 from types import CodeType, FunctionType, ModuleType
-from typing import Literal, NamedTuple, cast
+from typing import TYPE_CHECKING, Literal, NamedTuple, Protocol, cast, overload
 from weakref import ReferenceType, ref
 
 import numpy as np
@@ -89,19 +91,27 @@ from numpy.typing import NDArray
 from powermean.data.accounting import frozen_index
 from powermean.data.sample_fe_source import Derived
 from powermean.data.sample_fe_state import FESample
-from powermean.fe.absorb_numeric import checked_sum
-from powermean.fe.certificate_witness import (
-    FactoredRows, HeadRecipe, HeadRows, OperationalBasis, PackedHeads, RetainedRows, SparseValues,
-    WitnessBlock, WitnessContext, WitnessProof,
-)
 from powermean.fe import certificate_witness as _witness_values
 from powermean.fe import connectivity as _connectivity
 from powermean.fe import groups as _groups
+from powermean.fe.absorb_numeric import checked_sum
+from powermean.fe.certificate_witness import (
+    FactoredRows,
+    HeadRecipe,
+    HeadRows,
+    OperationalBasis,
+    PackedHeads,
+    RetainedRows,
+    SparseValues,
+    WitnessBlock,
+    WitnessContext,
+    WitnessProof,
+)
 from powermean.fe.connectivity import (
     Components,
     IndicatorRank,
-    _indicator_rank_prepared,
     _indicator_rank_counted,
+    _indicator_rank_prepared,
     components,
 )
 from powermean.fe.connectivity import indicator_rank as accepted_rank
@@ -110,12 +120,71 @@ from powermean.fe.reductions import immutable_array
 from powermean.model.order import IndexArray
 from powermean.model.variance import FloatArray
 
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from numpy.typing import ArrayLike
+
+    from powermean.data.raw import AnyArray
+    from powermean.fe.certificate_witness import _WitnessKernel
+
+    class _ConnectivityImports(Protocol):
+        _vectors: Callable[[Sequence[ArrayLike], str], tuple[AnyArray, ...]]
+        _index: Callable[[ArrayLike], IndexArray]
+
+    class _GroupImports(Protocol):
+        frozen_index: Callable[[IndexArray], IndexArray]
+
+    type _BasisTrace = list[str | int | bool | None]
+
 Route = Literal["connectivity", "elimination"]
 BoolArray = NDArray[np.bool_]
 Row = dict[int, int]  # a sparse integer row: column -> nonzero integer
 Witness = tuple[tuple[int, int, int], ...]  # (position in J, numerator, denominator)
 Rational = dict[int, int | Fraction]  # exact: an integral value may be an int
 SPAN = "the span witnesses do not reproduce the incidence of the grouping"
+
+type _RowPrimitives = tuple[
+    Callable[[*tuple[int, ...]], int],
+    Callable[[list[int]], None],
+    Callable[[list[int]], int],
+    Callable[[list[int], int], None],
+    Callable[[Row, int], None],
+]
+type _FractionConstructor = Callable[[int], Fraction]
+type _CanonicalWitness = Callable[[Rational], Witness]
+type _AuditPrimitives = tuple[*_RowPrimitives, _FractionConstructor]
+
+
+class _DependentKernel(Protocol):
+    def __call__(
+        self,
+        pivots: dict[int, Row],
+        kept: list[int],
+        column: int,
+        /,
+        *,
+        _fraction: _FractionConstructor | None = None,
+    ) -> Rational: ...
+
+
+class _ReferenceKernel(Protocol):
+    def __call__(
+        self,
+        terms: list[tuple[int, Rational]],
+        /,
+        *,
+        _canonical_value: _CanonicalWitness | None = None,
+    ) -> Witness: ...
+
+
+type _WitnessAudit = tuple[
+    tuple[IndexArray, ...],
+    tuple[int, ...],
+    Callable[[BoolArray], IndexArray],
+    _CanonicalWitness,
+    _ReferenceKernel,
+]
 
 
 NATIVE_ECHELON_MODULE_NAME = "powermean._native.basis._echelon_cpp"
@@ -284,7 +353,12 @@ def _divide(row: Row, divisor: int) -> None:
         row[c] //= divisor
 
 
-def _reduced(row: Row, pivots: dict[int, Row], *, _primitives: tuple | None = None) -> Row:
+def _reduced(
+    row: Row,
+    pivots: dict[int, Row],
+    *,
+    _primitives: _RowPrimitives | _AuditPrimitives | None = None,
+) -> Row:
     """``row`` with every existing pivot eliminated, in increasing column order.
 
     A copy of ``row`` is updated in place.  The heap holds every present pivot
@@ -314,15 +388,20 @@ def _reduced(row: Row, pivots: dict[int, Row], *, _primitives: tuple | None = No
             if old is None:
                 row[c] = -b * value
                 if c in pivots:
-                    (heapq.heappush if _primitives is None else _primitives[3])(present, c)
+                    (heapq.heappush if _primitives is None else _primitives[3])(
+                        present, c
+                    )
             elif new := old - b * value:
                 row[c] = new
             else:
                 del row[c]
         if not row:
             return row
-        divisor = (1 if 1 in values or -1 in values else
-                   (math.gcd if _primitives is None else _primitives[0])(*values))
+        divisor = (
+            1
+            if 1 in values or -1 in values
+            else (math.gcd if _primitives is None else _primitives[0])(*values)
+        )
         if row[min(row)] < 0:
             divisor = -divisor
         if divisor != 1:
@@ -342,8 +421,13 @@ def eliminate(rows: Iterable[list[int]]) -> tuple[dict[int, Row], int]:
     return pivots, seen
 
 
-def _dependent(pivots: dict[int, Row], kept: list[int], column: int,
-               *, _fraction=None) -> Rational:
+def _dependent(
+    pivots: dict[int, Row],
+    kept: list[int],
+    column: int,
+    *,
+    _fraction: _FractionConstructor | None = None,
+) -> Rational:
     """``t`` with ``R_J t = R_column``, by exact back substitution over ``kept``."""
     t: Rational = {}
     for p in reversed(kept):
@@ -355,6 +439,19 @@ def _dependent(pivots: dict[int, Row], kept: list[int], column: int,
         if rhs:
             t[p] = rhs / row[p]
     return t
+
+
+def _positions(
+    columns: tuple[IndexArray, ...], kept: list[int], count: int
+) -> tuple[IndexArray, ...]:
+    """Each column's place in ``kept``, -1 elsewhere: ``place.get(c, -1)`` by a gather.
+
+    The columns hold codes ``-1 .. count - 1``; the table's last entry, at ``count``,
+    is the -1 that a reference (``-1``) reads.
+    """
+    table = np.full(count + 1, -1, dtype=np.intp)
+    table[np.asarray(kept, dtype=np.intp)] = np.arange(len(kept), dtype=np.intp)
+    return tuple(table[col] for col in columns)
 
 
 def _kept(
@@ -371,17 +468,31 @@ def _kept(
 # --------------------------------------------------------------- the witnesses
 
 
+def _codes(column: IndexArray | Iterable[int]) -> list[int]:
+    """``[int(c) for c in column]``, by one conversion for an integer ndarray."""
+    if type(column) is np.ndarray and column.dtype.kind in "iu":
+        return cast("list[int]", column.tolist())
+    return [int(c) for c in column]
+
+
 def _canonical(found: Rational) -> Witness:
-    """A witness as sorted ``(position, numerator, denominator)`` of nonzero entries."""
+    """A witness as sorted ``(position, numerator, denominator)`` of nonzero entries.
+
+    An ``int`` entry is its own numerator over one, read without the attributes.
+    """
     return tuple(
-        (p, value.numerator, value.denominator)
+        (p, value, 1) if type(value) is int else (p, value.numerator, value.denominator)
         for p, value in sorted(found.items())
         if value
     )
 
 
 def _column_witnesses(
-    pivots: dict[int, Row], kept: list[int], count: int, *, _audit: tuple | None = None,
+    pivots: dict[int, Row],
+    kept: list[int],
+    count: int,
+    *,
+    _audit: tuple[_DependentKernel, _FractionConstructor] | None = None,
 ) -> dict[int, Rational]:
     """Each ``E`` column in ``J`` coordinates: a unit, or a dependent column's ``t``."""
     place = {c: i for i, c in enumerate(kept)}
@@ -390,13 +501,20 @@ def _column_witnesses(
         if c in place:
             found[c] = {place[c]: (Fraction if _audit is None else _audit[1])(1)}
         else:
-            t = (_dependent(pivots, kept, c) if _audit is None else
-                 _audit[0](pivots, kept, c, _fraction=_audit[1]))
+            t = (
+                _dependent(pivots, kept, c)
+                if _audit is None
+                else _audit[0](pivots, kept, c, _fraction=_audit[1])
+            )
             found[c] = {place[j]: value for j, value in t.items()}
     return found
 
 
-def _reference(terms: list[tuple[int, Rational]], *, _canonical_value=None) -> Witness:
+def _reference(
+    terms: list[tuple[int, Rational]],
+    *,
+    _canonical_value: _CanonicalWitness | None = None,
+) -> Witness:
     """``sum_i m_i w_i`` of integer multiples of rational witnesses, canonical."""
     total: Rational = {}
     for multiple, witness in terms:
@@ -410,27 +528,40 @@ def _witnesses(
     parts: Components,
     columns: tuple[IndexArray, ...],
     of_column: dict[int, Rational],
-    *, _audit: tuple | None = None,
+    *,
+    _audit: _WitnessAudit | None = None,
 ) -> tuple[tuple[Witness, ...], ...]:
     """The witness of every original level: its column's, or ``M``'s for a reference."""
     first, found = (parts.of_levels[0] if _audit is None else _audit[0][0]), []
-    for k, block in enumerate(grouping.blocks if _audit is None else range(len(columns))):
+    for k, block in enumerate(
+        grouping.blocks if _audit is None else range(len(columns))
+    ):
         mine: list[Witness] = []
-        for level in range(block.n_levels if _audit is None else _audit[1][k]):
-            column = int(columns[k][level])
+        codes = _codes(columns[k])
+        size = cast("Block", block).n_levels if _audit is None else _audit[1][k]
+        for level in range(size):
+            column = codes[level]
             if column >= 0:
-                mine.append((_canonical if _audit is None else _audit[3])(of_column[column]))
+                mine.append(
+                    (_canonical if _audit is None else _audit[3])(of_column[column])
+                )
                 continue
-            component = (parts.of_levels[k][level] if _audit is None
-                         else _audit[0][k][level])
-            heads = (np.flatnonzero if _audit is None else _audit[2])(first == component).tolist()
+            component = (
+                parts.of_levels[k][level] if _audit is None else _audit[0][k][level]
+            )
+            heads = (np.flatnonzero if _audit is None else _audit[2])(
+                first == component
+            ).tolist()
             same = (np.flatnonzero if _audit is None else _audit[2])(
                 (parts.of_levels[k] if _audit is None else _audit[0][k]) == component
             ).tolist()
             terms = [(1, of_column[int(columns[0][h])]) for h in heads]
             terms += [(-1, of_column[int(columns[k][s])]) for s in same if s != level]
-            mine.append(_reference(terms) if _audit is None else
-                        _audit[4](terms, _canonical_value=_audit[3]))
+            mine.append(
+                _reference(terms)
+                if _audit is None
+                else _audit[4](terms, _canonical_value=_audit[3])
+            )
         found.append(tuple(mine))
     return tuple(found)
 
@@ -684,19 +815,24 @@ def _parsed_dependent_witness(
     return rat, lcm_d, scaled
 
 
-def _echelon_columns(
-    pivots: dict[int, Row], kept: list[int]
-) -> tuple[dict[int, list[tuple[int, int]]], dict[int, dict[int, int]]]:
-    """Split ``pivots`` entries into kept columns ``R_J`` and dependent ``R_c``."""
-    col_rows: dict[int, list[tuple[int, int]]] = {p: [] for p in kept}
-    dep_rhs: dict[int, dict[int, int]] = {}
-    for p, row in pivots.items():
-        for c, val in row.items():
-            if c in col_rows:
-                col_rows[c].append((p, val))
-            else:
-                dep_rhs.setdefault(c, {})[p] = val
-    return col_rows, dep_rhs
+def _combined(
+    terms: list[tuple[int, int]], of_column: dict[int, Rational], place: dict[int, int]
+) -> Rational:
+    """``sum_i m_i w_i`` over columns ``c_i``, before its canonical form.
+
+    A kept column's unit witness adds ``m_i`` at its place, any other column ``m_i``
+    times its witness in ``of_column``: the same exact sum, in the same order, as
+    :func:`_reference` of the witnesses ``{place[c]: 1}`` and ``of_column[c]``.
+    """
+    total: Rational = {}
+    for multiple, column in terms:
+        at = place.get(column)
+        if at is not None:
+            total[at] = total.get(at, 0) + multiple
+            continue
+        for p, value in of_column[column].items():
+            total[p] = total.get(p, 0) + multiple * value
+    return total
 
 
 def _valid_reference_witnesses(
@@ -704,8 +840,13 @@ def _valid_reference_witnesses(
     parts: Components,
     columns: tuple[IndexArray, ...],
     of_column: dict[int, Rational],
+    place: dict[int, int],
 ) -> bool:
-    """Check that every reference level witness equals ``M``'s combination."""
+    """Check that every reference level witness equals ``M``'s combination.
+
+    ``of_column`` holds the dependent columns' witnesses; a kept column's is its
+    unit vector at ``place`` (:func:`_combined`).
+    """
     first = parts.of_levels[0]
     for k, w_blk in enumerate(witnesses):
         for level, w in enumerate(w_blk):
@@ -714,9 +855,9 @@ def _valid_reference_witnesses(
             comp = parts.of_levels[k][level]
             heads = np.flatnonzero(first == comp).tolist()
             same = np.flatnonzero(parts.of_levels[k] == comp).tolist()
-            terms = [(1, of_column[int(columns[0][h])]) for h in heads]
-            terms += [(-1, of_column[int(columns[k][s])]) for s in same if s != level]
-            if not _same_structure(w, _reference(terms)):
+            terms = [(1, int(columns[0][h])) for h in heads]
+            terms += [(-1, int(columns[k][s])) for s in same if s != level]
+            if not _same_structure(w, _canonical(_combined(terms, of_column, place))):
                 return False
     return True
 
@@ -744,6 +885,67 @@ def _check_dependent_column(
     return rat, lcm_d, scaled
 
 
+def _unit(w: object, position: int) -> bool:
+    """``_same_structure(w, ((position, 1, 1),))`` for an ``int`` position, inline."""
+    if type(w) is not tuple or len(w) != 1:
+        return False
+    entry = w[0]
+    return (
+        type(entry) is tuple
+        and len(entry) == 3
+        and type(entry[0]) is int
+        and type(entry[1]) is int
+        and type(entry[2]) is int
+        and entry == (position, 1, 1)
+    )
+
+
+def _needed_columns(
+    pivots: dict[int, Row], needed: set[int], kept: set[int]
+) -> tuple[dict[int, list[tuple[int, int]]], dict[int, dict[int, int]]]:
+    """Gather the kept columns in ``needed`` and the dependent right-hand sides."""
+    col_rows: dict[int, list[tuple[int, int]]] = {c: [] for c in sorted(needed)}
+    dep_rhs: dict[int, dict[int, int]] = {}
+    for p, row in pivots.items():
+        for c, val in row.items():
+            if c in needed:
+                col_rows[c].append((p, val))
+            elif c not in kept:
+                dep_rhs.setdefault(c, {})[p] = val
+    return col_rows, dep_rhs
+
+
+Parsed = tuple[Rational, int, list[tuple[int, int]]]  # a dependent witness, parsed
+
+
+def _witness_forms(
+    witnesses: tuple[object, ...],
+    grouping: Grouping,
+    columns: tuple[IndexArray, ...],
+    n_kept: int,
+    place: dict[int, int],
+) -> list[tuple[int, object, Parsed]] | None:
+    """Every unit witness checked and every dependent one parsed, or ``None``."""
+    dependent: list[tuple[int, object, Parsed]] = []
+    for k, (block, w_blk) in enumerate(zip(grouping.blocks, witnesses, strict=True)):
+        if type(w_blk) is not tuple or len(w_blk) != block.n_levels:
+            return None
+        codes = _codes(columns[k])
+        for level, w in enumerate(w_blk):
+            c = codes[level]
+            if c < 0:
+                continue
+            if c in place:
+                if not _unit(w, place[c]):
+                    return None
+                continue
+            parsed = _parsed_dependent_witness(w, n_kept)
+            if parsed is None:
+                return None
+            dependent.append((c, w, parsed))
+    return dependent
+
+
 def _valid_witnesses(
     witnesses: object,
     grouping: Grouping,
@@ -754,34 +956,32 @@ def _valid_witnesses(
     kept: list[int],
     place: dict[int, int],
 ) -> tuple[dict[int, list[tuple[int, int]]], dict[int, int]] | None:
-    """Check canonical unit, ``R_J t = R_c`` and reference witnesses."""
+    """Check canonical unit, ``R_J t = R_c`` and reference witnesses.
+
+    Every unit witness and the form of every dependent one are checked first; the
+    dependent equations then read only the echelon entries of the kept columns
+    their witnesses hold (:func:`_needed_columns`).  The verdict is the same.
+    """
     if type(witnesses) is not tuple or len(witnesses) != len(grouping.blocks):
         return None
-    col_rows, dep_rhs = _echelon_columns(pivots, kept)
+    dependent = _witness_forms(witnesses, grouping, columns, len(kept), place)
+    if dependent is None:
+        return None
+    needed = {kept[idx] for _, _, parsed in dependent for idx, _ in parsed[2]}
+    col_rows, dep_rhs = _needed_columns(pivots, needed, set(place))
     of_column: dict[int, Rational] = {}
     dep_inv: dict[int, list[tuple[int, int]]] = {}
     dep_scale: dict[int, int] = {}
-    for k, (block, w_blk) in enumerate(zip(grouping.blocks, witnesses, strict=True)):
-        if type(w_blk) is not tuple or len(w_blk) != block.n_levels:
+    for c, w, _ in dependent:
+        checked = _check_dependent_column(w, c, kept, col_rows, dep_rhs)
+        if checked is None:
             return None
-        for level, w in enumerate(w_blk):
-            c = int(columns[k][level])
-            if c < 0:
-                continue
-            if c in place:
-                if not _same_structure(w, ((place[c], 1, 1),)):
-                    return None
-                of_column[c] = {place[c]: 1}
-                continue
-            checked = _check_dependent_column(w, c, kept, col_rows, dep_rhs)
-            if checked is None:
-                return None
-            rat, lcm_d, scaled = checked
-            for idx, s_val in scaled:
-                dep_inv.setdefault(kept[idx], []).append((c, s_val))
-            dep_scale[c] = lcm_d
-            of_column[c] = rat
-    if not _valid_reference_witnesses(witnesses, parts, columns, of_column):
+        rat, lcm_d, scaled = checked
+        for idx, s_val in scaled:
+            dep_inv.setdefault(kept[idx], []).append((c, s_val))
+        dep_scale[c] = lcm_d
+        of_column[c] = rat
+    if not _valid_reference_witnesses(witnesses, parts, columns, of_column, place):
         return None
     return dep_inv, dep_scale
 
@@ -1003,10 +1203,7 @@ def _valid_kept(
     if type(held.selected) is not bytes or held.selected != expected_selected:
         return None
     place = {c: i for i, c in enumerate(kept)}
-    expected_positions = tuple(
-        np.array([place.get(int(c), -1) for c in col], dtype=np.intp).tobytes()
-        for col in columns
-    )
+    expected_positions = tuple(a.tobytes() for a in _positions(columns, kept, count))
     if not _same_structure(held.positions, expected_positions):
         return None
     return pivots, kept, place
@@ -1021,14 +1218,16 @@ def _valid(held: _Held, grouping: Grouping, content: Content) -> bool:
     references = _references(grouping, parts)
     columns = _columns(grouping, references)
     distinct = _distinct(grouping)
-    return _valid_prepared(
-        held, grouping, parts, rank, references, columns, distinct
-    )
+    return _valid_prepared(held, grouping, parts, rank, references, columns, distinct)
 
 
 def _valid_prepared(
-    held: _Held, grouping: Grouping, parts: Components, rank: IndicatorRank,
-    references: tuple[IndexArray, ...], columns: tuple[IndexArray, ...],
+    held: _Held,
+    grouping: Grouping,
+    parts: Components,
+    rank: IndicatorRank,
+    references: tuple[IndexArray, ...],
+    columns: tuple[IndexArray, ...],
     distinct: IndexArray,
 ) -> bool:
     """The SAME canonical map/witness/elimination checks on prepared topology."""
@@ -1106,18 +1305,42 @@ def _add(row: Reduced, column: int, value: Entry) -> None:
 
 
 def _primitive(found: Reduced) -> Row:
-    """The primitive integer row, leading entry positive, proportional to ``found``."""
-    scale = math.lcm(*(value.denominator for value in found.values()))
-    row = {c: int(value * scale) for c, value in found.items()}
+    """The primitive integer row, leading entry positive, proportional to ``found``.
+
+    When every entry is an ``int`` the scale is one and ``int(value * 1)`` is the
+    entry itself, so the row is the entries as they are.
+    """
+    if all(type(value) is int for value in found.values()):
+        row = cast("Row", dict(found))
+    else:
+        scale = math.lcm(*(value.denominator for value in found.values()))
+        row = {c: int(value * scale) for c, value in found.items()}
     divisor = math.gcd(*row.values())
     if row[min(row)] < 0:
         divisor = -divisor
     return {c: value // divisor for c, value in row.items()}
 
 
+@overload
+def _primitive_head(found: Reduced, *, compact: Literal[True]) -> SparseValues: ...
+
+
+@overload
+def _primitive_head(
+    found: Reduced, *, compact: Literal[False] = False
+) -> tuple[tuple[int, int], ...]: ...
+
+
+@overload
+def _primitive_head(
+    found: Reduced, *, compact: bool
+) -> tuple[tuple[int, int], ...] | SparseValues: ...
+
 
 def _primitive_head(
-    found: Reduced, *, compact: bool = False,
+    found: Reduced,
+    *,
+    compact: bool = False,
 ) -> tuple[tuple[int, int], ...] | SparseValues:
     """Freeze an exact integer head without two intermediate integer dictionaries.
 
@@ -1125,13 +1348,22 @@ def _primitive_head(
     its gcd, leading sign, zero entries and arbitrary-width values. Unknown
     scalar/key/container types retain the original primitive construction.
     """
-    if type(found) is not dict or not found or any(
-        type(column) is not int or type(value) is not int
-        for column, value in found.items()
-    ):
-        if compact and type(found) is dict and found and all(
-            type(column) is int and (type(value) is int or type(value) is Fraction)
+    if (
+        type(found) is not dict
+        or not found
+        or any(
+            type(column) is not int or type(value) is not int
             for column, value in found.items()
+        )
+    ):
+        if (
+            compact
+            and type(found) is dict
+            and found
+            and all(
+                type(column) is int and (type(value) is int or type(value) is Fraction)
+                for column, value in found.items()
+            )
         ):
             primitive = _primitive(found)
             ordered = sorted(primitive)
@@ -1139,8 +1371,11 @@ def _primitive_head(
                 tuple(ordered), tuple(primitive[column] for column in ordered)
             )
         pairs = tuple(sorted(_primitive(found).items()))
-        return (SparseValues(tuple(c for c, _ in pairs), tuple(v for _, v in pairs))
-                if compact else pairs)
+        return (
+            SparseValues(tuple(c for c, _ in pairs), tuple(v for _, v in pairs))
+            if compact
+            else pairs
+        )
     row = cast("Row", found)
     columns = sorted(row)
     divisor = math.gcd(*row.values())
@@ -1155,6 +1390,7 @@ def _primitive_head(
 
 _INTEGER_GCD = math.gcd
 _INTEGER_LCM = math.lcm
+
 
 def _over(value: Entry, lead: Entry) -> Entry:
     """``value / lead`` exactly: an integer when it divides, else a fraction."""
@@ -1171,9 +1407,13 @@ def _reduce_by(found: Reduced, tails: dict[int, Reduced]) -> int:
     work = 0
     for q in [c for c in found if c in tails]:
         factor = found.pop(q)
-        work += len(tails[q])
-        for c, value in tails[q].items():
-            _add(found, c, -factor * value)
+        tail = tails[q]
+        work += len(tail)
+        for c, value in tail.items():  # _add(found, c, -factor * value), inline
+            if new := found.get(c, 0) + -factor * value:
+                found[c] = new
+            else:
+                found.pop(c, None)
     return work
 
 
@@ -1192,7 +1432,10 @@ def _new_tail(
         work += len(row)
         for c, value in row.items():
             had = c in other
-            _add(other, c, -factor * value)
+            if new := other.get(c, 0) + -factor * value:  # _add, inline
+                other[c] = new
+            else:
+                other.pop(c, None)
             if c in other and not had:
                 holders.setdefault(c, set()).add(q)
             elif had and c not in other:
@@ -1206,13 +1449,22 @@ def _new_tail(
 class _EchelonRows(NamedTuple):
     """Canonical head rows once; only later pivots need mutable exact dictionaries."""
 
-    heads: dict[int, tuple[tuple[int, int], ...] | SparseValues | HeadRecipe] | PackedHeads
+    heads: (
+        dict[int, tuple[tuple[int, int], ...] | SparseValues | HeadRecipe] | PackedHeads
+    )
     later: dict[int, Row | SparseValues]
     tails: dict[int, Reduced]
 
 
+type _PairRow = tuple[tuple[int, int], ...]
+type _HeadMap = dict[int, _PairRow | SparseValues | HeadRecipe]
+type _StoredEchelon = tuple[_PairRow | SparseValues | HeadRecipe, ...] | PackedHeads
+
+
 def _head_work(
-    head: HeadRecipe, later: list[int], tails: dict[int, Reduced],
+    head: HeadRecipe,
+    later: list[int],
+    tails: dict[int, Reduced],
 ) -> int:
     """Charge the ORIGINAL primitive-head reduction, without expanding that head.
 
@@ -1223,12 +1475,16 @@ def _head_work(
     candidates.update(column for column in head.anchor if column in tails)
     for _, row in head.birth:
         candidates.update(column for column in row.positions if column in tails)
-    return sum(len(tails[column]) for column in candidates
-               if int(column in later) != head.at(column))
+    return sum(
+        len(tails[column])
+        for column in candidates
+        if int(column in later) != head.at(column)
+    )
 
 
 def _unpacked_echelon(
-    mapped: Iterable[IndexArray], budget: int,
+    mapped: Iterable[IndexArray],
+    budget: int,
 ) -> _EchelonRows | None:
     """The same primitive remainders, retaining small anchors and birth versions.
 
@@ -1276,20 +1532,24 @@ def _unpacked_echelon(
                 work += _new_tail(pivot, tail, tails, holders)
         if work > budget:
             return None
-    return _EchelonRows(heads, pivots, tails)
+    return _EchelonRows(cast("_HeadMap", heads), pivots, tails)
 
 
 def _packed_head_work(
-    anchor: IndexArray, births: IndexArray, versions: list[SparseValues],
-    later: list[int], tails: dict[int, Reduced],
+    anchor: IndexArray,
+    births: IndexArray,
+    versions: list[SparseValues],
+    later: list[int],
+    tails: dict[int, Reduced],
 ) -> int:
     """The original primitive-head charge, without a per-head value object."""
     candidates = {column for column in later if column in tails}
     candidates.update(int(column) for column in anchor if int(column) in tails)
     for version in births:
         if version >= 0:
-            candidates.update(column for column in versions[int(version)].positions
-                              if column in tails)
+            candidates.update(
+                column for column in versions[int(version)].positions if column in tails
+            )
     work = 0
     for column in candidates:
         value: int | Fraction = int(column in anchor)
@@ -1307,8 +1567,10 @@ _UNPACKED_ECHELON = _unpacked_echelon
 
 
 def _packed_echelon(
-    mapped: tuple[IndexArray, ...] | list[IndexArray], budget: int, count: int,
-) -> _EchelonRows | None | Literal[False]:
+    mapped: tuple[IndexArray, ...] | list[IndexArray],
+    budget: int,
+    count: int,
+) -> _EchelonRows | Literal[False] | None:
     """Packed dense heads; False abandons optional storage before old fallback.
 
     Required primitive/reduction/WORK operations are never caught. Optional
@@ -1324,7 +1586,7 @@ def _packed_echelon(
         return False
     offsets[0] = 0
     seen, used, work = 0, 0, 0
-    pivots: dict[int, Row | SparseValues] = {}
+    pivots: dict[int, SparseValues] = {}
     tails: dict[int, Reduced] = {}
     holders: dict[int, set[int]] = {}
     for values in zip(*mapped, strict=True):
@@ -1369,37 +1631,61 @@ def _packed_echelon(
     if seen != count:
         return False
     try:
-        heads = PackedHeads(count, offsets.tobytes(), anchors[:used].tobytes(),
-                            births[:used].tobytes(), tuple(versions),
-                            tuple(pivots[p] for p in sorted(pivots)))
+        heads = PackedHeads(
+            count,
+            offsets.tobytes(),
+            anchors[:used].tobytes(),
+            births[:used].tobytes(),
+            tuple(versions),
+            tuple(pivots[p] for p in sorted(pivots)),
+        )
     except MemoryError:
         return False
-    return _EchelonRows(heads, pivots, tails)
+    return _EchelonRows(heads, cast("dict[int, Row | SparseValues]", pivots), tails)
 
 
 def _factored_echelon(
-    mapped: Iterable[IndexArray], budget: int, *, head_count: int | None = None,
+    mapped: Iterable[IndexArray],
+    budget: int,
+    *,
+    head_count: int | None = None,
 ) -> _EchelonRows | None:
     """One exact elimination, selecting only optional packed representation."""
     try:
-        eligible = (type(head_count) is int and head_count > 0
-                    and (type(mapped) is tuple or type(mapped) is list)
-                    and _packed_original is _PACKED_GUARD and _packed_original()
-                    and mapped and all(type(a) is np.ndarray and a.dtype == np.intp
-                                       and a.ndim == 1 for a in mapped)
-                    and mapped[0].size)
+        eligible = (
+            type(head_count) is int
+            and head_count > 0
+            and (type(mapped) is tuple or type(mapped) is list)
+            and _packed_original is _PACKED_GUARD
+            and _packed_original()
+            and mapped
+            and all(
+                type(a) is np.ndarray and a.dtype == np.intp and a.ndim == 1
+                for a in mapped
+            )
+            and mapped[0].size
+        )
     except MemoryError:
         eligible = False
     if eligible:
-        packed = _packed_echelon(mapped, budget, head_count)
+        # Eligibility above checks the exact container and integer count.
+        packed = _packed_echelon(
+            cast("tuple[IndexArray, ...] | list[IndexArray]", mapped),
+            budget,
+            cast("int", head_count),
+        )
         if packed is not False:
             return packed
     return _UNPACKED_ECHELON(mapped, budget)
 
 
 def _echelon_rows(
-    columns: tuple[IndexArray, ...], distinct: IndexArray, budget: int,
-    *, mapped: tuple[IndexArray, ...] | None = None, compact: bool = False,
+    columns: tuple[IndexArray, ...],
+    distinct: IndexArray,
+    budget: int,
+    *,
+    mapped: tuple[IndexArray, ...] | None = None,
+    compact: bool = False,
 ) -> _EchelonRows | None:
     """The existing exact elimination, keeping its first-block proof rows directly.
 
@@ -1416,24 +1702,31 @@ def _echelon_rows(
     work = 0
     freeze_heads = (
         _fit_generated()
-        and math.gcd is _INTEGER_GCD and math.lcm is _INTEGER_LCM
+        and math.gcd is _INTEGER_GCD
+        and math.lcm is _INTEGER_LCM
         and type(columns) is tuple
-        and all(type(column) is np.ndarray and column.dtype == np.intp
-                and column.ndim == 1 for column in columns)
-        and type(distinct) is np.ndarray and distinct.dtype == np.intp
+        and all(
+            type(column) is np.ndarray and column.dtype == np.intp and column.ndim == 1
+            for column in columns
+        )
+        and type(distinct) is np.ndarray
+        and distinct.dtype == np.intp
         and distinct.ndim == (2 if mapped is None else 1)
     )
     compact = compact and freeze_heads
     col_arrays = (
         [col[distinct[:, k]] for k, col in enumerate(columns)]
-        if mapped is None else mapped
+        if mapped is None
+        else mapped
     )
     if compact:
-        return _factored_echelon(col_arrays, budget,
-                                 head_count=columns[0].size if columns else None)
-    for values in zip(*col_arrays, strict=True):
-        head = int(values[0])
-        later = [int(c) for c in values[1:] if c >= 0]
+        return _factored_echelon(
+            col_arrays, budget, head_count=columns[0].size if columns else None
+        )
+    # The same codes as Python integers, converted once instead of entry by entry.
+    for values in zip(*map(_codes, col_arrays), strict=True):
+        head = values[0]
+        later = [c for c in values[1:] if c >= 0]
         row = heads.get(head)
         found: Reduced
         if row is None:
@@ -1441,36 +1734,33 @@ def _echelon_rows(
         else:
             items = row.items() if type(row) is SparseValues else row
             found = {c: -value for c, value in items if c != head}
-            lead = row.numerators[0] if type(row) is SparseValues else row[0][1]
+            lead: Entry = row.numerators[0] if type(row) is SparseValues else row[0][1]
             for c in later:
                 _add(found, c, lead)
         work += _reduce_by(found, tails)
         if row is None:
             found[head] = 1
             heads[head] = (
-                _primitive_head(found, compact=True) if compact else
-                _primitive_head(found) if freeze_heads
+                _primitive_head(found)
+                if freeze_heads
                 else tuple(sorted(_primitive(found).items()))
             )
         elif found:
             p = min(found)
-            primitive = _primitive(found)
-            if compact:
-                ordered = sorted(primitive)
-                pivots[p] = SparseValues(tuple(ordered), tuple(primitive[c] for c in ordered))
-            else:
-                pivots[p] = primitive
+            pivots[p] = _primitive(found)
             lead = found.pop(p)
             tail = {c: _over(value, lead) for c, value in found.items()}
             work += _new_tail(p, tail, tails, holders)
         if work > budget:
             return None
-    return _EchelonRows(heads, pivots, tails)
+    return _EchelonRows(cast("_HeadMap", heads), pivots, tails)
 
 
 def _indexed_echelon(
-    grouping: Grouping, columns: tuple[IndexArray, ...],
-    first: IndexArray, budget: int,
+    grouping: Grouping,
+    columns: tuple[IndexArray, ...],
+    first: IndexArray,
+    budget: int,
 ) -> _EchelonRows | None:
     """Gather canonical coordinates once from already selected source rows."""
     mapped = tuple(
@@ -1487,14 +1777,16 @@ def _materialized_pivots(rows: _EchelonRows) -> dict[int, Row]:
         type(row) is SparseValues for row in rows.later.values()
     ):
         pivots = {
-            p: dict(row.items()) if type(row) is SparseValues else row
+            p: dict(row.items()) if type(row) is SparseValues else cast("Row", row)
             for p, row in rows.later.items()
         }
     while rows.heads:
-        p, row = rows.heads.popitem()
+        p, row = cast("_HeadMap", rows.heads).popitem()
         if type(row) is HeadRecipe:
             row = row.expanded()
-        pivots[p] = dict(row.items() if type(row) is SparseValues else row)
+        pivots[p] = dict(
+            row.items() if type(row) is SparseValues else cast("_PairRow", row)
+        )
     return pivots
 
 
@@ -1506,9 +1798,7 @@ def _proposed_echelon(
     return None if rows is None else (_materialized_pivots(rows), rows.tails)
 
 
-def _witness_row(
-    p: int, pivots: dict[int, Row], tails: dict[int, Reduced]
-) -> Reduced:
+def _witness_row(p: int, pivots: dict[int, Row], tails: dict[int, Reduced]) -> Reduced:
     """The existing exact proposed row, shared by generic and private producers."""
     row = tails.get(p)
     if row is None:
@@ -1533,16 +1823,18 @@ def _proposed_witnesses(
 
     With ``F = R_JJ^-1 R`` (one at its own pivot, zero at every other), a dependent
     column's ``t`` is ``F``'s column: a later pivot's reduced row, or a head's row
-    with its later pivots eliminated, divided by its pivot entry.
+    with its later pivots eliminated, divided by its pivot entry.  An integral
+    entry stays a Python ``int``, the same rational as its ``Fraction``: sums of
+    them are exact, and :func:`_canonical` reads the same numerator and denominator.
     """
     place = {c: i for i, c in enumerate(kept)}
-    found: dict[int, Rational] = {c: {place[c]: Fraction(1)} for c in kept}
+    found: dict[int, Rational] = {c: {place[c]: 1} for c in kept}
     for c in range(count):
         found.setdefault(c, {})
     for p in kept:
         row = _witness_row(p, pivots, tails)
         for c, value in row.items():
-            found[c][place[p]] = Fraction(value)
+            found[c][place[p]] = value
     return found
 
 
@@ -1567,8 +1859,11 @@ def _proposal(grouping: Grouping) -> CertificateBasis | None:
 
 
 def _proposal_prepared(
-    grouping: Grouping, parts: Components, rank: IndicatorRank,
-    references: tuple[IndexArray, ...], columns: tuple[IndexArray, ...],
+    grouping: Grouping,
+    parts: Components,
+    rank: IndicatorRank,
+    references: tuple[IndexArray, ...],
+    columns: tuple[IndexArray, ...],
     distinct: IndexArray,
 ) -> CertificateBasis | None:
     """The SAME bounded proposal construction on fixed freshly prepared facts."""
@@ -1588,11 +1883,7 @@ def _proposal_prepared(
         of_column = _proposed_witnesses(pivots, tails, kept, count)
     if not rank.lower <= len(kept) <= rank.upper:
         return None
-    place = {c: i for i, c in enumerate(kept)}
-    positions = tuple(
-        frozen_index(np.array([place.get(int(c), -1) for c in col], dtype=np.intp))
-        for col in columns
-    )
+    positions = tuple(map(frozen_index, _positions(columns, kept, count)))
     return CertificateBasis(
         grouping=grouping,
         route=route,
@@ -1607,20 +1898,16 @@ def _proposal_prepared(
     )
 
 
-
 def _fit_index(value: object) -> bool:
     """The original content eligibility metadata, without serializing owned rows."""
-    return (
-        type(value) is np.ndarray
-        and value.dtype == np.intp
-        and value.ndim == 1
-    )
+    return type(value) is np.ndarray and value.dtype == np.intp and value.ndim == 1
 
 
 def _fit_grouping(grouping: object) -> bool:
     """Use only exact built-in owned records; unknown inputs keep owned_basis."""
     if type(grouping) not in (Grouping, Derived):
         return False
+    grouping = cast("Grouping", grouping)
     own = vars(grouping)
     blocks = own.get("blocks")
     if (
@@ -1639,77 +1926,10 @@ def _fit_grouping(grouping: object) -> bool:
     )
 
 
-def _fit_echelon(
-    pivots: dict[int, Row], count: int
-) -> tuple[list[int], tuple[tuple[tuple[int, int], ...], ...]] | None:
-    """Prove primitive positive-leading rows and freeze their canonical order once."""
-    if type(pivots) is not dict or any(
-        type(p) is not int or not 0 <= p < count for p in pivots
-    ):
-        return None
-    kept = sorted(pivots)
-    echelon = []
-    for p in kept:
-        row = pivots[p]
-        if type(row) is not dict or not row:
-            return None
-        if any(
-            type(c) is not int or type(v) is not int or v == 0 or not 0 <= c < count
-            for c, v in row.items()
-        ):
-            return None
-        if min(row) != p or row[p] <= 0 or math.gcd(*row.values()) != 1:
-            return None
-        echelon.append(tuple(sorted(row.items())))
-    return kept, tuple(echelon)
-
-
-def _fit_dependent(
-    mapping: Rational, column: int, kept: list[int],
-    col_rows: dict[int, list[tuple[int, int]]], dep_rhs: dict[int, dict[int, int]],
-) -> tuple[int, list[tuple[int, int]]] | None:
-    """Check the fresh rational map directly against R_J t = R_column."""
-    denominator = math.lcm(*(value.denominator for value in mapping.values()))
-    scaled = [
-        (idx, value.numerator * (denominator // value.denominator))
-        for idx, value in sorted(mapping.items()) if value
-    ]
-    lhs: dict[int, int] = {}
-    for idx, value in scaled:
-        for p, entry in col_rows[kept[idx]]:
-            lhs[p] = lhs.get(p, 0) + entry * value
-    if {p: v for p, v in lhs.items() if v} != {
-        p: v * denominator for p, v in dep_rhs.get(column, {}).items()
-    }:
-        return None
-    return denominator, scaled
-
-
-def _fit_maps(
-    pivots: dict[int, Row], tails: dict[int, Reduced], place: dict[int, int], count: int
-) -> dict[int, Rational] | None:
-    """Only genuine dependent maps; kept identities are the existing place map."""
-    found: dict[int, Rational] = {c: {} for c in range(count) if c not in place}
-    for p, position in place.items():
-        row = _witness_row(p, pivots, tails)
-        if type(row) is not dict:
-            return None
-        for c, value in row.items():
-            if (type(c) is not int or not 0 <= c < count
-                    or type(value) not in (int, Fraction)):
-                return None
-            if c in place:
-                # The generic map's only admitted kept entry is its own unit.
-                # Do not hide a malformed cross-pivot or nonunit contribution.
-                if c != p or value != 1:
-                    return None
-            else:
-                found[c][position] = Fraction(value)
-    return found
-
-
 def _fit_row_maps(
-    rows: _EchelonRows, place: dict[int, int], count: int,
+    rows: _EchelonRows,
+    place: dict[int, int],
+    count: int,
 ) -> dict[int, Rational]:
     """Exact dependent columns from the same head/tail rows and one scratch row.
 
@@ -1723,11 +1943,17 @@ def _fit_row_maps(
         lead = 1
         if row is None:
             scratch.clear()
-            head = rows.heads[p]
+            head = cast("_HeadMap", rows.heads)[p]
             if type(head) is HeadRecipe:
                 head = head.expanded()
-            lead = head.numerators[0] if type(head) is SparseValues else head[0][1]
-            items = head.items() if type(head) is SparseValues else head
+            lead = (
+                head.numerators[0]
+                if type(head) is SparseValues
+                else cast("_PairRow", head)[0][1]
+            )
+            items = (
+                head.items() if type(head) is SparseValues else cast("_PairRow", head)
+            )
             for c, coefficient in items:
                 if c == p:
                     continue
@@ -1745,129 +1971,14 @@ def _fit_row_maps(
     return dependent
 
 
-def _fit_column_maps(
-    pivots: dict[int, Row], kept: list[int], place: dict[int, int],
-    count: int, of_column: dict[int, Rational],
-) -> tuple[dict[int, Part], dict[int, int]] | None:
-    """Prove the explicit dependent maps; kept identities follow from place."""
-    if (type(of_column) is not dict or len(of_column) != count - len(kept) or any(
-        type(c) is not int or not 0 <= c < count or c in place for c in of_column
-    )):
-        return None
-    col_rows, dep_rhs = _echelon_columns(pivots, kept) if pivots else ({}, {})
-    dep_inv: dict[int, Part] = {}
-    dep_scale: dict[int, int] = {}
-    for c, mapping in of_column.items():
-        if type(mapping) is not dict or any(
-            type(idx) is not int or not 0 <= idx < len(kept)
-            or type(value) not in (int, Fraction)
-            for idx, value in mapping.items()
-        ):
-            return None
-        checked = _fit_dependent(mapping, c, kept, col_rows, dep_rhs)
-        if checked is None:
-            return None
-        denominator, scaled = checked
-        for idx, value in scaled:
-            dep_inv.setdefault(kept[idx], []).append((c, value))
-        dep_scale[c] = denominator
-    return dep_inv, dep_scale
-
-
-def _fit_add(
-    total: Rational, column: int, multiple: int,
-    place: dict[int, int], dependent: dict[int, Rational],
-) -> None:
-    """Accumulate exact sparse reference terms, dropping zeros as they cancel."""
-    position = place.get(column)
-    if position is not None:
-        if new := total.get(position, 0) + multiple:
-            total[position] = new
-        else:
-            total.pop(position, None)
-    else:
-        for p, value in dependent[column].items():
-            if new := total.get(p, 0) + multiple * value:
-                total[p] = new
-            else:
-                total.pop(p, None)
-
-
-def _fit_witnesses_checked(
-    grouping: Grouping, parts: Components, columns: tuple[IndexArray, ...],
-    place: dict[int, int], dependent: dict[int, Rational],
-) -> tuple[tuple[Witness, ...], ...]:
-    """Emit the same complete canonical witnesses, with implicit kept identities."""
-    first, found = parts.of_levels[0], []
-    for k, block in enumerate(grouping.blocks):
-        mine: list[Witness] = []
-        for level in range(block.n_levels):
-            column = int(columns[k][level])
-            position = place.get(column)
-            if position is not None:
-                mine.append(((position, 1, 1),))
-            elif column >= 0:
-                mine.append(_canonical(dependent[column]))
-            else:
-                component = parts.of_levels[k][level]
-                total: Rational = {}
-                for h in np.flatnonzero(first == component).tolist():
-                    _fit_add(total, int(columns[0][h]), 1, place, dependent)
-                for s in np.flatnonzero(parts.of_levels[k] == component).tolist():
-                    if s != level:
-                        _fit_add(total, int(columns[k][s]), -1, place, dependent)
-                mine.append(_canonical(total))
-        found.append(tuple(mine))
-    return tuple(found)
-
-
-def _fit_component_sums(
-    columns: IndexArray, components: IndexArray,
-    place: dict[int, int], dependent: dict[int, Rational],
-) -> dict[int, Rational]:
-    """Sum first-block witnesses once per component, using exact integer units."""
-    totals: dict[int, Rational] = {}
-    for component, column in zip(components.tolist(), columns.tolist(), strict=True):
-        total = totals.get(component)
-        if total is None:
-            total = {}
-            totals[component] = total
-        _fit_add(total, column, 1, place, dependent)
-    return totals
-
-
-def _fit_reference_block(
-    layout: tuple[IndexArray, IndexArray], heads: dict[int, Rational],
-    place: dict[int, int], dependent: dict[int, Rational],
-) -> dict[int, Witness]:
-    """Each reference is its component's head sum less its nonreference levels."""
-    columns, components = layout
-    references = np.flatnonzero(columns < 0).tolist()
-    totals = {
-        int(components[level]): dict(heads[int(components[level])])
-        for level in references
-    }
-    for component, column in zip(components.tolist(), columns.tolist(), strict=True):
-        if column >= 0:
-            _fit_add(totals[component], column, -1, place, dependent)
-    return {
-        level: _canonical(totals[int(components[level])]) for level in references
-    }
-
-
-def _fit_witnesses(
-    grouping: Grouping, parts: Components, columns: tuple[IndexArray, ...],
-    place: dict[int, int], dependent: dict[int, Rational],
-) -> tuple[tuple[Witness, ...], ...]:
-    """Keep the original eager checked route for changed generators/callbacks."""
-    return _fit_witnesses_checked(grouping, parts, columns, place, dependent)
-
-
 def _compact_witnesses(
-    grouping: Grouping, parts: Components,
+    grouping: Grouping,
+    parts: Components,
     layout: tuple[tuple[IndexArray, ...], tuple[IndexArray, ...]],
-    place: dict[int, int], dependent: dict[int, Rational],
-    *, echelon: tuple[tuple[tuple[int, int], ...] | SparseValues | HeadRecipe, ...] | PackedHeads,
+    place: dict[int, int],
+    dependent: dict[int, Rational],
+    *,
+    echelon: _StoredEchelon,
     rows: _EchelonRows | None = None,
 ) -> WitnessProof:
     """Freeze dependent values once; leave units and reference combinations implicit.
@@ -1876,21 +1987,33 @@ def _compact_witnesses(
     sorted heads then sorted later pivots therefore give increasing J. Its
     consecutive place values within each block are exactly start + level minus
     preceding nonkept levels, including every disconnected/reference/dependent gap.
-    Changed generators keep the checked eager route, never this encoding.
+    The prepared builder supplies these exact rows and their level positions.
     """
     columns, positions = layout
     packed = rows is not None and type(rows.heads) is PackedHeads
-    factored = packed or rows is not None and all(
-        type(row) is HeadRecipe for row in rows.heads.values()
+    factored = packed or (
+        rows is not None
+        and all(
+            type(row) is HeadRecipe for row in cast("_HeadMap", rows.heads).values()
+        )
     )
-    minimum = rows.heads.count if packed else 0
-    count = (minimum + sum(int(np.count_nonzero(c >= 0)) for c in columns[1:])
-             if packed else _count(columns))
-    dependent_columns = tuple(
-        column for column in range(minimum, count) if column not in place
-    ) if factored else tuple(sorted(dependent))
-    values = () if factored else tuple(
-        _sparse_witness(dependent[c]) for c in dependent_columns
+    minimum = (
+        cast("PackedHeads", cast("_EchelonRows", rows).heads).count if packed else 0
+    )
+    count = (
+        minimum + sum(int(np.count_nonzero(c >= 0)) for c in columns[1:])
+        if packed
+        else _count(columns)
+    )
+    dependent_columns = (
+        tuple(column for column in range(minimum, count) if column not in place)
+        if factored
+        else tuple(sorted(dependent))
+    )
+    values = (
+        ()
+        if factored
+        else tuple(_sparse_witness(dependent[c]) for c in dependent_columns)
     )
     frozen = {} if factored else dict(zip(dependent_columns, values, strict=True))
     factors = None
@@ -1898,36 +2021,49 @@ def _compact_witnesses(
         assert rows is not None
         tail_columns = tuple(sorted(rows.tails))
         factors = FactoredRows(
-            rows.heads if packed else
-            tuple(cast("HeadRecipe", rows.heads[p]) for p in sorted(rows.heads)),
-            tail_columns, tuple(_sparse_witness(rows.tails[p]) for p in tail_columns),
+            cast("PackedHeads", rows.heads)
+            if packed
+            else tuple(
+                cast("dict[int, HeadRecipe]", rows.heads)[p]
+                for p in sorted(cast("_HeadMap", rows.heads))
+            ),
+            tail_columns,
+            tuple(_sparse_witness(rows.tails[p]) for p in tail_columns),
             tuple(place[p] for p in tail_columns),
         )
     context = WitnessContext(
         tuple(_proof_bytes(c) for c in columns),
         tuple(_proof_bytes(c) for c in parts.of_levels),
         tuple(_proof_bytes(p) for p in positions),
-        dependent_columns, values, factors,
+        dependent_columns,
+        values,
+        factors,
     )
     blocks: list[WitnessBlock] = []
     start = 0
     for k, column in enumerate(columns):
-        levels = (() if packed and k == 0 else
-                  tuple(np.flatnonzero(positions[k] < 0).tolist()))
+        levels = (
+            ()
+            if packed and k == 0
+            else tuple(np.flatnonzero(positions[k] < 0).tolist())
+        )
         exceptions = tuple(
             (c if factored else frozen[c]) if (c := int(column[level])) >= 0 else None
             for level in levels
         )
-        blocks.append(WitnessBlock(
-            grouping.blocks[k].n_levels, start, levels, exceptions, context, k
-        ))
+        blocks.append(
+            WitnessBlock(
+                grouping.blocks[k].n_levels, start, levels, exceptions, context, k
+            )
+        )
         start += column.size - len(levels)
-    retained = None
     if packed:
         try:
             retained = _retained_rows(context)
         except MemoryError:
-            pass  # Optional action only; required full action remains available.
+            retained = None  # Optional action only; full action remains available.
+    else:
+        retained = None
     return WitnessProof(tuple(blocks), echelon, retained)
 
 
@@ -1939,8 +2075,8 @@ def _retained_rows(context: WitnessContext | OperationalBasis) -> RetainedRows:
     First-block units contribute zero to every retained reference coefficient.
     """
     factors = context.factors
-    assert factors is not None and (type(factors.heads) is PackedHeads
-                                    or type(factors.heads) is HeadRows)
+    assert factors is not None
+    assert type(factors.heads) is PackedHeads or type(factors.heads) is HeadRows
     minimum = factors.heads.count
     columns = tuple(np.frombuffer(raw, dtype=np.intp) for raw in context.columns)
     positions = tuple(np.frombuffer(raw, dtype=np.intp) for raw in context.positions)
@@ -1949,50 +2085,89 @@ def _retained_rows(context: WitnessContext | OperationalBasis) -> RetainedRows:
     count = minimum + sum(int(np.count_nonzero(col >= 0)) for col in columns[1:])
     block_of = np.empty(count - minimum, dtype=np.intp)
     level_of = np.empty(count - minimum, dtype=np.intp)
-    references = ({}, *({int(components0[b][level]): int(level)
-                         for level in np.flatnonzero(columns[b] < 0)}
-                        for b in range(1, len(columns))))
+    references = (
+        {},
+        *(
+            {
+                int(components0[b][level]): int(level)
+                for level in np.flatnonzero(columns[b] < 0)
+            }
+            for b in range(1, len(columns))
+        ),
+    )
     for block, col in enumerate(columns[1:], start=1):
         levels = np.flatnonzero(col >= 0)
         block_of[col[levels] - minimum], level_of[col[levels] - minimum] = block, levels
     actions: list[dict[int, list[tuple[int, int, int]]]] = [{} for _ in columns]
     norm = Fraction(1)
-    for index, (pivot, row) in enumerate(zip(factors.tail_columns, factors.tails, strict=True)):
-        norm = max(norm, sum((abs(Fraction(n, d)) for n, d in
-                             zip(row.numerators, row.denominators, strict=True)), Fraction(0)))
+    for index, (pivot, row) in enumerate(
+        zip(factors.tail_columns, factors.tails, strict=True)
+    ):
+        norm = max(
+            norm,
+            sum(
+                (
+                    abs(Fraction(n, d))
+                    for n, d in zip(row.numerators, row.denominators, strict=True)
+                ),
+                Fraction(0),
+            ),
+        )
         sums: dict[tuple[int, int], int | Fraction] = {}
-        terms = [(pivot, 1, 1), *zip(row.positions, row.numerators, row.denominators, strict=True)]
+        terms = [
+            (pivot, 1, 1),
+            *zip(row.positions, row.numerators, row.denominators, strict=True),
+        ]
         for column, numerator, denominator in sorted(terms):
-            block, level = int(block_of[column - minimum]), int(level_of[column - minimum])
+            block, level = (
+                int(block_of[column - minimum]),
+                int(level_of[column - minimum]),
+            )
             component = int(components0[block][level])
             value = numerator if denominator == 1 else Fraction(numerator, denominator)
             key = (block, component)
             sums[key] = sums.get(key, 0) - value
             if column != pivot:
-                actions[block].setdefault(level, []).append((index, numerator, denominator))
+                actions[block].setdefault(level, []).append(
+                    (index, numerator, denominator)
+                )
         for (block, component), value in sums.items():
             if value:
                 level = references[block][component]
                 actions[block].setdefault(level, []).append(
-                    (index, value.numerator, value.denominator))
+                    (index, value.numerator, value.denominator)
+                )
     kept_levels, kept_positions = [b""], [b""]
     for place in positions[1:]:
         levels = np.flatnonzero(place >= minimum)
         kept_levels.append(levels.tobytes())
         kept_positions.append((place[levels] - minimum).tobytes())
     ordered = tuple(tuple(sorted(block)) for block in actions)
-    return RetainedRows(minimum, tuple(kept_levels), tuple(kept_positions), ordered,
-                        tuple(tuple(tuple(actions[b][level]) for level in levels)
-                              for b, levels in enumerate(ordered)), norm)
+    return RetainedRows(
+        minimum,
+        tuple(kept_levels),
+        tuple(kept_positions),
+        ordered,
+        tuple(
+            tuple(tuple(actions[b][level]) for level in levels)
+            for b, levels in enumerate(ordered)
+        ),
+        norm,
+    )
 
 
 def _packed_coordinates(
-    columns: tuple[IndexArray, ...], head_count: int,
-    later: tuple[int, ...], count: int,
+    columns: tuple[IndexArray, ...],
+    head_count: int,
+    later: tuple[int, ...],
+    count: int,
 ) -> tuple[IndexArray, tuple[IndexArray, ...]]:
     """The same dense lookup, without head-sized Python kept/place objects."""
-    selected = frozen_index(np.concatenate((np.arange(head_count, dtype=np.intp),
-                                            np.asarray(later, dtype=np.intp))))
+    selected = frozen_index(
+        np.concatenate(
+            (np.arange(head_count, dtype=np.intp), np.asarray(later, dtype=np.intp))
+        )
+    )
     lookup = np.full(count + 1, -1, dtype=np.intp)
     lookup[selected] = np.arange(selected.size, dtype=np.intp)
     return selected, tuple(frozen_index(lookup[column]) for column in columns)
@@ -2002,16 +2177,18 @@ def _sparse_witness(mapping: Rational) -> SparseValues:
     """Detach canonical dependent primitives without allocating outward triples."""
     items = [(p, v) for p, v in sorted(mapping.items()) if v]
     return SparseValues(
-        tuple(p for p, _ in items), tuple(v.numerator for _, v in items),
+        tuple(p for p, _ in items),
+        tuple(v.numerator for _, v in items),
         tuple(v.denominator for _, v in items),
     )
 
 
 def _proof_bytes(values: IndexArray) -> bytes:
     """Retain complete immutable value bytes, never a mutable array header."""
-    if (values.flags.c_contiguous and type(values.base) is bytes
-            and len(values.base) == values.nbytes):
-        return values.base
+    if values.flags.c_contiguous:
+        owner: object = values.base
+        if type(owner) is bytes and len(owner) == values.nbytes:
+            return owner
     return values.tobytes()
 
 
@@ -2037,13 +2214,19 @@ def _audit_echelon(mapped: tuple[IndexArray, ...], count: int) -> Replay | None:
 def _anchor_row(head: int, later: list[int], tails: dict[int, Reduced]) -> Reduced:
     """The head's anchor row reduced by the later pivots that exist now."""
     row: Reduced = {head: 1}
-    for column in later:
+    for column in later:  # _add(row, ., .), inline
         tail = tails.get(column)
         if tail is None:
-            _add(row, column, 1)
+            if new := row.get(column, 0) + 1:
+                row[column] = new
+            else:
+                row.pop(column, None)
         else:
             for other, value in tail.items():
-                _add(row, other, -value)
+                if new := row.get(other, 0) + -value:
+                    row[other] = new
+                else:
+                    row.pop(other, None)
     return row
 
 
@@ -2068,24 +2251,39 @@ def _audit_sum(parts: _Terms) -> Witness:
     """
     terms = sum(p.size for p, _ in parts)
     limit = _AUDIT_INT64_MAX // max(terms, 1)
-    if (_small_integers((w for _, w in parts if type(w) is not list), limit)
-            and _small_integers((w for _, v in parts if type(v) is list for w in v), limit)):
-        positions = (np.concatenate([p for p, _ in parts]) if parts
-                     else np.empty(0, np.intp))
-        weights = np.concatenate([
-            np.asarray(w, dtype=np.int64) if type(w) is list
-            else np.full(p.size, w, dtype=np.int64) for p, w in parts
-        ]) if parts else np.empty(0, np.int64)
+    if _small_integers(
+        (w for _, w in parts if type(w) is not list), limit
+    ) and _small_integers((w for _, v in parts if type(v) is list for w in v), limit):
+        positions = (
+            np.concatenate([p for p, _ in parts]) if parts else np.empty(0, np.intp)
+        )
+        weights = (
+            np.concatenate(
+                [
+                    np.asarray(w, dtype=np.int64)
+                    if type(w) is list
+                    else np.full(p.size, w, dtype=np.int64)
+                    for p, w in parts
+                ]
+            )
+            if parts
+            else np.empty(0, np.int64)
+        )
         unique, inverse = np.unique(positions, return_inverse=True)
         sums = np.zeros(unique.size, dtype=np.int64)
         np.add.at(sums, inverse, weights)
         keep = sums != 0
-        return tuple((p, v, 1) for p, v in
-                     zip(unique[keep].tolist(), sums[keep].tolist(), strict=True))
+        return tuple(
+            (p, v, 1)
+            for p, v in zip(unique[keep].tolist(), sums[keep].tolist(), strict=True)
+        )
     total: dict[int, int | Fraction] = {}
     for positions, weight in parts:
-        values = (weight if type(weight) is list
-                  else [cast("int | Fraction", weight)] * positions.size)
+        values = (
+            weight
+            if type(weight) is list
+            else [cast("int | Fraction", weight)] * positions.size
+        )
         for position, value in zip(positions.tolist(), values, strict=True):
             if new := total.get(position, 0) + value:
                 total[position] = new
@@ -2102,8 +2300,7 @@ class _AnchorIndex:
     def __init__(self, mapped: tuple[IndexArray, ...], first_of: IndexArray) -> None:
         count = first_of.size
         anchors = [col[first_of] for col in mapped[1:]]
-        columns = (np.concatenate(anchors) if anchors
-                   else np.empty(0, dtype=np.intp))
+        columns = np.concatenate(anchors) if anchors else np.empty(0, dtype=np.intp)
         heads = np.tile(np.arange(count, dtype=np.intp), len(anchors))
         keep = columns >= 0
         order = np.argsort(columns[keep], kind="stable")
@@ -2117,8 +2314,10 @@ class _AnchorIndex:
 
 
 def _dependent_witnesses(
-    columns: tuple[IndexArray, ...], tails: dict[int, Reduced],
-    position: dict[int, int], anchors: _AnchorIndex,
+    columns: tuple[IndexArray, ...],
+    tails: dict[int, Reduced],
+    position: dict[int, int],
+    anchors: _AnchorIndex,
 ) -> dict[int, Witness]:
     """The witness of every dependent later column from the final tails.
 
@@ -2138,15 +2337,24 @@ def _dependent_witnesses(
         holders = held.get(column, [])
         terms: _Terms = [(anchors.of(column), 1)]
         terms.extend((anchors.of(p), -value) for p, value in holders)
-        terms.append((np.asarray([position[p] for p, _ in holders], dtype=np.intp),
-                      [value for _, value in holders]))
+        terms.append(
+            (
+                np.asarray([position[p] for p, _ in holders], dtype=np.intp),
+                [value for _, value in holders],
+            )
+        )
         found[column] = _audit_sum(terms)
     return found
 
 
 def _reference_witness(
-    block: int, level: int, column: IndexArray, *, parts: tuple[IndexArray, ...],
-    position: dict[int, int], negated: dict[int, _Negated],
+    block: int,
+    level: int,
+    column: IndexArray,
+    *,
+    parts: tuple[IndexArray, ...],
+    position: dict[int, int],
+    negated: dict[int, _Negated],
 ) -> Witness:
     """A reference's witness: its component's heads minus the block's other levels."""
     count = parts[0].size
@@ -2176,9 +2384,12 @@ def _audit_operational(
     rational ``w`` with ``E_c = E_J w`` (:func:`_dependent_witnesses`); a
     reference's witness is the component sum of :func:`_witnesses`.
     """
-    if (type(data) is not OperationalBasis or not _fit_generated()
-            or _audit_helpers_original is not _AUDIT_HELPERS_GUARD
-            or not _audit_helpers_original()):
+    if (
+        type(data) is not OperationalBasis
+        or not _fit_generated()
+        or _audit_helpers_original is not _AUDIT_HELPERS_GUARD
+        or not _audit_helpers_original()
+    ):
         return None
     factors = data.factors
     if type(factors) is not FactoredRows:
@@ -2190,8 +2401,11 @@ def _audit_operational(
     codes = tuple(np.frombuffer(raw, dtype=np.intp) for raw in heads.codes)
     parts = tuple(np.frombuffer(raw, dtype=np.intp) for raw in data.components)
     count = int(columns[0].size)
-    if (heads.count != count or len(codes) != len(columns)
-            or any(code.size != codes[0].size for code in codes)):
+    if (
+        heads.count != count
+        or len(codes) != len(columns)
+        or any(code.size != codes[0].size for code in codes)
+    ):
         return None
     mapped = tuple(column[code] for column, code in zip(columns, codes, strict=True))
     replayed = _audit_echelon(mapped, count)
@@ -2199,16 +2413,21 @@ def _audit_operational(
         return None
     first_of, tails, echelon = replayed
     pivots = tuple(sorted(tails))
-    if (first_of.tobytes() != heads.first or pivots != factors.tail_columns
-            or tuple(_sparse_witness(tails[p]) for p in pivots) != factors.tails):
+    if (
+        first_of.tobytes() != heads.first
+        or pivots != factors.tail_columns
+        or tuple(_sparse_witness(tails[p]) for p in pivots) != factors.tails
+    ):
         return None
     position = {p: count + i for i, p in enumerate(pivots)}
     dependent = _dependent_witnesses(
         columns, tails, position, _AnchorIndex(mapped, first_of)
     )
     negated = {
-        column: (np.asarray([p for p, _, _ in witness], dtype=np.intp),
-                 [-(n if d == 1 else Fraction(n, d)) for _, n, d in witness])
+        column: (
+            np.asarray([p for p, _, _ in witness], dtype=np.intp),
+            [-(n if d == 1 else Fraction(n, d)) for _, n, d in witness],
+        )
         for column, witness in dependent.items()
     }
     views: list[tuple[Witness, ...]] = []
@@ -2220,17 +2439,30 @@ def _audit_operational(
             elif c >= 0:
                 block.append(((c if c < count else position[c], 1, 1),))
             else:
-                block.append(_reference_witness(
-                    k, level, column, parts=parts, position=position, negated=negated,
-                ))
+                block.append(
+                    _reference_witness(
+                        k,
+                        level,
+                        column,
+                        parts=parts,
+                        position=position,
+                        negated=negated,
+                    )
+                )
         views.append(tuple(block))
     return tuple(views), echelon
 
 
 _OPERATIONAL_AUDIT = (
-    _reduced, _column_witnesses, _dependent, _witnesses, _canonical, _reference,
+    _reduced,
+    _column_witnesses,
+    _dependent,
+    cast("_WitnessKernel", _witnesses),  # Its supplied audit provides grouping data.
+    _canonical,
+    _reference,
     (math.gcd, heapq.heapify, heapq.heappop, heapq.heappush, _divide, Fraction),
-    np.flatnonzero, _audit_operational,
+    np.flatnonzero,
+    _audit_operational,
 )
 
 
@@ -2257,25 +2489,38 @@ def _export_operational_basis(basis: CertificateBasis) -> CertificateBasis:
     witnesses, echelon = data.audit(_OPERATIONAL_AUDIT)
     values = vars(basis)
     return _OPERATIONAL_BASIS_CLASS(
-        grouping=values["grouping"], route=values["route"], rank=values["rank"],
-        references=values["references"], columns=values["columns"],
-        selected=values["selected"], positions=values["positions"],
-        witnesses=witnesses, echelon=echelon, rows=values["rows"],
+        grouping=values["grouping"],
+        route=values["route"],
+        rank=values["rank"],
+        references=values["references"],
+        columns=values["columns"],
+        selected=values["selected"],
+        positions=values["positions"],
+        witnesses=witnesses,
+        echelon=echelon,
+        rows=values["rows"],
     )
 
 
-def _rebind_operational_basis(basis: CertificateBasis, grouping: Grouping) -> CertificateBasis:
+def _rebind_operational_basis(
+    basis: CertificateBasis, grouping: Grouping
+) -> CertificateBasis:
     """A data/header view at the existing live rebind, never a capability issuer."""
     data = _operational_data(basis)
     if data is None:
         raise ValueError("the operational view needs its actual numeric data")
     values = vars(basis)
     found = _OPERATIONAL_BASIS_CLASS(
-        grouping=grouping, route=values["route"], rank=values["rank"],
-        references=values["references"], columns=values["columns"],
-        selected=values["selected"], positions=values["positions"],
+        grouping=grouping,
+        route=values["route"],
+        rank=values["rank"],
+        references=values["references"],
+        columns=values["columns"],
+        selected=values["selected"],
+        positions=values["positions"],
         witnesses=cast("tuple[tuple[Witness, ...], ...]", data),
-        echelon=cast("tuple[tuple[tuple[int, int], ...], ...]", data), rows=values["rows"],
+        echelon=cast("tuple[tuple[tuple[int, int], ...], ...]", data),
+        rows=values["rows"],
     )
     object.__setattr__(found, "_operational", data)
     if "_basis_backend" in values:
@@ -2284,29 +2529,45 @@ def _rebind_operational_basis(basis: CertificateBasis, grouping: Grouping) -> Ce
 
 
 def _operational_rows(
-    mapped: tuple[IndexArray, ...], count: int, budget: int | None, *, audit: bool = False,
+    mapped: tuple[IndexArray, ...],
+    count: int,
+    budget: int | None,
+    *,
+    audit: bool = False,
     _first: IndexArray | None = None,
-) -> tuple[IndexArray, dict[int, Reduced], int, Echelon] | None | Literal[False]:
-    """One authoritative ordered Python loop; audit rows are frozen at birth."""
+) -> tuple[IndexArray, dict[int, Reduced], int, Echelon] | Literal[False] | None:
+    """One authoritative ordered Python loop; audit rows are frozen at birth.
+
+    The codes are read as Python integers, once: the same values, in the same row
+    order, as the array scalars of the rows. ``first_of`` is kept in a list beside
+    the array and written back however the loop ends, so that the array holds what
+    the row-by-row assignments would have left.
+    """
     first_of = np.full(count, -1, dtype=np.intp) if _first is None else _first
     tails: dict[int, Reduced] = {}
     holders: dict[int, set[int]] = {}
     work = 0
     heads: dict[int, Row] | None = {} if audit else None
     later_rows: dict[int, Row] | None = {} if audit else None
-    for index, values in enumerate(zip(*mapped, strict=True)):
-        head = int(values[0])
+    lists = list(map(np.ndarray.tolist, mapped))
+    others = lists[1:]
+    firsts: list[int] = first_of.tolist()
+    for index, values in enumerate(zip(*lists, strict=True)):
+        head = values[0]
         if not 0 <= head < count:
+            first_of[:] = firsts
             return False
-        later = [int(column) for column in values[1:] if column >= 0]
-        previous = int(first_of[head])
+        later = [column for column in values[1:] if column >= 0]
+        previous = firsts[head]
         work += len(later)
         if previous < 0:
-            first_of[head] = index
+            firsts[head] = index
             if audit:
-                cast("dict[int, Row]", heads)[head] = _primitive(_anchor_row(head, later, tails))
+                cast("dict[int, Row]", heads)[head] = _primitive(
+                    _anchor_row(head, later, tails)
+                )
         else:
-            anchor = [int(col[previous]) for col in mapped[1:] if col[previous] >= 0]
+            anchor = [col[previous] for col in others if col[previous] >= 0]
             found: Reduced = dict.fromkeys(later, 1)
             for column in anchor:
                 _add(found, column, -1)
@@ -2319,19 +2580,32 @@ def _operational_rows(
                 tail = {column: _over(value, lead) for column, value in found.items()}
                 work += len(found) + _new_tail(pivot, tail, tails, holders)
         if budget is not None and work > budget:
+            first_of[:] = firsts
             return None
+    first_of[:] = firsts
     if (first_of < 0).any():
         return False
-    echelon = (() if not audit else
-        tuple(tuple(sorted(cast("dict[int, Row]", heads)[h].items())) for h in range(count)) +
-        tuple(tuple(sorted(cast("dict[int, Row]", later_rows)[p].items()))
-              for p in sorted(cast("dict[int, Row]", later_rows))))
+    echelon = (
+        ()
+        if not audit
+        else tuple(
+            tuple(sorted(cast("dict[int, Row]", heads)[h].items()))
+            for h in range(count)
+        )
+        + tuple(
+            tuple(sorted(cast("dict[int, Row]", later_rows)[p].items()))
+            for p in sorted(cast("dict[int, Row]", later_rows))
+        )
+    )
     return first_of, tails, work, echelon
 
 
 def _native_tails(
-    module: ModuleType, mapped: tuple[IndexArray, ...], count: int, budget: int,
-    trace: list,
+    module: ModuleType,
+    mapped: tuple[IndexArray, ...],
+    count: int,
+    budget: int,
+    trace: _BasisTrace,
 ) -> tuple[IndexArray, dict[int, Reduced], int] | None:
     """A single native attempt; only representational declines replay Python."""
     if count > 2**63 - 1 or not 0 <= budget <= 2**63 - 1:
@@ -2355,15 +2629,22 @@ def _native_tails(
 
 
 def _operational_echelon(
-    grouping: Grouping, columns: tuple[IndexArray, ...], first: IndexArray,
-    budget: int, *, _native: ModuleType | None = None, _trace: list | None = None,
-) -> FactoredRows | None | Literal[False]:
+    grouping: Grouping,
+    columns: tuple[IndexArray, ...],
+    first: IndexArray,
+    budget: int,
+    *,
+    _native: ModuleType | None = None,
+    _trace: _BasisTrace | None = None,
+) -> FactoredRows | Literal[False] | None:
     """The shared exact residual-tail operations; no fit-time historical rows."""
     count = columns[0].size
     try:
         first_of = np.full(count, -1, dtype=np.intp)
-        mapped = tuple(column[block.codes[first]] for column, block in
-                       zip(columns, grouping.blocks, strict=True))
+        mapped = tuple(
+            column[block.codes[first]]
+            for column, block in zip(columns, grouping.blocks, strict=True)
+        )
     except MemoryError:
         return False
     found = None
@@ -2372,7 +2653,10 @@ def _operational_echelon(
     if found is None:
         if _trace is not None and _trace[3] == "work_limit":
             return None  # Same completed-row budget crossing; canonical fallback only.
-        result = _operational_rows(mapped, count, budget, _first=first_of)
+        # The ordinary Python path already performs the exact reductions.
+        # Keep completing them when the optional proposal work estimate is crossed.
+        python_budget = None if _native is None else budget
+        result = _operational_rows(mapped, count, python_budget, _first=first_of)
         if result is None or result is False:
             return result
         first_of, tails, work, _ = result
@@ -2388,26 +2672,59 @@ def _operational_echelon(
         column_headers = tuple(_retained_header(col) for col in columns)
         if any(header is None for header in (*code_headers, *column_headers)):
             return False
-        heads = HeadRows(count, first[first_of].tobytes(),
-                         tuple(header[1] for header in code_headers),
-                         tuple(header[1] for header in column_headers))
-        return FactoredRows(heads, pivots,
-                            tuple(_sparse_witness(tails[p]) for p in pivots),
-                            tuple(count + i for i in range(len(pivots))))
+        heads = HeadRows(
+            count,
+            first[first_of].tobytes(),
+            tuple(
+                header[1] for header in cast("tuple[_ArrayHeader, ...]", code_headers)
+            ),
+            tuple(
+                header[1] for header in cast("tuple[_ArrayHeader, ...]", column_headers)
+            ),
+        )
+        return FactoredRows(
+            heads,
+            pivots,
+            tuple(_sparse_witness(tails[p]) for p in pivots),
+            tuple(count + i for i in range(len(pivots))),
+        )
     except MemoryError:
         return False
 
 
+def _reporting_elimination(
+    grouping: Grouping, parts: Components
+) -> tuple[tuple[IndexArray, ...], FactoredRows] | None:
+    """Build the exact basis for a reporting action, without issuing fit state."""
+    columns = _columns(grouping, _references(grouping, parts))
+    first = _first_rows(grouping)
+    rows = _operational_echelon(
+        grouping, columns, first, WORK * (first.size * len(columns) + _count(columns))
+    )
+    return None if rows is None or rows is False else (columns, rows)
+
+
 def _operational_basis_prepared(
-    owner: FESample, grouping: Grouping, parts: Components, rank: IndicatorRank,
-    references: tuple[IndexArray, ...], columns: tuple[IndexArray, ...],
-    first: IndexArray, *, _native: ModuleType | None = None, _trace: list | None = None,
-) -> CertificateBasis | None | Literal[False]:
+    owner: FESample,
+    grouping: Grouping,
+    parts: Components,
+    rank: IndicatorRank,
+    references: tuple[IndexArray, ...],
+    columns: tuple[IndexArray, ...],
+    first: IndexArray,
+    *,
+    _native: ModuleType | None = None,
+    _trace: _BasisTrace | None = None,
+) -> CertificateBasis | Literal[False] | None:
     """Produce the one fit's numerical layout, not a generic proof graph."""
     count = _count(columns)
     rows = _operational_echelon(
-        grouping, columns, first, WORK * (first.size * len(columns) + count),
-        _native=_native, _trace=_trace,
+        grouping,
+        columns,
+        first,
+        WORK * (first.size * len(columns) + count),
+        _native=_native,
+        _trace=_trace,
     )
     if rows is None or rows is False:
         return rows
@@ -2422,17 +2739,27 @@ def _operational_basis_prepared(
         data = OperationalBasis(
             heads.columns,
             tuple(_proof_bytes(part) for part in parts.of_levels),
-            tuple(_proof_bytes(place) for place in positions), rows,
+            tuple(_proof_bytes(place) for place in positions),
+            rows,
         )
         try:
             action = _retained_rows(data)
         except MemoryError:
             action = None
-        data = OperationalBasis(data.columns, data.components, data.positions, rows, action)
+        data = OperationalBasis(
+            data.columns, data.components, data.positions, rows, action
+        )
         basis = CertificateBasis(
-            grouping, "elimination", rank, references, columns, selected, positions,
+            grouping,
+            "elimination",
+            rank,
+            references,
+            columns,
+            selected,
+            positions,
             cast("tuple[tuple[Witness, ...], ...]", data),
-            cast("tuple[tuple[tuple[int, int], ...], ...]", data), int(first.size),
+            cast("tuple[tuple[tuple[int, int], ...], ...]", data),
+            int(first.size),
         )
         object.__setattr__(basis, "_operational", data)
         headers = _retained_headers(basis, grouping)
@@ -2440,7 +2767,7 @@ def _operational_basis_prepared(
             return False
         scope = (ref(basis), ref(grouping), ref(owner))
 
-        def construction():
+        def construction() -> tuple[Scope, OperationalBasis, _RetainedHeaders]:
             return scope, data, headers
 
         object.__setattr__(basis, _GENERATED_RETAINED, construction)
@@ -2463,10 +2790,12 @@ def _witness_proof(basis: object) -> WitnessProof | None:
     if type(basis) is not CertificateBasis:
         return None
     try:
-        if (CertificateBasis.__getattribute__ is not _BASIS_ACCESS
-                or getattr(CertificateBasis, "__getattr__", None) is not _BASIS_GETATTR
-                or vars(CertificateBasis).get("witnesses") is not _BASIS_WITNESS_FIELD
-                or vars(CertificateBasis).get("echelon") is not _BASIS_ECHELON_FIELD):
+        if (
+            CertificateBasis.__getattribute__ is not _BASIS_ACCESS
+            or getattr(CertificateBasis, "__getattr__", None) is not _BASIS_GETATTR
+            or vars(CertificateBasis).get("witnesses") is not _BASIS_WITNESS_FIELD
+            or vars(CertificateBasis).get("echelon") is not _BASIS_ECHELON_FIELD
+        ):
             return None
     except MemoryError:
         # Optional raw-field selection only; ordinary field reads remain required.
@@ -2476,7 +2805,9 @@ def _witness_proof(basis: object) -> WitnessProof | None:
 
 
 def _fit_coordinates(
-    columns: tuple[IndexArray, ...], kept: list[int], count: int,
+    columns: tuple[IndexArray, ...],
+    kept: list[int],
+    count: int,
 ) -> tuple[IndexArray, tuple[IndexArray, ...]]:
     """Materialize one dense E-to-J lookup and the complete detached field arrays."""
     selected = frozen_index(np.asarray(kept, dtype=np.intp))
@@ -2489,128 +2820,264 @@ def _fit_coordinates(
 _HEAD_RECIPE_CLASS = HeadRecipe
 _FACTORED_ROWS_CLASS = FactoredRows
 _AUDIT_ANCHOR_CLASS = _AnchorIndex
-_AUDIT_HELPERS = (_operational_rows, _anchor_row, _small_integers, _audit_sum,
-    _AnchorIndex, vars(_AnchorIndex).get("of"), _dependent_witnesses, _reference_witness,
-    _audit_echelon, _audit_operational)
+_AUDIT_HELPERS = (
+    _operational_rows,
+    _anchor_row,
+    _small_integers,
+    _audit_sum,
+    _AnchorIndex,
+    vars(_AnchorIndex).get("of"),
+    _dependent_witnesses,
+    _reference_witness,
+    _audit_echelon,
+    _audit_operational,
+)
 
 
 def _audit_helpers_original() -> bool:
     if _AnchorIndex is not _AUDIT_ANCHOR_CLASS:
         return False
-    current = (_operational_rows, _anchor_row, _small_integers, _audit_sum,
-        _AnchorIndex, vars(_AnchorIndex).get("of"), _dependent_witnesses, _reference_witness,
-        _audit_echelon, _audit_operational)
+    current = (
+        _operational_rows,
+        _anchor_row,
+        _small_integers,
+        _audit_sum,
+        _AnchorIndex,
+        vars(_AnchorIndex).get("of"),
+        _dependent_witnesses,
+        _reference_witness,
+        _audit_echelon,
+        _audit_operational,
+    )
     return all(a is b for a, b in zip(current, _AUDIT_HELPERS, strict=True))
 
 
 _AUDIT_HELPERS_GUARD = _audit_helpers_original
 _FIT_GENERATORS = (
-    components, _indicator_rank_prepared, _references, _columns, _distinct,
-    _proposed_echelon, _primitive, _over, _reduce_by, _new_tail, _add,
-    _witness_row, _fit_maps, _fit_echelon, _fit_column_maps, _fit_dependent,
-    _valid_elimination, _fit_add, _canonical,
-    _echelon_rows, _fit_row_maps, _EchelonRows,
-    _fit_witnesses, _fit_coordinates, _compact_witnesses,
-    _fit_component_sums, _fit_reference_block, _witness_proof,
-    WitnessProof, WitnessBlock, WitnessProof.witness, WitnessProof.materialize,
-    WitnessProof.__new__, WitnessBlock.__new__,
-    WitnessBlock.witness, WitnessBlock.materialize,
+    components,
+    _indicator_rank_prepared,
+    _references,
+    _columns,
+    _distinct,
+    _proposed_echelon,
+    _primitive,
+    _over,
+    _reduce_by,
+    _new_tail,
+    _add,
+    _witness_row,
+    _valid_elimination,
+    _canonical,
+    _echelon_rows,
+    _fit_row_maps,
+    _EchelonRows,
+    _fit_coordinates,
+    _compact_witnesses,
+    _witness_proof,
+    WitnessProof,
+    WitnessBlock,
+    WitnessProof.witness,
+    WitnessProof.materialize,
+    WitnessProof.__new__,
+    WitnessBlock.__new__,
+    WitnessBlock.witness,
+    WitnessBlock.materialize,
     WitnessBlock.iter_witnesses,
-    _primitive_head, _first_rows, _indexed_echelon,
-    _sparse_witness, _proof_bytes, SparseValues, SparseValues.__new__,
-    SparseValues.items, SparseValues.canonical, SparseValues.__getattribute__,
-    WitnessContext, WitnessContext.__new__, WitnessContext._add,
-    WitnessContext.references, WitnessContext.__getattribute__,
-    WitnessProof.materialize_echelon, WitnessBlock.iter_selected,
-    CertificateBasis.__getattribute__, getattr(CertificateBasis, "__getattr__", None),
-    vars(CertificateBasis).get("witnesses"), vars(CertificateBasis).get("echelon"),
-    _head_work, _factored_echelon,
-    HeadRecipe, HeadRecipe.__new__, HeadRecipe.__getattribute__,
-    HeadRecipe.at, HeadRecipe.expanded,
-    FactoredRows, FactoredRows.__new__, FactoredRows.__getattribute__,
-    FactoredRows.dependent, SparseValues.at, WitnessContext.dependent,
-    _witness_values.HeadRecipe, _witness_values.FactoredRows,
+    _primitive_head,
+    _first_rows,
+    _indexed_echelon,
+    _sparse_witness,
+    _proof_bytes,
+    SparseValues,
+    SparseValues.__new__,
+    SparseValues.items,
+    SparseValues.canonical,
+    SparseValues.__getattribute__,
+    WitnessContext,
+    WitnessContext.__new__,
+    WitnessContext._add,
+    WitnessContext.references,
+    WitnessContext.__getattribute__,
+    WitnessProof.materialize_echelon,
+    WitnessBlock.iter_selected,
+    CertificateBasis.__getattribute__,
+    getattr(CertificateBasis, "__getattr__", None),
+    vars(CertificateBasis).get("witnesses"),
+    vars(CertificateBasis).get("echelon"),
+    _head_work,
+    _factored_echelon,
+    HeadRecipe,
+    HeadRecipe.__new__,
+    HeadRecipe.__getattribute__,
+    HeadRecipe.at,
+    HeadRecipe.expanded,
+    FactoredRows,
+    FactoredRows.__new__,
+    FactoredRows.__getattribute__,
+    FactoredRows.dependent,
+    SparseValues.at,
+    WitnessContext.dependent,
+    _witness_values.HeadRecipe,
+    _witness_values.FactoredRows,
     getattr(HeadRecipe, "__getattr__", None),
-    vars(HeadRecipe).get("pivot"), vars(HeadRecipe).get("anchor"),
+    vars(HeadRecipe).get("pivot"),
+    vars(HeadRecipe).get("anchor"),
     vars(HeadRecipe).get("birth"),
     getattr(FactoredRows, "__getattr__", None),
-    vars(FactoredRows).get("heads"), vars(FactoredRows).get("tail_columns"),
-    vars(FactoredRows).get("tails"), vars(FactoredRows).get("tail_positions"),
-    _operational_echelon, _operational_basis_prepared, _operational_data,
-    _operational_rows, _native_tails,
-    _export_operational_basis, _rebind_operational_basis,
-    HeadRows, HeadRows.__new__, HeadRows.__getattribute__, HeadRows.anchor,
+    vars(FactoredRows).get("heads"),
+    vars(FactoredRows).get("tail_columns"),
+    vars(FactoredRows).get("tails"),
+    vars(FactoredRows).get("tail_positions"),
+    _operational_echelon,
+    _operational_basis_prepared,
+    _operational_data,
+    _operational_rows,
+    _native_tails,
+    _export_operational_basis,
+    _rebind_operational_basis,
+    HeadRows,
+    HeadRows.__new__,
+    HeadRows.__getattribute__,
+    HeadRows.anchor,
     getattr(HeadRows, "__getattr__", None),
-    vars(HeadRows).get("count"), vars(HeadRows).get("first"),
-    vars(HeadRows).get("codes"), vars(HeadRows).get("columns"),
-    OperationalBasis, OperationalBasis.__new__, OperationalBasis.__getattribute__,
-    OperationalBasis.dependent, OperationalBasis._add, OperationalBasis.references,
-    OperationalBasis.audit, getattr(OperationalBasis, "__getattr__", None),
-    vars(OperationalBasis).get("columns"), vars(OperationalBasis).get("components"),
-    vars(OperationalBasis).get("positions"), vars(OperationalBasis).get("factors"),
+    vars(HeadRows).get("count"),
+    vars(HeadRows).get("first"),
+    vars(HeadRows).get("codes"),
+    vars(HeadRows).get("columns"),
+    OperationalBasis,
+    OperationalBasis.__new__,
+    OperationalBasis.__getattribute__,
+    OperationalBasis.dependent,
+    OperationalBasis._add,
+    OperationalBasis.references,
+    OperationalBasis.audit,
+    getattr(OperationalBasis, "__getattr__", None),
+    vars(OperationalBasis).get("columns"),
+    vars(OperationalBasis).get("components"),
+    vars(OperationalBasis).get("positions"),
+    vars(OperationalBasis).get("factors"),
     vars(OperationalBasis).get("retained"),
-    _witness_values.HeadRows, _witness_values.OperationalBasis,
+    _witness_values.HeadRows,
+    _witness_values.OperationalBasis,
 )
 
 
 def _fit_generated() -> bool:
-    """Only unchanged package generators may omit replay of their own exact facts.
-
-    This selects code, not a data validity flag or a cached verdict. A changed
-    generator or validation hook retains the original checked construction.
-    """
-    if (HeadRecipe is not _HEAD_RECIPE_CLASS
-            or FactoredRows is not _FACTORED_ROWS_CLASS
-            or CertificateBasis is not _OPERATIONAL_BASIS_CLASS
-            or HeadRows is not _OPERATIONAL_HEAD_CLASS
-            or OperationalBasis is not _OPERATIONAL_DATA_CLASS):
+    """Recognize the package generators authorized to carry fresh exact facts."""
+    if (
+        HeadRecipe is not _HEAD_RECIPE_CLASS
+        or FactoredRows is not _FACTORED_ROWS_CLASS
+        or CertificateBasis is not _OPERATIONAL_BASIS_CLASS
+        or HeadRows is not _OPERATIONAL_HEAD_CLASS
+        or OperationalBasis is not _OPERATIONAL_DATA_CLASS
+    ):
         return False
     current = (
-        components, _indicator_rank_prepared, _references, _columns, _distinct,
-        _proposed_echelon, _primitive, _over, _reduce_by, _new_tail, _add,
-        _witness_row, _fit_maps, _fit_echelon, _fit_column_maps, _fit_dependent,
-        _valid_elimination, _fit_add, _canonical,
-        _echelon_rows, _fit_row_maps, _EchelonRows,
-        _fit_witnesses, _fit_coordinates, _compact_witnesses,
-        _fit_component_sums, _fit_reference_block, _witness_proof,
-        WitnessProof, WitnessBlock, WitnessProof.witness, WitnessProof.materialize,
-        WitnessProof.__new__, WitnessBlock.__new__,
-        WitnessBlock.witness, WitnessBlock.materialize,
+        components,
+        _indicator_rank_prepared,
+        _references,
+        _columns,
+        _distinct,
+        _proposed_echelon,
+        _primitive,
+        _over,
+        _reduce_by,
+        _new_tail,
+        _add,
+        _witness_row,
+        _valid_elimination,
+        _canonical,
+        _echelon_rows,
+        _fit_row_maps,
+        _EchelonRows,
+        _fit_coordinates,
+        _compact_witnesses,
+        _witness_proof,
+        WitnessProof,
+        WitnessBlock,
+        WitnessProof.witness,
+        WitnessProof.materialize,
+        WitnessProof.__new__,
+        WitnessBlock.__new__,
+        WitnessBlock.witness,
+        WitnessBlock.materialize,
         WitnessBlock.iter_witnesses,
-        _primitive_head, _first_rows, _indexed_echelon,
-        _sparse_witness, _proof_bytes, SparseValues, SparseValues.__new__,
-        SparseValues.items, SparseValues.canonical, SparseValues.__getattribute__,
-        WitnessContext, WitnessContext.__new__, WitnessContext._add,
-        WitnessContext.references, WitnessContext.__getattribute__,
-        WitnessProof.materialize_echelon, WitnessBlock.iter_selected,
-        CertificateBasis.__getattribute__, getattr(CertificateBasis, "__getattr__", None),
-        vars(CertificateBasis).get("witnesses"), vars(CertificateBasis).get("echelon"),
-        _head_work, _factored_echelon,
-        HeadRecipe, HeadRecipe.__new__, HeadRecipe.__getattribute__,
-        HeadRecipe.at, HeadRecipe.expanded,
-        FactoredRows, FactoredRows.__new__, FactoredRows.__getattribute__,
-        FactoredRows.dependent, SparseValues.at, WitnessContext.dependent,
-        _witness_values.HeadRecipe, _witness_values.FactoredRows,
+        _primitive_head,
+        _first_rows,
+        _indexed_echelon,
+        _sparse_witness,
+        _proof_bytes,
+        SparseValues,
+        SparseValues.__new__,
+        SparseValues.items,
+        SparseValues.canonical,
+        SparseValues.__getattribute__,
+        WitnessContext,
+        WitnessContext.__new__,
+        WitnessContext._add,
+        WitnessContext.references,
+        WitnessContext.__getattribute__,
+        WitnessProof.materialize_echelon,
+        WitnessBlock.iter_selected,
+        CertificateBasis.__getattribute__,
+        getattr(CertificateBasis, "__getattr__", None),
+        vars(CertificateBasis).get("witnesses"),
+        vars(CertificateBasis).get("echelon"),
+        _head_work,
+        _factored_echelon,
+        HeadRecipe,
+        HeadRecipe.__new__,
+        HeadRecipe.__getattribute__,
+        HeadRecipe.at,
+        HeadRecipe.expanded,
+        FactoredRows,
+        FactoredRows.__new__,
+        FactoredRows.__getattribute__,
+        FactoredRows.dependent,
+        SparseValues.at,
+        WitnessContext.dependent,
+        _witness_values.HeadRecipe,
+        _witness_values.FactoredRows,
         getattr(HeadRecipe, "__getattr__", None),
-        vars(HeadRecipe).get("pivot"), vars(HeadRecipe).get("anchor"),
+        vars(HeadRecipe).get("pivot"),
+        vars(HeadRecipe).get("anchor"),
         vars(HeadRecipe).get("birth"),
         getattr(FactoredRows, "__getattr__", None),
-        vars(FactoredRows).get("heads"), vars(FactoredRows).get("tail_columns"),
-        vars(FactoredRows).get("tails"), vars(FactoredRows).get("tail_positions"),
-        _operational_echelon, _operational_basis_prepared, _operational_data,
-        _operational_rows, _native_tails,
-        _export_operational_basis, _rebind_operational_basis,
-        HeadRows, HeadRows.__new__, HeadRows.__getattribute__, HeadRows.anchor,
+        vars(FactoredRows).get("heads"),
+        vars(FactoredRows).get("tail_columns"),
+        vars(FactoredRows).get("tails"),
+        vars(FactoredRows).get("tail_positions"),
+        _operational_echelon,
+        _operational_basis_prepared,
+        _operational_data,
+        _operational_rows,
+        _native_tails,
+        _export_operational_basis,
+        _rebind_operational_basis,
+        HeadRows,
+        HeadRows.__new__,
+        HeadRows.__getattribute__,
+        HeadRows.anchor,
         getattr(HeadRows, "__getattr__", None),
-        vars(HeadRows).get("count"), vars(HeadRows).get("first"),
-        vars(HeadRows).get("codes"), vars(HeadRows).get("columns"),
-        OperationalBasis, OperationalBasis.__new__, OperationalBasis.__getattribute__,
-        OperationalBasis.dependent, OperationalBasis._add, OperationalBasis.references,
-        OperationalBasis.audit, getattr(OperationalBasis, "__getattr__", None),
-        vars(OperationalBasis).get("columns"), vars(OperationalBasis).get("components"),
-        vars(OperationalBasis).get("positions"), vars(OperationalBasis).get("factors"),
+        vars(HeadRows).get("count"),
+        vars(HeadRows).get("first"),
+        vars(HeadRows).get("codes"),
+        vars(HeadRows).get("columns"),
+        OperationalBasis,
+        OperationalBasis.__new__,
+        OperationalBasis.__getattribute__,
+        OperationalBasis.dependent,
+        OperationalBasis._add,
+        OperationalBasis.references,
+        OperationalBasis.audit,
+        getattr(OperationalBasis, "__getattr__", None),
+        vars(OperationalBasis).get("columns"),
+        vars(OperationalBasis).get("components"),
+        vars(OperationalBasis).get("positions"),
+        vars(OperationalBasis).get("factors"),
         vars(OperationalBasis).get("retained"),
-        _witness_values.HeadRows, _witness_values.OperationalBasis,
+        _witness_values.HeadRows,
+        _witness_values.OperationalBasis,
     )
     return all(a is b for a, b in zip(current, _FIT_GENERATORS, strict=True))
 
@@ -2618,15 +3085,28 @@ def _fit_generated() -> bool:
 _PAIR_COMPONENTS = Components
 _PAIR_BLOCK = Block
 _PAIR_COUNT_GENERATORS = (
-    _indicator_rank_counted, _connectivity._rank_from_counts,
-    _connectivity._rank_from_pairs, _connectivity.components,
-    Components, Components.__new__, Components.__init__, Components.__post_init__,
-    Components.__getattribute__, getattr(Components, "__getattr__", None),
+    _indicator_rank_counted,
+    _connectivity._rank_from_counts,
+    _connectivity._rank_from_pairs,
+    _connectivity.components,
+    Components,
+    Components.__new__,
+    Components.__init__,
+    Components.__post_init__,
+    Components.__getattribute__,
+    getattr(Components, "__getattr__", None),
     Components.__dict__["n_components"],
-    _connectivity._aligned, _connectivity._offsets, _connectivity._vertex_labels,
-    _connectivity._vectors, _connectivity._index, _groups.frozen_index,
-    Block, Block.__getattribute__, getattr(Block, "__getattr__", None),
-    Block.__dict__["n_rows"], Block.__dict__["n_levels"],
+    _connectivity._aligned,
+    _connectivity._offsets,
+    _connectivity._vertex_labels,
+    cast("_ConnectivityImports", _connectivity)._vectors,
+    cast("_ConnectivityImports", _connectivity)._index,
+    cast("_GroupImports", _groups).frozen_index,
+    Block,
+    Block.__getattribute__,
+    getattr(Block, "__getattr__", None),
+    Block.__dict__["n_rows"],
+    Block.__dict__["n_levels"],
 )
 
 
@@ -2638,32 +3118,53 @@ def _fit_pair_counts_generated() -> bool:
     """
     if not _fit_generated():
         return False
-    if (Components is not _PAIR_COMPONENTS
-            or _connectivity.Components is not _PAIR_COMPONENTS
-            or Block is not _PAIR_BLOCK):
+    if (
+        Components is not _PAIR_COMPONENTS
+        or _connectivity.Components is not _PAIR_COMPONENTS
+        or Block is not _PAIR_BLOCK
+    ):
         return False
     current = (
-        _indicator_rank_counted, _connectivity._rank_from_counts,
-        _connectivity._rank_from_pairs, _connectivity.components,
-        Components, Components.__new__, Components.__init__, Components.__post_init__,
-        Components.__getattribute__, getattr(Components, "__getattr__", None),
+        _indicator_rank_counted,
+        _connectivity._rank_from_counts,
+        _connectivity._rank_from_pairs,
+        _connectivity.components,
+        Components,
+        Components.__new__,
+        Components.__init__,
+        Components.__post_init__,
+        Components.__getattribute__,
+        getattr(Components, "__getattr__", None),
         Components.__dict__["n_components"],
-        _connectivity._aligned, _connectivity._offsets, _connectivity._vertex_labels,
-        _connectivity._vectors, _connectivity._index, _groups.frozen_index,
-        Block, Block.__getattribute__, getattr(Block, "__getattr__", None),
-        Block.__dict__["n_rows"], Block.__dict__["n_levels"],
+        _connectivity._aligned,
+        _connectivity._offsets,
+        _connectivity._vertex_labels,
+        cast("_ConnectivityImports", _connectivity)._vectors,
+        cast("_ConnectivityImports", _connectivity)._index,
+        cast("_GroupImports", _groups).frozen_index,
+        Block,
+        Block.__getattribute__,
+        getattr(Block, "__getattr__", None),
+        Block.__dict__["n_rows"],
+        Block.__dict__["n_levels"],
     )
     return all(a is b for a, b in zip(current, _PAIR_COUNT_GENERATORS, strict=True))
 
 
 def _fit_basis_prepared(
-    grouping: Grouping, parts: Components, rank: IndicatorRank,
-    references: tuple[IndexArray, ...], columns: tuple[IndexArray, ...],
-    *, distinct: IndexArray | None = None, first: IndexArray | None = None,
+    grouping: Grouping,
+    parts: Components,
+    rank: IndicatorRank,
+    references: tuple[IndexArray, ...],
+    columns: tuple[IndexArray, ...],
+    *,
+    first: IndexArray,
     _owner: FESample | None = None,
-    _native: ModuleType | None = None, _trace: list | None = None,
+    _native: ModuleType | None = None,
+    _trace: _BasisTrace | None = None,
+    _retain_connectivity: bool = False,
 ) -> CertificateBasis | None:
-    """Fresh exact construction; replay only foreign generator/hook results.
+    """Fresh exact construction on the prepared fit's original row order.
 
     The unchanged integer generator maintains canonical primitive pivots in input
     row order. Its exact reduced rows directly give R_J^-1 R and hence all column
@@ -2671,140 +3172,137 @@ def _fit_basis_prepared(
     changing numerical rank/support: the live rank bounds remain below, and
     positive-curvature support remains a separate fresh consumer check.
     """
-    count = _count(columns)
-    generated = _fit_generated()
-    if first is not None and not generated:
+    if not _fit_generated():
         return None
+    count = _count(columns)
     operational = False
-    if (generated and first is not None and type(_owner) is FESample
-            and vars(_owner).get("grouping") is grouping and rank.exact != count
-            and vars(_OPERATIONAL_BASIS_CLASS).get("__dict__") is _OPERATIONAL_BASIS_DICT
-            and CertificateBasis.__init__ is _OPERATIONAL_BASIS_INIT
-            and CertificateBasis.__new__ is _OPERATIONAL_BASIS_NEW):
+    if (
+        type(_owner) is FESample
+        and vars(_owner).get("grouping") is grouping
+        and rank.exact != count
+        and vars(_OPERATIONAL_BASIS_CLASS).get("__dict__") is _OPERATIONAL_BASIS_DICT
+        and CertificateBasis.__init__ is _OPERATIONAL_BASIS_INIT
+        and CertificateBasis.__new__ is _OPERATIONAL_BASIS_NEW
+    ):
         try:
-            operational = (_packed_original is _PACKED_GUARD and _packed_original())
+            operational = _packed_original is _PACKED_GUARD and _packed_original()
         except MemoryError:
-            pass  # Optional guard only, never exact operational reductions.
+            operational = False  # Optional guard only, never exact reductions.
     if operational:
         actual = _operational_basis_prepared(
-            _owner, grouping, parts, rank, references, columns, first,
-            _native=_native, _trace=_trace,
+            cast("FESample", _owner),
+            grouping,
+            parts,
+            rank,
+            references,
+            columns,
+            first,
+            _native=_native,
+            _trace=_trace,
         )
         if actual is not False:
             return actual
         if _trace is not None:
             _trace[0], _trace[2] = "python", None
             reason = _trace[3]
-            _trace[3] = ("storage" if reason is None or reason == "ineligible"
-                         else reason + "; storage")
-    pivots: dict[int, Row] = {}
-    tails: dict[int, Reduced] = {}
+            _trace[3] = (
+                "storage"
+                if reason is None or reason == "ineligible"
+                else cast("str", reason) + "; storage"
+            )
     rows: _EchelonRows | None = None
-    packed = False
-    later: tuple[int, ...] = ()
+    packed, later = False, cast("tuple[int, ...]", ())
     if rank.exact == count:
         route: Route = "connectivity"
-        kept, echelon = list(range(count)), ()
-    elif generated:
-        rows = (
-            _echelon_rows(
-                columns, cast("IndexArray", distinct),
-                WORK * (cast("IndexArray", distinct).size + count),
-                compact=True,
-            ) if first is None else _indexed_echelon(
-                grouping, columns, first, WORK * (first.size * len(columns) + count),
-            )
+        kept, echelon = cast(
+            "tuple[list[int] | range, _StoredEchelon]", (list(range(count)), ())
+        )
+    else:
+        rows = _indexed_echelon(
+            grouping,
+            columns,
+            first,
+            WORK * (first.size * len(columns) + count),
         )
         if rows is None:
             return None
         packed = type(rows.heads) is PackedHeads
         if packed:
             later = tuple(sorted(rows.later))
-            kept = range(rows.heads.count + len(later))
-            echelon = rows.heads
+            packed_heads = cast("PackedHeads", rows.heads)
+            kept, echelon = range(packed_heads.count + len(later)), packed_heads
         else:
-            kept = sorted(rows.heads)
+            heads = cast("_HeadMap", rows.heads)
+            kept = sorted(heads)
             kept.extend(sorted(rows.later))
             echelon = tuple(
-                rows.heads[p] if p in rows.heads else rows.later[p]
-                if type(rows.later[p]) is SparseValues else
-                tuple(sorted(cast("Row", rows.later[p]).items()))
+                heads[p]
+                if p in heads
+                else cast("SparseValues", rows.later[p])
+                if type(rows.later[p]) is SparseValues
+                else tuple(sorted(cast("Row", rows.later[p]).items()))
                 for p in kept
             )
         route = "elimination"
-    else:
-        proposed = _proposed_echelon(
-            columns, cast("IndexArray", distinct),
-            WORK * (cast("IndexArray", distinct).size + count),
-        )
-        if proposed is None:
-            return None
-        pivots, tails = proposed
-        parsed = _fit_echelon(pivots, count)
-        if parsed is None:
-            return None
-        kept, echelon = parsed
-        route = "elimination"
     if not rank.lower <= len(kept) <= rank.upper:
         return None
-    place = ({c: rows.heads.count + i for i, c in enumerate(later)} if packed else
-             {c: i for i, c in enumerate(kept)})
+    place = (
+        {c: packed_heads.count + i for i, c in enumerate(later)}
+        if packed
+        else {c: i for i, c in enumerate(kept)}
+    )
     of_column = (
-        {} if route == "connectivity" else
-        {} if packed else {} if rows is not None and all(
-            type(row) is HeadRecipe for row in rows.heads.values()
-        ) else
-        _fit_row_maps(rows, place, count) if rows is not None else
-        _fit_maps(pivots, tails, place, count)
+        {}
+        if rows is None
+        or packed
+        or all(type(row) is HeadRecipe for row in cast("_HeadMap", rows.heads).values())
+        else _fit_row_maps(rows, place, count)
     )
-    if of_column is None:
-        return None
-    if not generated:
-        checked = _fit_column_maps(pivots, kept, place, count, of_column)
-        if checked is None:
-            return None
-        if route == "elimination" and not _valid_elimination(
-            pivots, kept, place, columns, distinct=cast("IndexArray", distinct),
-            dep_inv=checked[0], dep_scale=checked[1],
-        ):
-            return None
     if packed:
-        selected, positions = _packed_coordinates(columns, rows.heads.count, later, count)
-    elif generated:
-        selected, positions = _fit_coordinates(columns, kept, count)
-    else:
-        selected = frozen_index(np.asarray(kept, dtype=np.intp))
-        positions = tuple(
-            frozen_index(np.array([place.get(int(c), -1) for c in col], dtype=np.intp))
-            for col in columns
+        selected, positions = _packed_coordinates(
+            columns, packed_heads.count, later, count
         )
-    proof = (
-        _compact_witnesses(
-            grouping, parts, (columns, positions), place, of_column,
-            echelon=echelon, rows=rows,
-        ) if generated else None
+    else:
+        selected, positions = _fit_coordinates(columns, cast("list[int]", kept), count)
+    proof = _compact_witnesses(
+        grouping,
+        parts,
+        (columns, positions),
+        place,
+        of_column,
+        echelon=echelon,
+        rows=rows,
     )
-    witnesses = (
-        cast("tuple[tuple[Witness, ...], ...]", proof) if proof is not None else
-        _fit_witnesses(grouping, parts, columns, place, of_column)
-    )
+    witnesses = cast("tuple[tuple[Witness, ...], ...]", proof)
     basis = CertificateBasis(
-        grouping=grouping, route=route, rank=rank, references=references,
-        columns=columns, selected=selected,
-        positions=positions, witnesses=witnesses,
-        echelon=(cast("tuple[tuple[tuple[int, int], ...], ...]", proof)
-                 if proof is not None else echelon),
-        rows=int(first.size if first is not None
-                 else cast("IndexArray", distinct).shape[0]),
+        grouping=grouping,
+        route=route,
+        rank=rank,
+        references=references,
+        columns=columns,
+        selected=selected,
+        positions=positions,
+        witnesses=witnesses,
+        echelon=cast("Echelon", proof),
+        rows=int(first.size),
     )
-    if (packed and proof is not None and proof.retained is not None
-            and type(_owner) is FESample and vars(_owner).get("grouping") is grouping):
+    if (
+        (
+            (_retain_connectivity and route == "connectivity")
+            or (packed and proof.retained is not None)
+        )
+        and type(_owner) is FESample
+        and vars(_owner).get("grouping") is grouping
+    ):
         try:
             headers = _retained_headers(basis, grouping)
             scope = (ref(basis), ref(grouping), ref(_owner))
+            retained = witnesses if route == "connectivity" else proof
 
-            def construction():
-                return scope, proof, headers
+            def construction() -> tuple[
+                Scope, _RetainedProof | None, _RetainedHeaders | None
+            ]:
+                return scope, retained, headers
 
             object.__setattr__(basis, _GENERATED_RETAINED, construction)
         except (MemoryError, TypeError):
@@ -2815,7 +3313,9 @@ def _fit_basis_prepared(
 _FIT_PREPARED_ISSUER = _fit_basis_prepared
 
 
-def _record_basis_backend(basis: CertificateBasis, trace: list | None) -> CertificateBasis:
+def _record_basis_backend(
+    basis: CertificateBasis, trace: _BasisTrace | None
+) -> CertificateBasis:
     """Store only scalar execution facts on this freshly produced exact basis."""
     if trace is not None and type(basis) is CertificateBasis:
         trace[4] = True  # Required truthful recording must not retry the calculation.
@@ -2825,20 +3325,30 @@ def _record_basis_backend(basis: CertificateBasis, trace: list | None) -> Certif
 
 
 def _prepare_fit_basis(
-    owner: FESample, *, basis_backend: str = "python", _native: ModuleType | None = None,
+    owner: FESample,
+    *,
+    basis_backend: str = "python",
+    _native: ModuleType | None = None,
+    _retain_connectivity: bool = False,
 ) -> CertificateBasis:
     """One fresh canonical producer scoped by the unchanged NumericExecution guards.
 
-    Component membership proves D = E M. Unchanged exact generators construct
-    primitive pivots, span and rational maps in original row order; changed hooks
-    keep their original checks before canonical witness emission. No caller-held
-    basis/flag or serialized _Held is consumed on private success.
+    Component membership proves D = E M. The prepared generators construct exact
+    pivots and rational maps in original row order. Changed generator identities
+    lead to the canonical construction. A successful prepared build consumes
+    only the current sample.
     Public/foreign owned_basis and the original bounded fallback remain unchanged.
     """
-    native = (_native if type(_native) is ModuleType else
-              _resolve_native_echelon() if type(basis_backend) is str
-              and basis_backend == "cpp" else None)
-    trace = None if native is None else ["python", None, None, "ineligible", False, False]
+    native = (
+        _native
+        if type(_native) is ModuleType
+        else _resolve_native_echelon()
+        if type(basis_backend) is str and basis_backend == "cpp"
+        else None
+    )
+    trace: _BasisTrace | None = (
+        None if native is None else ["python", None, None, "ineligible", False, False]
+    )
     grouping = owner.grouping
     if not _fit_grouping(grouping):
         found = owned_basis(owner)
@@ -2846,14 +3356,16 @@ def _prepare_fit_basis(
     assert grouping is not None
     try:
         parts = components(grouping.blocks)
-        of_rows = [part[block.codes] for part, block in
-                   zip(parts.of_levels, grouping.blocks, strict=True)]
+        of_rows = [
+            part[block.codes]
+            for part, block in zip(parts.of_levels, grouping.blocks, strict=True)
+        ]
         if all(np.array_equal(of_rows[0], found) for found in of_rows):
             del of_rows
             rank = (
                 _indicator_rank_counted(grouping.blocks, parts)
-                if _fit_pair_counts_generated() else
-                _indicator_rank_prepared(grouping.blocks, parts)
+                if _fit_pair_counts_generated()
+                else _indicator_rank_prepared(grouping.blocks, parts)
             )
             references = _references(grouping, parts)
             columns = _columns(grouping, references)
@@ -2861,21 +3373,30 @@ def _prepare_fit_basis(
                 first = _first_rows(grouping)
                 if _fit_basis_prepared is _FIT_PREPARED_ISSUER:
                     basis = _fit_basis_prepared(
-                        grouping, parts, rank, references, columns,
-                        first=first, _owner=owner,
-                        _native=native, _trace=trace,
+                        grouping,
+                        parts,
+                        rank,
+                        references,
+                        columns,
+                        first=first,
+                        _owner=owner,
+                        _native=native,
+                        _trace=trace,
+                        _retain_connectivity=_retain_connectivity,
                     )
                 else:
                     basis = _fit_basis_prepared(
-                        grouping, parts, rank, references, columns, first=first,
+                        grouping,
+                        parts,
+                        rank,
+                        references,
+                        columns,
+                        first=first,
                     )
-            else:
-                basis = _fit_basis_prepared(
-                    grouping, parts, rank, references, columns,
-                    distinct=_distinct(grouping),
-                )
-            if basis is not None:
-                return basis if trace is None else _record_basis_backend(basis, trace)
+                if basis is not None:
+                    return (
+                        basis if trace is None else _record_basis_backend(basis, trace)
+                    )
     except Exception:  # same proposal-only refusal/fallback as _admitted_proposal
         if trace is not None and trace[4]:
             raise  # An explicit native failure is never a Python fallback.
@@ -2929,10 +3450,9 @@ def owned_basis(owner: object) -> CertificateBasis:
         basis = _rebuilt(held, grouping)
         admitted = True
     else:
-        basis = _admitted_proposal(grouping, content)
-        admitted = basis is not None
-        if basis is None:
-            basis = certificate_basis(grouping)
+        proposed = _admitted_proposal(grouping, content)
+        admitted = proposed is not None
+        basis = certificate_basis(grouping) if proposed is None else proposed
         if _content(grouping) == content:
             held = _held(basis, id(grouping), content)
             object.__setattr__(owner, HELD, held)
@@ -2958,15 +3478,35 @@ Scope = tuple[
     ReferenceType[CertificateBasis], ReferenceType[Grouping], ReferenceType[FESample]
 ]
 
+type _ArrayHeader = tuple[
+    ReferenceType[IndexArray], bytes, tuple[int, ...], tuple[int, ...], str
+]
+type _HeaderGroup = tuple[str, tuple[_ArrayHeader | None, ...]]
+type _BlockHeaders = tuple[
+    ReferenceType[object], _ArrayHeader | None, _ArrayHeader | None
+]
+type _RetainedHeaders = tuple[
+    tuple[tuple[str, object], ...],
+    tuple[_HeaderGroup, ...],
+    _ArrayHeader,
+    tuple[_BlockHeaders, ...],
+]
+type _RetainedProof = OperationalBasis | WitnessProof | tuple[tuple[Witness, ...], ...]
+
 _GENERATED_RETAINED = "_generated_retained_rows"
 
 
-def _retained_header(array: object):
+def _retained_header(array: object) -> _ArrayHeader | None:
     """A weak current header plus its actual complete immutable byte owner."""
-    if (type(array) is not np.ndarray or array.dtype != np.intp or array.ndim != 1
-            or array.flags.writeable or not array.flags.c_contiguous):
+    if (
+        type(array) is not np.ndarray
+        or array.dtype != np.intp
+        or array.ndim != 1
+        or array.flags.writeable
+        or not array.flags.c_contiguous
+    ):
         return None
-    root = array
+    root: object = array
     while type(root) is np.ndarray:
         root = root.base
     if type(root) is not bytes or len(root) != array.nbytes:
@@ -2974,11 +3514,15 @@ def _retained_header(array: object):
     return ref(array), root, array.shape, array.strides, array.dtype.str
 
 
-def _retained_headers(basis: CertificateBasis, grouping: Grouping):
+def _retained_headers(
+    basis: CertificateBasis, grouping: Grouping
+) -> _RetainedHeaders | None:
     """Freeze only headers/weak identities, never a sample/provider graph."""
     values = vars(basis)
-    fields = tuple((name, values[name]) for name in
-                   ("route", "rank", "rows", "witnesses", "echelon"))
+    fields = tuple(
+        (name, values[name])
+        for name in ("route", "rank", "rows", "witnesses", "echelon")
+    )
     arrays = []
     for name in ("selected", "references", "columns", "positions"):
         given = (values[name],) if name == "selected" else values[name]
@@ -2992,23 +3536,30 @@ def _retained_headers(basis: CertificateBasis, grouping: Grouping):
     blocks = group.get("blocks")
     if type(blocks) is not tuple:
         return None
-    block_headers = tuple((ref(b), _retained_header(vars(b).get("codes")),
-                           _retained_header(vars(b).get("counts"))) for b in blocks)
+    block_headers = tuple(
+        (
+            ref(b),
+            _retained_header(vars(b).get("codes")),
+            _retained_header(vars(b).get("counts")),
+        )
+        for b in blocks
+    )
     position = _retained_header(group.get("positions"))
     if position is None or any(c is None or n is None for _, c, n in block_headers):
         return None
     return fields, tuple(arrays), position, block_headers
 
 
-def _matching_retained_header(array: object, header) -> bool:
+def _matching_retained_header(array: object, header: _ArrayHeader | None) -> bool:
     if header is None or header[0]() is not array:
         return False
     current = _retained_header(array)
-    return (current is not None and current[1] is header[1]
-            and current[2:] == header[2:])
+    return current is not None and current[1] is header[1] and current[2:] == header[2:]
 
 
-def _matching_retained_headers(basis: CertificateBasis, grouping: Grouping, headers) -> bool:
+def _matching_retained_headers(
+    basis: CertificateBasis, grouping: object, headers: _RetainedHeaders | None
+) -> bool:
     if headers is None or type(basis) is not CertificateBasis:
         return False
     if type(grouping) is not Grouping and type(grouping) is not Derived:
@@ -3019,35 +3570,69 @@ def _matching_retained_headers(basis: CertificateBasis, grouping: Grouping, head
         return False
     for name, expected in arrays:
         given = (values.get(name),) if name == "selected" else values.get(name)
-        if (type(given) is not tuple or len(given) != len(expected)
-                or not all(_matching_retained_header(a, h)
-                           for a, h in zip(given, expected, strict=True))):
+        if (
+            type(given) is not tuple
+            or len(given) != len(expected)
+            or not all(
+                _matching_retained_header(a, h)
+                for a, h in zip(given, expected, strict=True)
+            )
+        ):
             return False
     current = group.get("blocks")
-    return (type(current) is tuple and len(current) == len(blocks)
-            and _matching_retained_header(group.get("positions"), position)
-            and all(scope() is b and _matching_retained_header(vars(b).get("codes"), c)
-                    and _matching_retained_header(vars(b).get("counts"), n)
-                    for b, (scope, c, n) in zip(current, blocks, strict=True)))
+    return (
+        type(current) is tuple
+        and len(current) == len(blocks)
+        and _matching_retained_header(group.get("positions"), position)
+        and all(
+            scope() is b
+            and _matching_retained_header(vars(b).get("codes"), c)
+            and _matching_retained_header(vars(b).get("counts"), n)
+            for b, (scope, c, n) in zip(current, blocks, strict=True)
+        )
+    )
 
 
-def _produced_retained_action(basis: object, owner: object):
+def _produced_retained_action(
+    basis: object,
+    owner: object,
+    *,
+    basis_only: bool = False,
+) -> tuple[_RetainedProof, _RetainedHeaders] | None:
     """Read only the actual fresh producer's literal weak-scoped reader."""
     if type(basis) is not CertificateBasis or type(owner) is not FESample:
         return None
     reader = vars(basis).get(_GENERATED_RETAINED)
-    if (type(reader) is not FunctionType or not _fit_generated()
-            or _packed_original is not _PACKED_GUARD or not _packed_original()
-            or (reader.__code__ is not _construction_code(_FIT_PREPARED_ISSUER)
-                and reader.__code__ is not _construction_code(_OPERATIONAL_PREPARED_ISSUER))):
+    if (
+        type(reader) is not FunctionType
+        or not _fit_generated()
+        or _packed_original is not _PACKED_GUARD
+        or not _packed_original()
+        or (
+            reader.__code__ is not _construction_code(_FIT_PREPARED_ISSUER)
+            and reader.__code__ is not _construction_code(_OPERATIONAL_PREPARED_ISSUER)
+        )
+    ):
         return None
     scope, proof, headers = reader()
     grouping = vars(owner).get("grouping")
-    if (scope[0]() is not basis or scope[1]() is not grouping or scope[2]() is not owner
-            or vars(basis).get("grouping") is not grouping
-            or (vars(basis).get("_operational") if type(proof) is OperationalBasis
-                else vars(basis).get("witnesses")) is not proof
-            or not _matching_retained_headers(basis, grouping, headers)):
+    if (
+        scope[0]() is not basis
+        or scope[1]() is not grouping
+        or scope[2]() is not owner
+        or vars(basis).get("grouping") is not grouping
+        or (
+            vars(basis).get("_operational")
+            if type(proof) is OperationalBasis
+            else vars(basis).get("witnesses")
+        )
+        is not proof
+        or not _matching_retained_headers(basis, grouping, headers)
+    ):
+        return None
+    # Connectivity may use compact WitnessProof storage too. Its producer
+    # authenticates basis reuse, not the separate packed retained action.
+    if vars(basis).get("route") == "connectivity" and not basis_only:
         return None
     return proof, headers
 
@@ -3063,25 +3648,84 @@ def _construction_code(issuer: object) -> CodeType:
 
 _PACK_TYPES = (PackedHeads, RetainedRows, Fraction, Grouping, Derived, Block, FESample)
 _PACK_HELPERS = (
-    _packed_echelon, _packed_head_work, _retained_rows, _packed_coordinates,
-    _fit_basis_prepared, _retained_header, _retained_headers,
-    _matching_retained_header, _matching_retained_headers, _produced_retained_action,
-    _construction_code, np.empty, np.frombuffer, np.flatnonzero, np.count_nonzero,
-    np.arange, np.asarray, np.concatenate, np.intp, np.ndarray,
+    _packed_echelon,
+    _packed_head_work,
+    _retained_rows,
+    _packed_coordinates,
+    _fit_basis_prepared,
+    _retained_header,
+    _retained_headers,
+    _matching_retained_header,
+    _matching_retained_headers,
+    _produced_retained_action,
+    _construction_code,
+    np.empty,
+    np.frombuffer,
+    np.flatnonzero,
+    np.count_nonzero,
+    np.arange,
+    np.asarray,
+    np.concatenate,
+    np.intp,
+    np.ndarray,
 )
-_PACK_METHODS = tuple((kind, name, vars(kind).get(name)) for kind, names in (
-    (PackedHeads, ("__new__", "__getattribute__", "__getattr__", "head",
-                   "count", "offsets", "anchors", "births", "versions", "later")),
-    (RetainedRows, ("__new__", "__getattribute__", "__getattr__", "minimum", "kept_levels",
-                   "kept_positions", "levels", "terms", "norm")),
-    (Fraction, ("__new__", "__getattribute__", "__getattr__", "__add__", "__radd__",
-                "__sub__", "__rsub__", "__mul__", "__rmul__", "__neg__", "__abs__",
-                "numerator", "denominator")),
-    (Grouping, ("__getattribute__", "__getattr__", "__dict__")),
-    (Derived, ("__getattribute__", "__getattr__", "__dict__")),
-    (Block, ("__getattribute__", "__getattr__", "__dict__")),
-    (FESample, ("__getattribute__", "__getattr__", "__dict__", "grouping")),
-) for name in names)
+_PACK_METHODS = tuple(
+    (kind, name, vars(kind).get(name))
+    for kind, names in (
+        (
+            PackedHeads,
+            (
+                "__new__",
+                "__getattribute__",
+                "__getattr__",
+                "head",
+                "count",
+                "offsets",
+                "anchors",
+                "births",
+                "versions",
+                "later",
+            ),
+        ),
+        (
+            RetainedRows,
+            (
+                "__new__",
+                "__getattribute__",
+                "__getattr__",
+                "minimum",
+                "kept_levels",
+                "kept_positions",
+                "levels",
+                "terms",
+                "norm",
+            ),
+        ),
+        (
+            Fraction,
+            (
+                "__new__",
+                "__getattribute__",
+                "__getattr__",
+                "__add__",
+                "__radd__",
+                "__sub__",
+                "__rsub__",
+                "__mul__",
+                "__rmul__",
+                "__neg__",
+                "__abs__",
+                "numerator",
+                "denominator",
+            ),
+        ),
+        (Grouping, ("__getattribute__", "__getattr__", "__dict__")),
+        (Derived, ("__getattribute__", "__getattr__", "__dict__")),
+        (Block, ("__getattribute__", "__getattr__", "__dict__")),
+        (FESample, ("__getattribute__", "__getattr__", "__dict__", "grouping")),
+    )
+    for name in names
+)
 
 
 def _packed_original() -> bool:
@@ -3090,14 +3734,30 @@ def _packed_original() -> bool:
     if any(a is not b for a, b in zip(kinds, _PACK_TYPES, strict=True)):
         return False
     current = (
-        _packed_echelon, _packed_head_work, _retained_rows, _packed_coordinates,
-        _fit_basis_prepared, _retained_header, _retained_headers,
-        _matching_retained_header, _matching_retained_headers, _produced_retained_action,
-        _construction_code, np.empty, np.frombuffer, np.flatnonzero, np.count_nonzero,
-        np.arange, np.asarray, np.concatenate, np.intp, np.ndarray,
+        _packed_echelon,
+        _packed_head_work,
+        _retained_rows,
+        _packed_coordinates,
+        _fit_basis_prepared,
+        _retained_header,
+        _retained_headers,
+        _matching_retained_header,
+        _matching_retained_headers,
+        _produced_retained_action,
+        _construction_code,
+        np.empty,
+        np.frombuffer,
+        np.flatnonzero,
+        np.count_nonzero,
+        np.arange,
+        np.asarray,
+        np.concatenate,
+        np.intp,
+        np.ndarray,
     )
-    return (all(a is b for a, b in zip(current, _PACK_HELPERS, strict=True))
-            and all(vars(kind).get(name) is original for kind, name, original in _PACK_METHODS))
+    return all(a is b for a, b in zip(current, _PACK_HELPERS, strict=True)) and all(
+        vars(kind).get(name) is original for kind, name, original in _PACK_METHODS
+    )
 
 
 _PACKED_GUARD = _packed_original
@@ -3110,10 +3770,9 @@ def _construction(basis: object, owner: object) -> _Held | None:
     reader = vars(basis).get(CONSTRUCTION)
     if type(reader) is not FunctionType:
         return None
-    if (
-        reader.__code__ is not _construction_code(owned_basis)
-        and reader.__code__ is not _construction_code(rebound_basis)
-    ):
+    if reader.__code__ is not _construction_code(
+        owned_basis
+    ) and reader.__code__ is not _construction_code(rebound_basis):
         return None
     scope, held = reader()
     if (

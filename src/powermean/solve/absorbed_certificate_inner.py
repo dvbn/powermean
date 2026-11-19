@@ -1,6 +1,8 @@
 """The achieved inner accuracy of an admitted absorbed point, and its work.
 
-Internal module: the checks read the
+``design/02_computation.md``, Section 7; the M1.14 readiness specification, Section 4,
+revision A, and the WLS binding (``plan/evidence/M1.14_readiness.txt``,
+``M1.14_WLS_binding.txt``); decision D51.  Task M1.14, private: the checks read the
 records of :mod:`powermean.solve.absorbed_certificate_point`, which imports nothing
 from here; no history is read.
 
@@ -12,14 +14,14 @@ its owned witness verified afresh (``eta``, effects, both reconstruction gaps at
 A WLS point needs a fresh normalization gap at most ``af``. With slopes, the actual
 owned same-final observed projection is rebuilt and freshly checked at every
 original ``C``-weighted level against ``af`` AND ``tol``. No second development
-solve is run on that matched route. Unmatched or
+solve is run on that matched route (explicit author decision, P72). Unmatched or
 changed-hook points retain the cold auxiliary and its original budget semantics.
 No cached success verdict replaces the current check. Each operation returns its
 :class:`~powermean.solve.absorbed_certificate_point.WorkStep` with the counters it
 returned; a refusal before an accepted routine counted anything has none.
 
-Root points (inner accuracy is the achieved tolerance of the LAST absorption and
-profile).  An exact point of the
+Root points (decision D51; ``design/02_computation.md``, Section 7: inner accuracy is
+the achieved tolerance of the LAST absorption and profile).  An exact point of the
 full joint system has no such approximate stage: its nuisance coordinates are
 unknowns of the sparse full system, and no C-weighted slope absorption runs (the
 observed ``C`` of a nonconvex equation can be negative, outside the domain of
@@ -36,11 +38,12 @@ that actually ran (the convex initializer's) stay in their own certificate.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import numpy as np
 
-from powermean.fe.absorb import AbsorptionResult, absorb
-from powermean.fe.absorb import AbsorptionState
+from powermean.data.sample_fe_state import FESample
+from powermean.fe.absorb import AbsorptionResult, AbsorptionState, absorb
 from powermean.fe.absorb_numeric import (
     Attempted,
     PreparedWeights,
@@ -50,6 +53,7 @@ from powermean.fe.absorb_numeric import (
     prepare_weights,
 )
 from powermean.model.variance import FloatArray
+from powermean.solve import reduced_execution as _reduced_execution
 from powermean.solve.absorbed_certificate_point import (
     BOUND,
     AdmittedPoint,
@@ -70,10 +74,13 @@ from powermean.solve.absorbed_direction import (
     recover,
 )
 from powermean.solve.linear_absorbed_point import LinearPoint, PointNormalization
-from powermean.systems.profiled import ProfiledProblem
-from powermean.data.sample_fe_state import FESample
-from powermean.solve import reduced_execution as _reduced_execution
 from powermean.solve.reduced_execution import _completed_projection
+from powermean.systems.profiled import ProfiledProblem
+
+if TYPE_CHECKING:
+    from powermean.fe.certificate_basis import CertificateBasis
+
+type _Projection = tuple[object, FreshRows, CertificateBasis]
 
 AUXILIARY = "auxiliary absorption"
 NUISANCE = "nuisance representation"
@@ -248,7 +255,11 @@ def _recovery_checks(
 
 
 def _auxiliary(
-    point: AdmittedPoint, curvature: FloatArray, tol: float, *, _projection=None,
+    point: AdmittedPoint,
+    curvature: FloatArray,
+    tol: float,
+    *,
+    _projection: _Projection | None = None,
 ) -> tuple[AbsorptionResult | None, WorkStep, InnerCheck]:
     """Freshly check actual final projection data, else the original cold route."""
     sample, inner = point.sample, point.inner
@@ -306,7 +317,14 @@ def _auxiliary(
     return result, step, _bounded(AUXILIARY, maximum, bounds)
 
 
-def _verified_auxiliary(point, prepared, values, names, offered, tol):
+def _verified_auxiliary(
+    point: AdmittedPoint,
+    prepared: PreparedWeights,
+    values: FloatArray,
+    names: tuple[str, ...],
+    offered: AbsorptionResult,
+    tol: float,
+) -> tuple[AbsorptionResult | None, WorkStep, InnerCheck]:
     """Independent current-C check; retain data, not the live factor/fit owner."""
     bounds = (point.inner.tolerance, tol)
     projection_work = tuple(
@@ -320,60 +338,132 @@ def _verified_auxiliary(point, prepared, values, names, offered, tol):
         _same(residual, offered.residual)
         checked = fresh_check(residual, prepared, attempted)
     except (FloatingPointError, ValueError) as error:
-        counters = projection_work + (("verification_diagnostic_passes", attempted.count),)
+        counters = (
+            *projection_work,
+            ("verification_diagnostic_passes", attempted.count),
+        )
         step = WorkStep(AUXILIARY, "failed", f"{detail}: {error}", counters)
         return None, step, _failed(AUXILIARY, bounds, str(error))
     passed = checked.maximum <= point.inner.tolerance
     reason = "" if passed else "the final projection fails the fresh auxiliary bound"
     result = AbsorptionResult(
-        residual, state, "converged" if passed else "breakdown", reason,
-        point.inner.tolerance, checked.column_errors, checked.maximum,
-        offered.sweeps, offered.visits, offered.operators, attempted.count,
+        residual,
+        state,
+        "converged" if passed else "breakdown",
+        reason,
+        point.inner.tolerance,
+        checked.column_errors,
+        checked.maximum,
+        offered.sweeps,
+        offered.visits,
+        offered.operators,
+        attempted.count,
         point.inner.acceleration,
     )
-    counters = projection_work + (("verification_diagnostic_passes", attempted.count),)
+    counters = (*projection_work, ("verification_diagnostic_passes", attempted.count))
     step = WorkStep(AUXILIARY, "completed" if passed else "failed", detail, counters)
     return result, step, _bounded(AUXILIARY, checked.maximum, bounds)
 
 
 _PROJECTION_TYPES = (
-    AdmittedPoint, FreshRows, InnerControls, FESample, Attempted, PreparedWeights,
+    AdmittedPoint,
+    FreshRows,
+    InnerControls,
+    FESample,
+    Attempted,
+    PreparedWeights,
 )
 _PROJECTION_MEMBERS = tuple(
-    (kind, name, vars(kind).get(name)) for kind, names in (
-        (AdmittedPoint, ("__getattribute__", "__getattr__", "sample", "inner",
-                         "_numeric_problem", "q", "variance")),
+    (kind, name, vars(kind).get(name))
+    for kind, names in (
+        (
+            AdmittedPoint,
+            (
+                "__getattribute__",
+                "__getattr__",
+                "sample",
+                "inner",
+                "_numeric_problem",
+                "q",
+                "variance",
+            ),
+        ),
         (FreshRows, ("__getattribute__", "__getattr__", "curvature", "weights")),
-        (InnerControls, ("__getattribute__", "__getattr__", "tolerance", "acceleration")),
-        (FESample, ("__getattribute__", "__getattr__", "design", "active_names", "grouping")),
+        (
+            InnerControls,
+            ("__getattribute__", "__getattr__", "tolerance", "acceleration"),
+        ),
+        (
+            FESample,
+            ("__getattribute__", "__getattr__", "design", "active_names", "grouping"),
+        ),
         (Attempted, ("__getattribute__", "__getattr__", "__init__", "begin", "count")),
         (PreparedWeights, ("__getattribute__", "__getattr__", "weights")),
-    ) for name in names
+    )
+    for name in names
 )
 _PROJECTION_PRODUCERS = (
-    absorb, prepare_weights, candidate, fresh_check, _same, _checked,
-    _verified_auxiliary, _completed_projection, _reduced_execution._completed_projection,
-    AbsorptionState, AbsorptionResult, Attempted,
+    absorb,
+    prepare_weights,
+    candidate,
+    fresh_check,
+    _same,
+    _checked,
+    _verified_auxiliary,
+    _completed_projection,
+    _reduced_execution._completed_projection,
+    AbsorptionState,
+    AbsorptionResult,
+    Attempted,
 )
 
 
-def _projection_original(point):
+def _projection_original(point: object) -> bool:
     """No new generic/foreign callbacks before the original auxiliary work."""
     return (
-        all(a is b for a, b in zip(
-            (AdmittedPoint, FreshRows, InnerControls, FESample, Attempted, PreparedWeights),
-            _PROJECTION_TYPES, strict=True
-        ))
+        all(
+            a is b
+            for a, b in zip(
+                (
+                    AdmittedPoint,
+                    FreshRows,
+                    InnerControls,
+                    FESample,
+                    Attempted,
+                    PreparedWeights,
+                ),
+                _PROJECTION_TYPES,
+                strict=True,
+            )
+        )
         and type(point) is AdmittedPoint
-        and all(vars(kind).get(name) is original
-                for kind, name, original in _PROJECTION_MEMBERS)
+        and all(
+            vars(kind).get(name) is original
+            for kind, name, original in _PROJECTION_MEMBERS
+        )
         and type(point.sample) is FESample
         and type(point.inner) is InnerControls
-        and all(a is b for a, b in zip((
-            absorb, prepare_weights, candidate, fresh_check, _same, _checked,
-            _verified_auxiliary, _completed_projection, _reduced_execution._completed_projection,
-            AbsorptionState, AbsorptionResult, Attempted,
-        ), _PROJECTION_PRODUCERS, strict=True))
+        and all(
+            a is b
+            for a, b in zip(
+                (
+                    absorb,
+                    prepare_weights,
+                    candidate,
+                    fresh_check,
+                    _same,
+                    _checked,
+                    _verified_auxiliary,
+                    _completed_projection,
+                    _reduced_execution._completed_projection,
+                    AbsorptionState,
+                    AbsorptionResult,
+                    Attempted,
+                ),
+                _PROJECTION_PRODUCERS,
+                strict=True,
+            )
+        )
     )
 
 
@@ -396,7 +486,8 @@ def inner_evidence(
     effects: EffectEquations | None,
     curvature: FloatArray,
     tol: float,
-    *, _projection=None,
+    *,
+    _projection: _Projection | None = None,
 ) -> InnerEvidence:
     """Every inner check of the point (module docstring), in a fixed order.
 

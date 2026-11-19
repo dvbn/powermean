@@ -1,11 +1,15 @@
 """Request-specific convention counts of absorbed effects: pairwise redundancy, nesting.
 
-The ``reghdfe`` degrees-of-freedom table: redundancies exact for one and two blocks,
-bounded pairwise for three or more, and whether a block is nested in a cluster
-variable.  Internal module: the convention count ``df_a`` that the ``"regression"``
-preset and the custom ``K*`` strings use.  It is NOT the exact full-design rank ``K``
-of the certificate (``powermean.fe.certificate_basis``: ``K = n_slopes + |J|``), which
-no cluster request changes, and NOT the structural bounds of
+``design/03_fixed_effects.md``, Section 2 (the ``reghdfe`` degrees-of-freedom table:
+redundancies exact for one and two blocks, bounded pairwise for three or more, and
+whether a block is nested in a cluster variable); ``design/04``, Section 3;
+``plan/evidence/M1_contract.txt``, rules B5 and 3.1; decisions D51 and D76;
+``plan/evidence/M1.16_conditional_scope.txt``, Section 3, and
+``M1.16_nested_counts.txt``.
+Task M1.16, private: the convention count ``df_a`` that the ``"regression"`` preset and
+the custom ``K*`` strings use.  It is NOT the exact full-design rank ``K`` of the
+certificate (``powermean.fe.certificate_basis``: ``K = n_slopes + |J|``), which no
+cluster request changes, and NOT the structural bounds of
 :func:`powermean.fe.connectivity.indicator_rank`, whose upper bound
 ``sum L - (G - 1) C`` is not the pairwise count.
 
@@ -24,7 +28,7 @@ request (none for a robust request):
    graph of the pair (:func:`pairwise_components`): exact for the second surviving
    block (the two-block rank), a bound from the third on.
 4. ``absorbed = sum_j (levels_j - redundant_j)`` over the surviving blocks, and
-   ``nested_adjustment`` is one when any block is nested, zero otherwise (
+   ``nested_adjustment`` is one when any block is nested, zero otherwise (D76:
    ``K_reference = n_slopes + absorbed`` and
    ``K_factor = K_reference + nested_adjustment``,
    the latter for the clustered factor only; both formed by
@@ -35,8 +39,8 @@ The kernel works on code arrays alone: a post-fit request constructs no
 fit-time entries), and the levels of a block are those present on the rows given (the
 active rows of the request), numbered by ``numpy.unique``.  The components of a pair
 are found by the minimum-label propagation with pointer jumping of
-:mod:`powermean.fe.connectivity`, written here on the two code vectors.  Every array
-is read, nothing is modified, and
+:mod:`powermean.fe.connectivity`, written here on the two code vectors; the tests
+check it against that accepted graph.  Every array is read, nothing is modified, and
 the result owns its tuples.
 
 Within one count operation each block is numbered once. Nesting uses per-level
@@ -47,12 +51,15 @@ across requests, active samples or fits. Exact raw uint64 labels are never narro
 
 from __future__ import annotations
 
+import importlib
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, replace
+from typing import Any, cast
 
 import numpy as np
 from numpy.typing import NDArray
+
+from powermean.model.order import IndexArray
 
 IntegerArray = NDArray[np.integer[Any]]
 
@@ -134,16 +141,40 @@ def _codes(values: object, name: str, rows: int | None) -> IntegerArray:
     return found
 
 
-def _numbered(codes: IntegerArray) -> tuple[IntegerArray, int]:
-    """The codes renumbered ``0 .. L - 1`` over the levels present, and ``L``."""
-    levels, inverse = np.unique(codes, return_inverse=True)
-    if type(codes) is np.ndarray and codes.dtype == np.dtype(np.intp) and np.array_equal(
-        levels, np.arange(levels.size, dtype=np.intp)
+def _numbered(codes: IntegerArray) -> tuple[IndexArray, int]:
+    """The codes renumbered ``0 .. L - 1`` over the levels present, and ``L``.
+
+    The renumbering of ``np.unique(codes, return_inverse=True)``, the levels in
+    increasing order.  Integer codes in ``0 .. n - 1`` for ``n`` rows (those of a
+    grouping or a cluster dimension) are renumbered in one pass from a count per code,
+    with the same result and no sort (LEANLOG2); other codes by ``np.unique``.
+    """
+    if (
+        type(codes) is np.ndarray
+        and codes.ndim == 1
+        and codes.dtype.kind in "iu"
+        and codes.size
+        and int(codes.min()) >= 0
+        and int(codes.max()) < codes.size
     ):
-        # Fit-owned canonical codes already are the numbered representation.
-        # Do not retain another N-vector per block merely to relabel it identically.
-        return codes, int(levels.size)
-    found: IntegerArray = np.asarray(inverse, dtype=np.intp).reshape(-1)
+        work = (
+            cast("IndexArray", codes)
+            if codes.dtype == np.dtype(np.intp)
+            else codes.astype(np.intp)
+        )
+        present = np.bincount(work) > 0
+        n_levels = int(np.count_nonzero(present))
+        if n_levels == present.size:
+            # Fit-owned canonical codes already are the numbered representation.
+            # Do not retain another N-vector per block merely to relabel it identically.
+            return work, n_levels
+        position = np.cumsum(present, dtype=np.intp) - 1
+        return position[work], n_levels
+    levels, inverse = np.unique(codes, return_inverse=True)
+    canonical = type(codes) is np.ndarray and codes.dtype == np.dtype(np.intp)
+    if canonical and np.array_equal(levels, np.arange(levels.size, dtype=np.intp)):
+        return cast("IndexArray", codes), int(levels.size)
+    found: IndexArray = np.asarray(inverse, dtype=np.intp).reshape(-1)
     return found, int(levels.size)
 
 
@@ -166,7 +197,14 @@ def nested_in(block: IntegerArray, cluster: IntegerArray) -> bool:
     codes = _codes(block, "block codes", None)
     groups = _codes(cluster, "cluster codes", codes.size)
     if type(codes) is not np.ndarray or type(groups) is not np.ndarray:
-        # Preserve the original accepted subclass dispatch/callback boundary.
+        # A mixed signed/uint64 stack can promote to float64 and merge labels.
+        # All codes are nonnegative. An unsigned view of the signed column
+        # preserves the values and byte order, including on a memory map.
+        if np.promote_types(codes.dtype, groups.dtype).kind == "f":
+            if codes.dtype.kind == "i":
+                codes = codes.view(codes.dtype.str.replace("i", "u"))
+            else:
+                groups = groups.view(groups.dtype.str.replace("i", "u"))
         pairs = np.unique(np.column_stack([codes, groups]), axis=0)
         return int(pairs.shape[0]) == int(np.unique(codes).size)
     numbered, levels = _numbered(codes)
@@ -187,9 +225,7 @@ def pairwise_components(first: IntegerArray, second: IntegerArray) -> int:
     return _pairwise_numbered(u, left, v, right)
 
 
-def _nested_numbered(
-    block: IntegerArray, levels: int, cluster: IntegerArray
-) -> bool:
+def _nested_numbered(block: IntegerArray, levels: int, cluster: IntegerArray) -> bool:
     """Each present level has one cluster iff its minimum equals its maximum.
 
     Block codes are numbered by unique, never by a narrowing signed cast. Cluster
@@ -230,12 +266,15 @@ def _nesting(
     found: list[int | None] = []
     for codes, levels in blocks:
         witness = next(
-            (d for d, cluster in enumerate(clusters)
-             if _nested_numbered(codes, levels, cluster)), None
+            (
+                d
+                for d, cluster in enumerate(clusters)
+                if _nested_numbered(codes, levels, cluster)
+            ),
+            None,
         )
         found.append(witness)
     return found
-
 
 
 def _general_nesting(
@@ -243,7 +282,9 @@ def _general_nesting(
 ) -> list[int | None]:
     """The original caller/subclass entry order; no new numeric subclass actions."""
     return [
-        next((d for d, cluster in enumerate(clusters) if nested_in(codes, cluster)), None)
+        next(
+            (d for d, cluster in enumerate(clusters) if nested_in(codes, cluster)), None
+        )
         for codes in blocks
     ]
 
@@ -284,8 +325,12 @@ def absorbed_count(
     dimensions = [_codes(cluster, "cluster codes", rows) for cluster in clusters]
     plain = all(type(values) is np.ndarray for values in (*codes, *dimensions))
     numbered = [_numbered(values) for values in codes] if plain else None
-    witnesses = (_general_nesting(codes, dimensions) if numbered is None
-                 else _nesting(numbered, dimensions))
+    witnesses = (
+        _general_nesting(codes, dimensions)
+        if numbered is None
+        else _nesting(numbered, dimensions)
+    )
+
     def block(j: int) -> tuple[IntegerArray, int]:
         return _numbered(codes[j]) if numbered is None else numbered[j]
 
@@ -300,7 +345,8 @@ def absorbed_count(
 
 
 def _count_fold(
-    names: Sequence[str], witnesses: Sequence[int | None],
+    names: Sequence[str],
+    witnesses: Sequence[int | None],
     block: Callable[[int], tuple[IntegerArray, int]],
     pair: Callable[[int, int], int],
 ) -> AbsorbedCount:
@@ -332,8 +378,10 @@ def _count_fold(
 
 
 def _prepared_count(
-    blocks: Sequence[tuple[str, IntegerArray]], levels: tuple[int, ...],
-    joint: int, pairs: tuple[tuple[int, int, int], ...],
+    blocks: Sequence[tuple[str, IntegerArray]],
+    levels: tuple[int, ...],
+    joint: int,
+    pairs: tuple[tuple[int, int, int], ...],
     clusters: Sequence[IntegerArray],
 ) -> AbsorbedCount:
     """Consume only the live owned producer's fresh complete-row graph counts.
@@ -344,26 +392,88 @@ def _prepared_count(
     """
     rows = int(blocks[0][1].size)
     dimensions = [_codes(c, "cluster codes", rows) for c in clusters]
-    numbered = [(values, size) for (_, values), size in zip(
-        blocks, levels, strict=True
-    )]
+    numbered = [
+        (values, size) for (_, values), size in zip(blocks, levels, strict=True)
+    ]
     witnesses = _nesting(numbered, dimensions)
     counts = {(i, j): count for i, j, count in pairs}
 
     def pair(i: int, j: int) -> int:
         return joint if len(blocks) == 2 else counts[i, j]
 
-    return _count_fold([name for name, _ in blocks], witnesses,
-                       numbered.__getitem__, pair)
+    return _count_fold(
+        [name for name, _ in blocks], witnesses, numbered.__getitem__, pair
+    )
+
+
+def exact_absorbed(
+    found: AbsorbedCount,
+    blocks: Callable[[], Sequence[tuple[str, IntegerArray]]],
+    rank: int | None,
+) -> AbsorbedCount:
+    """``found`` with the exact rank of its surviving blocks (rulings 5; RULINGS3).
+
+    The count of a joint fit with absorbed effects.  With at most two surviving blocks
+    ``found`` is exact and is returned as it is.  From the third surviving block on,
+    its pairwise redundancy is a bound that depends on the order of the blocks;
+    ``absorbed`` becomes the rank of the surviving blocks' indicators on the rows of
+    the request, less one when a block is nested, as for fixed-effect log-OLS
+    (:func:`powermean.inference.absorbed_linear.exact_count`), the same for every
+    order of the blocks.
+
+    ``rank`` is the rank of every block's indicators on those rows where the caller
+    holds it (the kept coordinates of the fit's exact basis), read when no block is
+    nested; otherwise the rank of the surviving blocks is formed here from
+    ``blocks()``, the codes of every block on those rows.  The split of the redundant
+    levels between the blocks, which no count reads, keeps the redundancies of
+    ``found`` and adds the remainder of the exact count to the last surviving block;
+    ``pairwise`` keeps the comparisons made.
+    """
+    survivors = [j for j, block in enumerate(found.blocks) if block.nested_in is None]
+    if len(survivors) < 3:
+        return found
+    nested = found.nested_adjustment
+    if rank is None or nested:
+        linear = importlib.import_module("powermean.inference.absorbed_linear")
+        codes = blocks()
+        rows = int(np.asarray(codes[0][1]).size)
+        rank = int(
+            linear.indicator_coordinates(
+                [np.asarray(codes[j][1]) for j in survivors],
+                np.arange(rows, dtype=np.intp),
+                rows,
+            ).rank
+        )
+    absorbed = int(rank) - nested
+    extra = sum(found.blocks[j].counted for j in survivors) - absorbed
+    records = [
+        replace(block, exact=True) if block.nested_in is None else block
+        for block in found.blocks
+    ]
+    last = survivors[-1]
+    records[last] = replace(records[last], redundant=records[last].redundant + extra)
+    return AbsorbedCount(tuple(records), found.pairwise, absorbed, nested)
 
 
 _COUNT_BLOCK = BlockCount
 _COUNT_RECORD = AbsorbedCount
 _COUNT_CALLS = (
-    absorbed_count, _codes, _numbered, nested_in, pairwise_components,
-    _nesting, _general_nesting, _nested_numbered, _pairwise_numbered, _count_fold,
-    BlockCount, BlockCount.__init__, BlockCount.counted,
-    AbsorbedCount, AbsorbedCount.__init__, _prepared_count,
+    absorbed_count,
+    _codes,
+    _numbered,
+    nested_in,
+    pairwise_components,
+    _nesting,
+    _general_nesting,
+    _nested_numbered,
+    _pairwise_numbered,
+    _count_fold,
+    BlockCount,
+    BlockCount.__init__,
+    BlockCount.counted,
+    AbsorbedCount,
+    AbsorbedCount.__init__,
+    _prepared_count,
 )
 
 
@@ -372,10 +482,22 @@ def _prepared_count_original() -> bool:
     if BlockCount is not _COUNT_BLOCK or AbsorbedCount is not _COUNT_RECORD:
         return False
     current = (
-        absorbed_count, _codes, _numbered, nested_in, pairwise_components,
-        _nesting, _general_nesting, _nested_numbered, _pairwise_numbered, _count_fold,
-        BlockCount, BlockCount.__init__, BlockCount.counted,
-        AbsorbedCount, AbsorbedCount.__init__, _prepared_count,
+        absorbed_count,
+        _codes,
+        _numbered,
+        nested_in,
+        pairwise_components,
+        _nesting,
+        _general_nesting,
+        _nested_numbered,
+        _pairwise_numbered,
+        _count_fold,
+        BlockCount,
+        BlockCount.__init__,
+        BlockCount.counted,
+        AbsorbedCount,
+        AbsorbedCount.__init__,
+        _prepared_count,
     )
     return all(a is b for a, b in zip(current, _COUNT_CALLS, strict=True))
 
@@ -384,7 +506,7 @@ __all__ = [
     "AbsorbedCount",
     "BlockCount",
     "absorbed_count",
+    "exact_absorbed",
     "nested_in",
     "pairwise_components",
 ]
-

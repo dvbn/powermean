@@ -9,6 +9,7 @@ from typing import Any
 import numpy as np
 import numpy.typing as npt
 
+from powermean.data.design import _has_full_column_rank, column_scale
 from powermean.solve.iols._numeric import (
     FloatArray,
     exp_with_float64_overflow_guard,
@@ -300,10 +301,102 @@ def _profiled_curvature_weights(
         h += c2 * exp_with_float64_overflow_guard((2.0 - float(tau)) * linear)
     if not np.all(np.isfinite(h)):
         raise RuntimeError("direct_rho_curvature_failed: nonfinite_row_curvature")
-    total = float(np.sum(h))
-    if not (math.isfinite(total) and total > 0.0):
+    with np.errstate(over="ignore", invalid="ignore"):
+        total = float(np.sum(h))
+    if math.isfinite(total) and total <= 0.0:
         raise RuntimeError("direct_rho_curvature_failed: nonpositive_curvature_sum")
     return h, total
+
+
+def _curvature_cholesky(gram: FloatArray) -> FloatArray:
+    try:
+        return np.linalg.cholesky(gram)
+    except np.linalg.LinAlgError as exc:
+        raise RuntimeError("direct_rho_curvature_failed: gram_cholesky_failed") from exc
+
+
+def _anchored_curvature(
+    z: FloatArray, h: FloatArray, mean_weights: FloatArray, peak: int
+) -> FloatArray:
+    # Repetitions of a heaviest row retain their small displacement from
+    # the weighted mean even when that mean rounds to the row itself.
+    centered = z - z[peak]
+    centered -= mean_weights @ centered
+    centered *= np.sqrt(h)[:, None]
+    matrix: FloatArray = centered.T @ centered
+    return matrix
+
+
+def _equilibrated_curvature(
+    z: FloatArray, h: FloatArray, anchor: int | None
+) -> FloatArray:
+    """The same generalized curvature, formed in orthonormal slope coordinates."""
+    u = z / column_scale(z)
+    chol = _curvature_cholesky(u.T @ u)
+    # Cholesky can round the last pivot of an exactly dependent Gram up.
+    # Certify the original dyadic rows before accepting that numerical factor.
+    if z.shape[1] > 1 and not _has_full_column_rank(z):
+        raise RuntimeError("direct_rho_curvature_failed: gram_cholesky_failed")
+    q = np.linalg.solve(chol, u.T).T
+    # Use relative weights only for the mean. Each original signed weight
+    # still contributes to the quadratic form, even at extreme weight ratios.
+    relative = h / float(np.max(np.abs(h)))
+    total = float(np.sum(relative))
+    if not total > 0:
+        raise RuntimeError("direct_rho_curvature_failed: nonpositive_curvature_sum")
+    if anchor is not None:
+        return _anchored_curvature(q, h, relative / total, anchor)
+    centered = q - (relative @ q) / total
+    weighted = centered * np.sqrt(np.abs(h))[:, None]
+    matrix: FloatArray = (weighted.T * np.sign(h)) @ weighted
+    return matrix
+
+
+def _curvature_matrix(z: FloatArray, h: FloatArray, total: float) -> FloatArray:
+    """Whiten the profiled Hessian, retrying range loss in scaled coordinates."""
+    n = z.shape[0]
+    smallest = float(np.min(h))
+    peak = int(np.argmax(h))
+    largest = float(h[peak])
+    # For every centered slope contrast v, the raw weighted moment is at
+    # most max(h)*||v||² and its profiled variance at least min(h)*||v||².
+    # Keep the raw subtraction when n*eps times this condition bound costs
+    # less than half the significand. Signed curvature retains its own Schur form.
+    limits = np.finfo(np.float64)
+    relative_floor = n * math.sqrt(limits.eps)
+    anchor = None
+    if 0.0 <= smallest < largest and smallest / largest < relative_floor:
+        anchor = peak
+    if not math.isfinite(total):
+        return _equilibrated_curvature(z, h, anchor)
+    g = z.T @ h
+    if anchor is not None and np.any(g):
+        max_cross = float(np.max(np.abs(g)))
+        if not math.isfinite(max_cross) or max_cross > math.sqrt(limits.max):
+            return _equilibrated_curvature(z, h, anchor)
+        hess = _anchored_curvature(z, h, h / total, anchor) / float(n)
+    else:
+        hess = ((z.T * h) @ z - np.outer(g, g) / total) / float(n)
+    hess = 0.5 * (hess + hess.T)
+    gram = (z.T @ z) / float(n)
+    gram = 0.5 * (gram + gram.T)
+    # A Gram/Hessian diagonal rounded on the subnormal grid can erase
+    # a finite generalized eigenvalue. Likewise g*g can underflow before
+    # division by a small total restores the scale of the Schur correction.
+    tiny = limits.tiny
+    if (
+        not np.all(np.isfinite(hess))
+        or not np.all(np.isfinite(gram))
+        or np.any(np.diag(gram) < tiny)
+        or np.any(np.abs(np.diag(hess)) < tiny)
+        or np.any((g != 0.0) & (np.abs(g) < math.sqrt(tiny)))
+    ):
+        return _equilibrated_curvature(z, h, anchor)
+    chol = _curvature_cholesky(gram)
+    left = np.linalg.solve(chol, hess)
+    cmat = np.linalg.solve(chol, left.T)
+    cmat = 0.5 * (cmat + cmat.T)
+    return cmat if np.all(np.isfinite(cmat)) else _equilibrated_curvature(z, h, anchor)
 
 
 def _direct_profiled_curvature_l0(
@@ -330,20 +423,8 @@ def _direct_profiled_curvature_l0(
     z = np.asarray(context.x_demeaned, dtype=np.float64)
     n = z.shape[0]
     h, total = _profiled_curvature_weights(y, linear_arr, context.tau, n)
-    g = z.T @ h
-    hess = ((z.T * h) @ z - np.outer(g, g) / total) / float(n)
-    hess = 0.5 * (hess + hess.T)
-    if not np.all(np.isfinite(hess)):
-        raise RuntimeError("direct_rho_curvature_failed: nonfinite_hessian")
-    gram = (z.T @ z) / float(n)
-    gram = 0.5 * (gram + gram.T)
-    try:
-        chol = np.linalg.cholesky(gram)
-    except np.linalg.LinAlgError as exc:
-        raise RuntimeError("direct_rho_curvature_failed: gram_cholesky_failed") from exc
-    left = np.linalg.solve(chol, hess)
-    cmat = np.linalg.solve(chol, left.T)
-    cmat = 0.5 * (cmat + cmat.T)
+    with np.errstate(over="ignore", invalid="ignore", under="ignore"):
+        cmat = _curvature_matrix(z, h, total)
     if not np.all(np.isfinite(cmat)):
         raise RuntimeError("direct_rho_curvature_failed: nonfinite_hessian")
     try:

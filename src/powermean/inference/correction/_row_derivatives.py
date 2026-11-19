@@ -1,4 +1,4 @@
-"""Tensor-free D2S primitives at one captured point.
+"""Tensor-free D2S primitives for design03 Section 5 at one captured point.
 
 k_dot is the partial derivative of k at fixed a=T/W. NB2 uses both logistic
 shares directly. Cell scale and lambda are deliberately separate: short-group
@@ -24,7 +24,7 @@ class BiasRowPrimitives:
     """Owned sorted weights for the second derivative, without cell reporting."""
 
     _k_dot: FloatStorage
-    _two_minus_e: FloatStorage
+    _two_minus_e: FloatStorage | None  # None represents the exact PPML complement 1.
     _eta_weights: FloatStorage
 
     @property
@@ -35,6 +35,8 @@ class BiasRowPrimitives:
     @property
     def two_minus_e(self) -> NDArray[np.float64]:
         """Complement computed without subtracting a rounded NB2 elasticity."""
+        if self._two_minus_e is None:
+            return np.broadcast_to(np.float64(1.0), self._k_dot.shape)
         return self._two_minus_e.view()
 
     @property
@@ -55,7 +57,7 @@ class CellRowPrimitives:
 
     @property
     def lambda_weights(self) -> NDArray[np.float64]:
-        """lambda=a*m/V in sorted rows; a denotes the equation multiplier here."""
+        """lambda=a*m/V in sorted rows; a denotes the D12 multiplier here."""
         return self._lambda_weights.view()
 
     @property
@@ -65,7 +67,7 @@ class CellRowPrimitives:
 
     @property
     def group_cancel_scale(self) -> NDArray[np.float64]:
-        """Ordinary within-group average of Z/m, independent of the multipliers."""
+        """Ordinary within-group average of Z/m, independent of D12 weights."""
         logs = self._log_cancel_scale.view()
         scale = _exp(logs)
         if np.any(np.isfinite(logs) & (scale == 0)):
@@ -146,6 +148,16 @@ def compute_bias_row_primitives(
         FloatStorage.store(kd), FloatStorage.store(complement), FloatStorage.store(eta)
     )
     return primitives, _cell_primitives(state, z, rows) if cell else None
+
+
+def certified_ppml_primitives(state: CancelledState) -> BiasRowPrimitives:
+    """Reuse the row terms of the same certified unit-weight PPML equations.
+
+    Here e=1 and e'=0. Both k and k_dot have only the positive ``(T/W)w``
+    term, evaluated with the same log sum (including zero-outcome groups).
+    Multiplication by the exact complement 1 leaves pi unchanged.
+    """
+    return BiasRowPrimitives(state._k, None, state._pi)
 
 
 def _cell_primitives(

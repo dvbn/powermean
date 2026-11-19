@@ -1,5 +1,8 @@
 """Detached fixed-effect partition, compound-label view, and connectivity snapshots.
 
+``design/02_computation.md``, Sections 2 and 7; ``design/03_fixed_effects.md``,
+Section 2; ``plan/evidence/M1.15_contract.txt``, items 1, 3 and 4;
+``brief/compound_boundary_review.txt`` and ``brief/layout_C_ownership.txt`` (P02).
 This module defines :func:`validate_partition_lineage`, :class:`PartitionLabelsView`,
 :class:`RetainedPartitionSnapshot` (including :meth:`compound_labels`),
 :class:`RetainedTopologySnapshot`, and :class:`PartitionIdentityMap`, and re-exports
@@ -57,6 +60,7 @@ __all__ = [
     "_copy_with_memo",
     "_owned_components",
     "_stored_raw_elements",
+    "_view_over_labels",
     "build_label_batch",
     "detach_grouping",
     "validate_partition_lineage",
@@ -229,8 +233,9 @@ class RetainedPartitionSnapshot:
         existing reduction hooks. Only this exact private native view expands.
         """
         state = object.__getstate__(self)
-        if (type(self) is RetainedPartitionSnapshot
-                and "_numeric_partition" in vars(self)):
+        if type(self) is RetainedPartitionSnapshot and "_numeric_partition" in vars(
+            self
+        ):
             state = dict(vars(self))
             for field in fields(self):
                 state[field.name] = getattr(self, field.name)
@@ -246,8 +251,13 @@ class RetainedPartitionSnapshot:
 
     @classmethod
     def _from_numeric(
-        cls, source: Grouping, grouping: Grouping, nobs: int, *,
-        key: PartitionKey, grouping_map: GroupingIdentityMap,
+        cls,
+        source: Grouping,
+        grouping: Grouping,
+        nobs: int,
+        *,
+        key: PartitionKey,
+        grouping_map: GroupingIdentityMap,
     ) -> RetainedPartitionSnapshot:
         """Lossless view of PRIVATE owned topology; no eager compound label batch.
 
@@ -257,8 +267,10 @@ class RetainedPartitionSnapshot:
         """
         result = object.__new__(cls)
         for name, value in (
-            ("key", key), ("source_key", grouping_map.key_for(source)),
-            ("grouping_key", grouping_map.key_for(grouping)), ("nobs", nobs),
+            ("key", key),
+            ("source_key", grouping_map.key_for(source)),
+            ("grouping_key", grouping_map.key_for(grouping)),
+            ("nobs", nobs),
             ("names", grouping.names),
             ("terms", source.source.terms if type(source) is Derived else None),
             ("is_derived", type(source) is Derived),
@@ -271,19 +283,35 @@ class RetainedPartitionSnapshot:
         """Resolve exact-native presentation fields; generic lookup stays unchanged."""
         if type(self) is RetainedPartitionSnapshot and type(name) is str:
             state = object.__getattribute__(self, "__dict__")
-            if ("_numeric_partition" in state and name not in state and name in {
-                "batch", "_ordinals", "_source_positions", "_final_positions",
-                "_source_codes", "_source_counts", "_final_codes", "_final_counts",
-                "_source_view", "_final_view",
-            }):
+            if (
+                "_numeric_partition" in state
+                and name not in state
+                and name
+                in {
+                    "batch",
+                    "_ordinals",
+                    "_source_positions",
+                    "_final_positions",
+                    "_source_codes",
+                    "_source_counts",
+                    "_final_codes",
+                    "_final_counts",
+                    "_source_view",
+                    "_final_view",
+                }
+            ):
                 source, grouping, groupings = self._numeric_partition
                 if name == "_source_view":
                     return groupings.register(source)
                 if name == "_final_view":
                     return groupings.register(grouping)
                 materialized = RetainedPartitionSnapshot(
-                    source, grouping, self.nobs, key=self.key,
-                    source_key=self.source_key, grouping_key=self.grouping_key,
+                    source,
+                    grouping,
+                    self.nobs,
+                    key=self.key,
+                    source_key=self.source_key,
+                    grouping_key=self.grouping_key,
                 )
                 vars(self).update(vars(materialized))
                 vars(self).pop("_numeric_partition", None)
@@ -291,13 +319,21 @@ class RetainedPartitionSnapshot:
 
     @classmethod
     def _from_owned_components(
-        cls, source: Grouping, grouping: Grouping, nobs: int, *,
-        key: PartitionKey, source_key: GroupingKey, grouping_key: GroupingKey,
+        cls,
+        source: Grouping,
+        grouping: Grouping,
+        nobs: int,
+        *,
+        key: PartitionKey,
+        source_key: GroupingKey,
+        grouping_key: GroupingKey,
     ) -> RetainedPartitionSnapshot | None:
         """Lossless private composition after original owned-order admission."""
-        if (cls is not RetainedPartitionSnapshot
-                or build_label_batch is not _RUN_BATCH
-                or _view_over_labels is not _RUN_LABEL_VIEW):
+        if (
+            cls is not RetainedPartitionSnapshot
+            or build_label_batch is not _RUN_BATCH
+            or _view_over_labels is not _RUN_LABEL_VIEW
+        ):
             return None
         batch = RetainedLabelBatch._from_runs(source, grouping)
         if batch is None or type(source) is not Derived:
@@ -306,25 +342,39 @@ class RetainedPartitionSnapshot:
         src_levels, fin_levels, runs = batch._run_views()
         terms = source.source.terms
         src_view = _view_over_component_runs(
-            source, src_levels, runs, partition_key=source_key, terms=terms,
+            source,
+            src_levels,
+            runs,
+            partition_key=source_key,
+            terms=terms,
         )
         fin_view = _view_over_component_runs(
-            grouping, fin_levels, runs, partition_key=grouping_key,
-            terms=terms, ordinals=ords,
+            grouping,
+            fin_levels,
+            runs,
+            partition_key=grouping_key,
+            terms=terms,
+            ordinals=ords,
         )
         result = object.__new__(cls)
         for attr, val in (
-            ("key", int(key)), ("source_key", source_key),
-            ("grouping_key", grouping_key), ("nobs", int(nobs)),
-            ("names", grouping.names), ("terms", terms), ("is_derived", True),
-            ("batch", batch), ("_ordinals", ords),
+            ("key", int(key)),
+            ("source_key", source_key),
+            ("grouping_key", grouping_key),
+            ("nobs", int(nobs)),
+            ("names", grouping.names),
+            ("terms", terms),
+            ("is_derived", True),
+            ("batch", batch),
+            ("_ordinals", ords),
             ("_source_positions", src_view._positions),
             ("_final_positions", fin_view._positions),
             ("_source_codes", tuple(b._codes for b in src_view.blocks)),
             ("_source_counts", tuple(b._counts for b in src_view.blocks)),
             ("_final_codes", tuple(b._codes for b in fin_view.blocks)),
             ("_final_counts", tuple(b._counts for b in fin_view.blocks)),
-            ("_source_view", src_view), ("_final_view", fin_view),
+            ("_source_view", src_view),
+            ("_final_view", fin_view),
         ):
             object.__setattr__(result, attr, val)
         return result
@@ -499,14 +549,20 @@ class PartitionIdentityMap:
         return self._remember(source, grouping, pair_id, snap)
 
     def _capture_numeric(
-        self, source: Grouping, grouping: Grouping, nobs: int,
+        self,
+        source: Grouping,
+        grouping: Grouping,
+        nobs: int,
     ) -> RetainedPartitionSnapshot:
         """Register the owned topology view once, without forcing label exports."""
         pair_id = (id(source), id(grouping), int(nobs))
         if pair_id in self._by_pair:
             return self._by_pair[pair_id]
         snapshot = RetainedPartitionSnapshot._from_numeric(
-            source, grouping, nobs, key=self._next_key,
+            source,
+            grouping,
+            nobs,
+            key=self._next_key,
             grouping_map=self.grouping_map,
         )
         self._next_key += 1
@@ -515,17 +571,25 @@ class PartitionIdentityMap:
         return snapshot
 
     def _capture_owned_components(
-        self, source: Grouping, grouping: Grouping, nobs: int,
+        self,
+        source: Grouping,
+        grouping: Grouping,
+        nobs: int,
     ) -> RetainedPartitionSnapshot:
         """The existing normal-order admission consumes its source's full runs."""
-        if (type(self) is not PartitionIdentityMap
-                or type(self.grouping_map) is not GroupingIdentityMap):
+        if (
+            type(self) is not PartitionIdentityMap
+            or type(self.grouping_map) is not GroupingIdentityMap
+        ):
             return self.capture(source, grouping, nobs)
         pair_id = (id(source), id(grouping), int(nobs))
         if pair_id in self._by_pair:
             return self._by_pair[pair_id]
         snap = RetainedPartitionSnapshot._from_owned_components(
-            source, grouping, nobs, key=self._next_key,
+            source,
+            grouping,
+            nobs,
+            key=self._next_key,
             source_key=self.grouping_map.key_for(source),
             grouping_key=self.grouping_map.key_for(grouping),
         )
@@ -535,8 +599,11 @@ class PartitionIdentityMap:
         return self._remember(source, grouping, pair_id, snap)
 
     def _remember(
-        self, source: Grouping, grouping: Grouping,
-        pair_id: tuple[int, int, int], snap: RetainedPartitionSnapshot,
+        self,
+        source: Grouping,
+        grouping: Grouping,
+        pair_id: tuple[int, int, int],
+        snap: RetainedPartitionSnapshot,
     ) -> RetainedPartitionSnapshot:
         """Keep the original registration and one-memo custom materialization order."""
         self._by_pair[pair_id] = snap

@@ -1,7 +1,11 @@
 """The records of the collinearity analysis and the admission of the absorber's state.
 
-Internal module: what :func:`powermean.data.collinearity.analyze_collinearity` takes and
-returns, and the check of the state that the absorber returns to it.
+``design/02_computation.md``, Sections 3 and 8.4; the adopted contract
+``plan/evidence/M1.9_contract.txt`` (proposal C with the retained arithmetic of
+proposal A) and its correction A (``plan/evidence/M1.9_revision_A.txt``); decisions
+D41, D51 and D66.  Task M1.9, private: what
+:func:`powermean.data.collinearity.analyze_collinearity` takes and returns, and the
+check of the state that the accepted absorber returns to it.
 
 Records: the problem, the absorber controls in the absorber's own domains, the
 targets ``t_requested``, ``h = eps max(n, p)``, ``t_diag = min(t_requested, h)`` and
@@ -12,22 +16,23 @@ conversion (a fractional index is refused, not narrowed; a matrix of indices is
 refused, not flattened), tuples and arrays are owned copies and the targets are
 finite.  A malformed record raises ``ValueError``.
 
-Binding.  An analysis keeps the problem record it ran on and its actual controls, which
-a caller compares with its own inputs.  A bound record is checked to be structurally
-theirs, without a factorization, solve or absorption: names, positions, controls exactly
-with blocks, the requested targets, the absorber's realization and budget (a ``budget``
-stop leaves less than one unit of one or two sweeps) and each column's kind
-(:func:`column_kinds`).  An unbound record stays inspectable and authorizes nothing; no
-record proves how it was computed.
+Binding (task M1.10, correction A).  An analysis keeps the problem record it ran on and
+its actual controls, which a caller compares with its own inputs.  A bound record is
+checked to be structurally theirs, without a factorization, solve or absorption: names,
+positions, controls exactly with blocks, the requested targets, the absorber's
+realization and budget (a ``budget`` stop leaves less than one unit of one or two
+sweeps, contract C) and each column's kind (:func:`column_kinds`).  An unbound private
+record stays inspectable and authorizes nothing; no record proves how it was computed.
 
-Admission of the absorber's state (:func:`_accepted`): the absorption converged; its
-state is bound to the same positions, block names, codes, level counts and column names;
-its residual is the values minus the ordered lift of its own coefficients bit for bit;
-and a fresh unit-weight check of every block finds no mean above ``t_diag``, equality
-passing.  A completed check that fails this last predicate travels with its refusal
-(:class:`FailedMeansError`), so that the analysis keeps the observed means beside the
-``means`` cause; a check that never completed leaves no evidence.  This establishes the
-returned numerical state, not its distance from the exact projection.
+Admission of the absorber's state (:func:`_accepted`, the parent record's P5): the
+absorption converged; its state is bound to the same positions, block names, codes,
+level counts and column names; its residual is the values minus the ordered lift of
+its own coefficients bit for bit; and a fresh unit-weight check of every block finds
+no mean above ``t_diag``, equality passing.  A completed check that fails this last
+predicate travels with its refusal (:class:`FailedMeansError`), so that the
+analysis keeps the observed means beside the ``means`` cause; a check that never
+completed leaves no evidence.  This establishes the returned numerical state, not
+its distance from the exact projection.
 """
 
 from __future__ import annotations
@@ -205,8 +210,11 @@ class ColumnDiagnostics:
 
     ``kind``: ``zero``, ``constant`` or ``general``; ``scale``: ``d_j``; with blocks,
     a general column has its ``original_norm`` ``||U_j||``, ``within_norm``
-    ``||R_j||``, ``screen`` and fixed-effect ``span`` test; an omitted collinear
-    column has its ``relation``.  Missing evidence is ``None``.
+    ``||R_j||``, ``screen`` and fixed-effect ``span`` test.  Ruling 92's relative FE
+    omission has its two norms and no exact ``span`` assertion; its slope-pivot
+    omission has no exact ``relation``.  Other collinear omissions carry their
+    original-column ``relation``.  Missing evidence is ``None``.  ``screen`` keeps
+    the diagnostic screen at ``Targets.screen``, not the relative policy cutoff.
     """
 
     index: int

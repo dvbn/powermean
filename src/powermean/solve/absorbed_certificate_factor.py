@@ -1,6 +1,7 @@
 """The SciPy factors, their provenance and the counted actions of the certificate.
 
-Internal module: every call
+``design/02_computation.md``, Section 7; the M1.14 readiness specification, Section 3
+(``plan/evidence/M1.14_readiness.txt``); decision D51.  Task M1.14, private: every call
 that the certificate makes to SciPy's sparse routines, inspected at the declared
 minimum 1.15.0 and executed on the installed release; no dense inverse, truncation,
 ridge, pseudoinverse, cutoff, incomplete factor or other solver.
@@ -20,11 +21,11 @@ provenance: the version of the SciPy that runs, and the complete keywords of the
 that was made (``None`` when it was refused before any call).  No SuperLU version is
 inferred: SciPy does not report one.
 
-The admitted ordinary diagonal-Schur route may instead use the internal packed
+The admitted ordinary diagonal-Schur route may instead use the private packed
 partial-pivoting dense LU backend, including final projection and certificate
 actions. Its record names dgetrf and does not invent full L/U nonzero counts.
 An eligible curvature Schur remainder within the existing dense workspace bound
-may instead use the dpotrf Cholesky factor and dtrtrs whitening. Its
+may instead use the approved dpotrf Cholesky factor and dtrtrs whitening. Its
 record names the actual call, keeps implicit LDL pivots diag(R)**2 and no L/U
 counts; failed leading minors are not retried. Ineligible curvature and every
 merit factor retain the sparse policy above. Full-system actions, ordinary
@@ -53,8 +54,8 @@ from powermean.data.accounting import frozen_index
 from powermean.fe.reductions import immutable_array
 from powermean.model.order import IndexArray
 from powermean.model.variance import FloatArray
-from powermean.solve.absorbed_certificate_geometry import SparseMatrix
 from powermean.solve.absorbed_certificate_point import StepStatus, WorkStep
+from powermean.solve.sparse_matrix import SparseMatrix
 
 FactorKind = Literal["ordinary", "curvature", "merit"]
 FactorStatus = Literal["factored", "failed", "refused"]
@@ -314,8 +315,11 @@ def stored_lower(
     The stored arrays of a factor's ``L`` as it was returned, copied: the solve reads
     the same structure and values, never the caller's buffers.
     """
+    # The factor came from SuperLU, whose row indices and column pointers
+    # fit C int. Restore that representation after platform-width storage.
     found: CscView = sparse.csc_array(
-        (data.copy(), indices.copy(), indptr.copy()), shape=(size, size)
+        (data.copy(), indices.astype(np.intc), indptr.astype(np.intc)),
+        shape=(size, size),
     )
     return found
 

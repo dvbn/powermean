@@ -1,9 +1,9 @@
-"""The 20 designs without fixed effects of the solver study.
+"""The 20 designs without fixed effects of the solver campaign.
 
-Every design has ``E(y | x) = exp(x'b)`` with an intercept, a binary treatment of
-mean one half and coefficient ``log(1.08)``, and ``k - 2`` other regressors; the
-intercept is analytical and sets the population mean of untreated observations to
-two.
+Port of ``four_way_mc_2026_10_02/designs.py``.  Every design has
+``E(y | x) = exp(x'b)`` with an intercept, a binary treatment of mean one half and
+coefficient ``log(1.08)``, and ``k - 2`` other regressors; the intercept is
+analytical and sets the population mean of untreated observations to two.
 
 ========  =====================================================================
 Designs   Regressors and outcome law
@@ -17,10 +17,11 @@ Designs   Regressors and outcome law
           collinear regressors
 ========  =====================================================================
 
-Designs 11 to 16 use the built-in ``sum``, whose floating-point algorithm changed
-in Python 3.12: with 100 regressors their intercept differs in its last bits between
-Python 3.10 or 3.11 and later versions.  The archive of the study was produced with
-Python 3.14.
+The functions keep the structure and the names of the source so that the two can
+be read side by side.  Designs 11 to 16 use the built-in ``sum``, whose
+floating-point algorithm changed in Python 3.12: with 100 regressors their
+intercept differs in its last bits between Python 3.10 or 3.11 and later versions.
+The archive of the campaign was produced with Python 3.14.
 """
 
 from __future__ import annotations
@@ -50,18 +51,18 @@ SOLVER_SOURCE = (
     "solver study of Benatia, Bellego and Pape: designs without fixed effects"
 )
 SOLVER_SEED = 2026100301
-"""Master seed of the reporting runs of the study (split ``"test"``)."""
+"""Master seed of the reporting runs of the campaign (split ``"test"``)."""
 SOLVER_SPLITS = {"development": 1, "validation": 2, "test": 3}
 _STREAMS = {
     "covariates": 0,
     "outcome": 1,
     "zeros": 3,
-}  # 2 orders the methods in the study
+}  # 2 orders the methods in the campaign
 
 
 @dataclass(frozen=True)
 class SolverDesign:
-    """One design of the solver study."""
+    """One row of the tuple ``DGPS`` of ``designs.py``."""
 
     number: int
     covariates: str
@@ -126,7 +127,7 @@ def _logaddexp(a: float, b: float) -> float:
 
 
 def _menu_features(menu: str, k: int) -> tuple[tuple[str, float], ...]:
-    """Kind and probability of each nuisance regressor.
+    """Kind and probability of each nuisance regressor (``_cp8_features``).
 
     The probability is ``nan`` for the kinds that have none.
     """
@@ -196,7 +197,10 @@ def _solver_coefficients(design: SolverDesign, k: int) -> list[float]:
 def _solver_covariates(
     design: SolverDesign, n: int, k: int, rng: np.random.Generator
 ) -> tuple[FloatArray, IntArray | None]:
-    """Regressors with their intercept column, and the heterogeneity indicator."""
+    """Regressors with their intercept column, and the heterogeneity indicator.
+
+    Port of ``_draw_covariates``; the order of the draws is that of the source.
+    """
     if design.covariates == "cp11_gaussian":
         columns = (np.ones(n), rng.binomial(1, 0.5, n), rng.normal(size=(n, k - 2)))
         x = np.asarray(np.column_stack(columns), dtype=np.float64)
@@ -258,12 +262,12 @@ def solver_data(
     draw: int = 0,
     split: str = "test",
 ) -> Synthetic:
-    """One dataset of a design of the solver study.
+    """One dataset of a design of the solver campaign.
 
     The model is ``E(y | x) = exp(x'b)`` with an intercept, a binary treatment with
     coefficient ``log(1.08)`` and ``k - 2`` other regressors.  With the default
     ``seed`` and ``split``, sizes ``(n, k)`` of ``(1000, 10)`` or ``(10000, 100)``
-    and ``draw`` below 1000, the result is a dataset of the study.
+    and ``draw`` below 1000, the result is a dataset of the campaign.
 
     Parameters
     ----------
@@ -276,8 +280,9 @@ def solver_data(
     seed, draw : int
         Master seed and replication number.
     split : str
-        ``"development"``, ``"validation"`` or ``"test"``.  Each stream is seeded
-        with ``SeedSequence([seed, split code, design number, n, k, draw, stream])``.
+        ``"development"``, ``"validation"`` or ``"test"``.  The campaign seeds each
+        stream with ``SeedSequence([seed, split code, design number, n, k, draw,
+        stream])``.
 
     Returns
     -------

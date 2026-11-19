@@ -1,6 +1,7 @@
 """The shared root-Newton kernel: one attempt, one stage with its retry, continuation.
 
-The iteration of the cancelled solver, extracted unchanged so
+``design/02_computation.md``, Sections 5.3 (root Newton), 5.7 (its options) and 6 (the
+continuation fallback).  The iteration of the cancelled solver, extracted unchanged so
 that every system without a usable criterion runs the same one: the cancelled equation
 outside ``tau in {1, 2}`` (:mod:`powermean.solve.cancelled_root`) and the joint
 equation outside ``tau in [1, 2]`` (:mod:`powermean.solve.joint_root`).  Nothing here
@@ -16,13 +17,26 @@ knows a system.  A :class:`RootKernel` names three seams:
 and a :class:`RootCertifier` names the independent certification of a stage point.
 
 One attempt (:func:`run_root_attempt`): the opening evaluation; then, until the native
-criterion ``max |S| <= gradient_tol`` holds or ``max_iter`` steps are spent, the
+criterion ``max |S| <= gradient_tol * unit`` holds or ``max_iter`` steps are spent, the
 direction and an Armijo backtracking on ``phi``, its change formed as
 ``(u_t - u)'(u_t + u) / 2`` to limit cancellation, with the constant ``root_armijo``,
 the contraction ``backtrack_factor`` and at most ``root_max_backtracks`` trials, each
 trial charged to the evaluation budget before it is made.  A trial whose evaluation is
 not representable is contracted, never accepted.  The native reasons are those of
 :mod:`powermean.solve.newton_trace`; a native stop certifies nothing.
+
+A certified stop (``RootKernel.certified_stop``, the joint systems): the native
+criterion is a raw ``max |S|``, which can hold where the certificate's whitened score
+or index correction still fails, and the certificate is unit-free while no fixed
+reading of ``max |S|`` is equivalent to it in every unit.  So the native criterion
+ends such an attempt only at a point whose fresh certificate passes at the strict
+level.  Otherwise the attempt goes on and certifies every later point, ending at the
+first strict one, or, as soon as a point is no measurable improvement on the best so
+far (accepted before not accepted, else a common error below ``RETRY_FACTOR`` times
+the best one), at the best point, which keeps the reason ``native_stop``; any other
+stop past the native criterion also returns the best point.  The certificate of the
+point an attempt ends at is the one the stage reads, so a stop at the strict level
+costs no certificate beyond the stage's own.
 
 One stage (:func:`run_root_stage`): an attempt with the iterations left, its fresh
 certification, and the single retry of the convex solver's rule
@@ -41,6 +55,7 @@ of the work are those of the cancelled solver, whose origin is ``tau = 2``.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
@@ -57,7 +72,12 @@ from powermean.solve.cancelled_records import (
     iter_continuation_variances,
 )
 from powermean.solve.factorization import SingularJacobianError
-from powermean.solve.newton_retry import improved, verdict
+from powermean.solve.newton_retry import (
+    RETRY_FACTOR,
+    improved,
+    short_of_strict,
+    verdict,
+)
 from powermean.solve.newton_trace import NativeReason
 from powermean.solve.options import SolverOptions
 from powermean.solve.quantities import euclidean_norm
@@ -95,6 +115,12 @@ class RootKernel[StateT: RootState]:
 
     ``budget`` is the evaluation budget shared by every attempt of the solve; it is
     charged before each evaluation is made.  ``work`` counts the operations.
+    ``unit``, where given, is the unit of the moment under a stage variance, so that
+    the native criterion reads ``max |S|`` in the unit of the outcome (ruling 68);
+    without it ``options.gradient_tol`` is read as given.  ``certified_stop`` makes
+    the native criterion end an attempt only at a point whose certificate passes at
+    the strict level (module docstring); a system adapter with its own attempt seam
+    does not read it.
     """
 
     equations: Callable[[FloatArray, CancelledFamily], StateT]
@@ -104,6 +130,8 @@ class RootKernel[StateT: RootState]:
     root_options: RootOptions
     budget: RootBudget
     work: WorkLog
+    unit: Callable[[CancelledFamily], float] | None = None
+    certified_stop: bool = False
 
 
 class RootCertifier[CertifiedT](Protocol):
@@ -166,10 +194,15 @@ class StageOutcome[CertifiedT]:
 # ------------------------------------------------------------------- one attempt
 
 
-def converged[StateT: RootState](kernel: RootKernel[StateT], score: FloatArray) -> bool:
+def converged[StateT: RootState](
+    kernel: RootKernel[StateT], score: FloatArray, variance: CancelledFamily
+) -> bool:
     """Apply native gradient_tol; final certificate tolerances are independent."""
     grad_inf = float(np.max(np.abs(score))) if score.size else 0.0
-    return grad_inf <= kernel.options.gradient_tol
+    tolerance = kernel.options.gradient_tol
+    if kernel.unit is not None:
+        tolerance *= kernel.unit(variance)
+    return grad_inf <= tolerance
 
 
 def _line_search_step[StateT: RootState](
@@ -202,7 +235,7 @@ def _line_search_step[StateT: RootState](
             continue
 
         rhs = -2.0 * kernel.root_options.root_armijo * step_size * phi_curr
-        if delta_phi <= rhs or converged(kernel, trial_state.score):
+        if delta_phi <= rhs or converged(kernel, trial_state.score, stage_variance):
             return trial_state, u_trial, phi_trial, backtracks, None
         step_size *= kernel.options.backtrack_factor
     return None, u_curr, phi_curr, backtracks, "line_search_failure"
@@ -222,14 +255,86 @@ def _stop_record(
     return RootAttemptRecord(opening, pt, native, it, ev, bt, m0, m1, msg)
 
 
+def _strict(assessed: Assessment, tol: float) -> bool:
+    """Whether an assessment passes at the strict level.
+
+    The two levels of a certificate differ only in the tolerance on the scaled score
+    and the index correction (:func:`~powermean.solve.newton_retry.short_of_strict`).
+    """
+    return assessed.accepted and not short_of_strict(assessed, tol)
+
+
+def _progress(assessed: Assessment, best: Assessment) -> bool:
+    """Measurable improvement of a certificate on the best one of the attempt."""
+    if assessed.accepted != best.accepted:
+        return assessed.accepted
+    return math.isfinite(assessed.error) and assessed.error < RETRY_FACTOR * best.error
+
+
+@dataclass(frozen=True)
+class _End:
+    """Where an attempt ends at a check of the stop: the point, its merit, why."""
+
+    theta: FloatArray
+    merit: float
+    msg: str
+
+
+class _Stop[StateT: RootState]:
+    """The stop of one attempt: native, or certified (module docstring).
+
+    ``best`` is the best certified point past the native criterion; once there is
+    one, every later point is certified.
+    """
+
+    def __init__(
+        self,
+        kernel: RootKernel[StateT],
+        variance: CancelledFamily,
+        assess: Callable[[FloatArray], Assessment] | None,
+    ) -> None:
+        self._kernel, self._variance, self._assess = kernel, variance, assess
+        self._best: tuple[FloatArray, Assessment, float] | None = None
+
+    def check(self, theta: FloatArray, score: FloatArray, merit: float) -> _End | None:
+        """The end of the attempt at ``theta`` with moment ``score``, or ``None``."""
+        kernel, best = self._kernel, self._best
+        if best is None and not converged(kernel, score, self._variance):
+            return None
+        if self._assess is None:
+            return _End(theta, merit, "root tol met")
+        assessed = self._assess(theta)
+        if _strict(assessed, kernel.options.tol):
+            msg = "root tol met" if best is None else "root tol met; certified"
+            return _End(theta, merit, msg)
+        if best is not None and not _progress(assessed, best[1]):
+            return self.at_best("certificate stopped improving")
+        self._best = (np.array(theta, dtype=np.float64), assessed, merit)
+        return None
+
+    def at_best(self, why: str) -> _End | None:
+        """The best certified point past the native criterion, if there is one."""
+        if self._best is None:
+            return None
+        theta, _, merit = self._best
+        return _End(theta, merit, f"root tol met; {why}")
+
+
 def run_root_attempt[StateT: RootState](
     kernel: RootKernel[StateT],
     stage_variance: CancelledFamily,
     start_theta: FloatArray,
     *,
     max_iter: int,
+    assess: Callable[[FloatArray], Assessment] | None = None,
 ) -> RootAttemptRecord:
-    """Execute one damped nonsymmetric root-Newton attempt on ``stage_variance``."""
+    """Execute one damped nonsymmetric root-Newton attempt on ``stage_variance``.
+
+    ``assess``, the assessment of a point's fresh certificate on the stage equation,
+    makes the stop a certified one (module docstring); without it the native
+    criterion ends the attempt.  Past the native criterion, every other stop ends at
+    the best certified point with the reason ``native_stop``.
+    """
     opening = FloatStorage.store(start_theta)
     theta, nan_pair = opening.view(), (float("nan"), float("nan"))
     if kernel.budget.used >= kernel.budget.limit:
@@ -251,49 +356,51 @@ def run_root_attempt[StateT: RootState](
         )
 
     initial_merit, total_bt = phi_curr, 0
+    stop = _Stop(kernel, stage_variance, assess)
+    reason: NativeReason = "iteration_limit"
+    msg = "root_max_iter reached"
     for step_idx in range(max_iter + 1):
-        merit_pair = (initial_merit, phi_curr)
-        if converged(kernel, state.score):
-            counts = (step_idx, kernel.budget.used - evals_start, total_bt)
+        counts = (step_idx, kernel.budget.used - evals_start, total_bt)
+        end = stop.check(theta, state.score, phi_curr)
+        if end is not None:
+            merit_pair = (initial_merit, end.merit)
             return _stop_record(
-                opening, theta, "native_stop", counts, merit_pair, msg="root tol met"
+                opening, end.theta, "native_stop", counts, merit_pair, msg=end.msg
             )
         if step_idx == max_iter:
             break
         try:
             delta = kernel.direction(state)
         except (SingularJacobianError, FloatingPointError, ValueError) as err:
-            reason: NativeReason = (
+            reason = (
                 "factorization_failure"
                 if isinstance(err, SingularJacobianError)
                 else "numerical_breakdown"
             )
-            counts = (step_idx, kernel.budget.used - evals_start, total_bt)
-            return _stop_record(
-                opening, theta, reason, counts, merit_pair, msg=str(err)
-            )
+            msg = str(err)
+            break
         next_state, u_next, phi_next, bt, stop_reason = _line_search_step(
             kernel, stage_variance, theta, delta, u_curr=u_curr, phi_curr=phi_curr
         )
         total_bt += bt
         if stop_reason is not None or next_state is None:
-            ls_reason: NativeReason = (
-                "line_search_failure" if stop_reason is None else stop_reason
-            )
+            reason = "line_search_failure" if stop_reason is None else stop_reason
+            msg = f"line search stopped with {reason}"
             counts = (step_idx, kernel.budget.used - evals_start, total_bt)
-            msg = f"line search stopped with {ls_reason}"
-            return _stop_record(opening, theta, ls_reason, counts, merit_pair, msg=msg)
+            break
         theta, state, u_curr, phi_curr = next_state.theta, next_state, u_next, phi_next
         _norm_curr = euclidean_norm(u_curr)
 
-    counts = (max_iter, kernel.budget.used - evals_start, total_bt)
+    if reason == "iteration_limit":
+        counts = (max_iter, kernel.budget.used - evals_start, total_bt)
+    end = stop.at_best(f"then {reason}")
+    if end is not None:
+        merit_pair = (initial_merit, end.merit)
+        return _stop_record(
+            opening, end.theta, "native_stop", counts, merit_pair, msg=end.msg
+        )
     return _stop_record(
-        opening,
-        theta,
-        "iteration_limit",
-        counts,
-        (initial_merit, phi_curr),
-        msg="root_max_iter reached",
+        opening, theta, reason, counts, (initial_merit, phi_curr), msg=msg
     )
 
 
@@ -328,6 +435,42 @@ def _should_retry[StateT: RootState, CertifiedT](
     return improved(first_assess, certifier.assessment(init_cert)), True
 
 
+class _Latest[CertifiedT]:
+    """The certifier of one attempt's stage, keeping the latest certificate it made.
+
+    The certificate of the point that a certified stop ends at was made by the attempt
+    as its last one; the stage reads it instead of certifying that point again.  Only
+    the latest certificate is kept, and only for the same point, so that no
+    certificate made before another one is read.
+    """
+
+    def __init__(
+        self, certifier: RootCertifier[CertifiedT], variance: CancelledFamily
+    ) -> None:
+        self._certifier, self._variance = certifier, variance
+        self._latest: tuple[FloatArray, CertifiedT] | None = None
+
+    def certify(self, point: FloatArray) -> CertifiedT:
+        """The fresh certificate of ``point``, or the latest one if made at it."""
+        latest = self._latest
+        if latest is not None and _same_point(latest[0], point):
+            return latest[1]
+        certified = self._certifier.certify(self._variance, point)
+        self._latest = (np.array(point, dtype=np.float64), certified)
+        return certified
+
+    def assess(self, point: FloatArray) -> Assessment:
+        """The assessment of the certificate of ``point`` (made afresh)."""
+        self._latest = None
+        return self._certifier.assessment(self.certify(point))
+
+
+def _same_point(kept: FloatArray, point: FloatArray) -> bool:
+    """Whether two points hold the same values bit for bit."""
+    found = np.asarray(point, dtype=np.float64)
+    return kept.shape == found.shape and kept.tobytes() == found.tobytes()
+
+
 def run_root_stage[StateT: RootState, CertifiedT](
     run: RootRun[StateT, CertifiedT],
     stage_variance: CancelledFamily,
@@ -337,9 +480,9 @@ def run_root_stage[StateT: RootState, CertifiedT](
     kernel, certifier = run.kernel, run.certifier
     rem_global = max(0, run.iter_budget.limit - run.iter_budget.used)
     stage_max_iter = min(kernel.root_options.root_max_iter, rem_global)
-    first = _attempt(run, stage_variance, start_theta, stage_max_iter)
+    first, latest = _attempt(run, stage_variance, start_theta, stage_max_iter)
     run.iter_budget.used += first.iterations
-    first_cert = certifier.certify(stage_variance, first.point)
+    first_cert = latest.certify(first.point)
     retry, assessed_start = _should_retry(
         run,
         stage_variance,
@@ -360,9 +503,9 @@ def run_root_stage[StateT: RootState, CertifiedT](
         stage_max_iter - first.iterations,
         max(0, run.iter_budget.limit - run.iter_budget.used),
     )
-    second = _attempt(run, stage_variance, first.point, rem_iter)
+    second, latest = _attempt(run, stage_variance, first.point, rem_iter)
     run.iter_budget.used += second.iterations
-    second_cert = certifier.certify(stage_variance, second.point)
+    second_cert = latest.certify(second.point)
     _, keep_first = verdict(first_assess, certifier.assessment(second_cert))
     idx = 0 if keep_first else 1
     chosen_cert = first_cert if keep_first else second_cert
@@ -382,11 +525,20 @@ def _attempt[StateT: RootState, CertifiedT](
     variance: CancelledFamily,
     point: FloatArray,
     max_iter: int,
-) -> RootAttemptRecord:
-    """Keep a system adapter's canonical attempt seam, without copying the kernel."""
+) -> tuple[RootAttemptRecord, _Latest[CertifiedT]]:
+    """Keep a system adapter's canonical attempt seam, without copying the kernel.
+
+    Returns the attempt and the certifier of its stage, which holds the certificate
+    of the point a certified stop ended at.
+    """
+    latest = _Latest(run.certifier, variance)
     if run.attempt is not None:
-        return run.attempt(variance, point, max_iter)
-    return run_root_attempt(run.kernel, variance, point, max_iter=max_iter)
+        return run.attempt(variance, point, max_iter), latest
+    assess = latest.assess if run.kernel.certified_stop else None
+    record = run_root_attempt(
+        run.kernel, variance, point, max_iter=max_iter, assess=assess
+    )
+    return record, latest
 
 
 # ------------------------------------------------------------------ continuation

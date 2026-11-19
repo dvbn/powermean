@@ -1,7 +1,9 @@
 """Detached snapshots of collinearity factorizations, span tests, and relations.
 
-This module detaches ``Factorization``, ``SpanTest``, ``Relation``, and ``WithinRank``
-into explicit finite typed records with fresh owned arrays on every access.
+``design/02_computation.md``, Sections 2 and 4; ``plan/evidence/M1.15_contract.txt``;
+``brief/layout_C_ownership.txt`` (P11).  This module detaches ``Factorization``,
+``SpanTest``, ``Relation``, and ``WithinRank`` into explicit finite typed records with
+fresh owned arrays on every access.
 """
 
 from __future__ import annotations

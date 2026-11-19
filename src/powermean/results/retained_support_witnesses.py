@@ -1,8 +1,10 @@
 """Detached snapshots of primal and dual separation witnesses and column sums.
 
-This module defines :class:`RetainedColumnSums`, :class:`RetainedPrimalWitness`,
-:class:`RetainedDualCheck`, :func:`_detach_column_sums`, :func:`detach_primal_witness`,
-and :func:`detach_dual_check`, and re-exports :class:`RetainedSupportProblem` from
+``design/02_computation.md``, Sections 2 and 4; ``plan/evidence/M1.15_contract.txt``;
+``brief/layout_C_ownership.txt`` (P07).  This module defines
+:class:`RetainedColumnSums`, :class:`RetainedPrimalWitness`, :class:`RetainedDualCheck`,
+:func:`_detach_column_sums`, :func:`detach_primal_witness`, and
+:func:`detach_dual_check`, and re-exports :class:`RetainedSupportProblem` from
 :mod:`powermean.results.retained_diagnostic_problems`.  Each witness detaches its own
 ``w.problem`` / ``d.problem`` without parent substitution.
 """

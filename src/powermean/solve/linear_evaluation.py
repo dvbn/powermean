@@ -1,8 +1,9 @@
 """The fresh evaluation of the linear path at a proposed point: the original equation.
 
-A solver proposes, the certificate decides, and the certificate is computed after the
-solver returns, from fresh evaluations of the original system.
-The least-squares solve of :mod:`powermean.solve.linear` returns
+``design/02_computation.md``, Sections 1 (rule 3: a solver proposes, the certificate
+decides), 5.5 and 7 ("computed after the solver returns, from fresh evaluations of the
+original system"); ``design/01_statistical_core.md``, Section 3.3; decisions D41, D49
+and D51; task M0.22.  The least-squares solve of :mod:`powermean.solve.linear` returns
 a candidate with its own residuals, rank and singular values, none of which certifies
 it.  This module evaluates the original linear equation afresh at any proposed
 coefficient vector ``b``, from the retained inputs of the solve and nothing of the

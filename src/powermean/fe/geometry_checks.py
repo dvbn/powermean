@@ -5,27 +5,41 @@ Original-space null/reconstruction checks use gram_rtol directly, without the
 Gram squaring or a looser cutoff. Exact raw group-constancy is checked from fresh
 raw columns. As in data.collinearity_geometry, disagreement refuses rather than
 changing the model. General structural admission still needs a separately
-specified matrix-free direct-rank procedure; the dense routines are not called.
+specified matrix-free direct-rank procedure; the M1 dense routines are not called.
+
+A geometry on the exact quotient's pivot columns binds external raw inputs
+afresh via :func:`_bound_raw` and verifies its immutable fit-owned construction
+proof (:class:`SelectedProof`, recorded at construction on immutable
+:class:`FloatStorage` bytes): discrete quotient consistency, bit-identical
+identified Gram slice and exact witness maps, certified spectral/gap separation,
+and operational reconstruction/null bounds covering witness conversion, gather
+accumulation, and group centering at ``gram_rtol``.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, NamedTuple, cast
+from typing import TYPE_CHECKING, Literal, NamedTuple, cast
 
 import numpy as np
 from numpy.typing import ArrayLike
 
 from powermean.data.collinearity_numeric import norm
-from powermean.fe._cancel_storage import BuilderRecord
+from powermean.data.sample_fe_source import same_bits
+from powermean.fe._cancel_storage import BuilderRecord, IndexArray
+from powermean.fe.admission_incidence import QuotientRank
 from powermean.fe.cancel import center_sorted, to_sorted
-from powermean.fe.geometry_design import NumericalGeometry
+from powermean.fe.geometry import _witness_maps
+from powermean.fe.geometry_design import NumericalGeometry, SelectedProof
 from powermean.fe.geometry_errors import GeometryAdmissionError
 from powermean.fe.geometry_gram import reserve_geometry
-from powermean.fe.geometry_rank import _spectral_rank
+from powermean.fe.geometry_rank import CLEAR_MARGIN, _original_constants, _spectral_rank
 from powermean.fe.geometry_storage import BoolArray, BoolStorage, _build_record
 from powermean.fe.groups import _positions
 from powermean.model.variance import FloatArray, _finite_array
+
+if TYPE_CHECKING:
+    from powermean.data.collinearity_records import CollinearityAnalysis
 
 
 class GeometryInputs(NamedTuple):
@@ -33,12 +47,25 @@ class GeometryInputs(NamedTuple):
 
     Raw slopes and positions must be ndarrays of the declared shapes.
     Constructing this request validates nothing. Every check/evaluation reads its
-    current values afresh; no caller-supplied success flag exists.
+    current values afresh; no caller-supplied success flag exists. ``analysis`` is
+    the fit's one collinearity analysis of these columns in their original unit, which
+    decided the kept slopes (the fixed-effect dispatch); the admission of the slopes
+    checks the geometry against it instead of running it again, or runs it when none
+    is given.
     """
 
     raw_slopes: ArrayLike
     positions: ArrayLike
     source_columns: tuple[str, ...]
+    analysis: CollinearityAnalysis | None = None
+
+    @property
+    def original_slopes(self) -> FloatArray | None:
+        """Raw columns before policy-driven replacements, if available."""
+        if self.analysis is None:
+            return np.asarray(self.raw_slopes)
+        problem = self.analysis.problem
+        return None if problem is None else problem.design
 
 
 @dataclass(frozen=True, eq=False, init=False)
@@ -106,16 +133,24 @@ def _bound_raw(geometry: NumericalGeometry, inputs: GeometryInputs) -> BoolArray
         raise GeometryAdmissionError(
             "raw_binding", "M_C raw slopes differ from the design"
         )
-    constants = np.ones(design.n_slopes, dtype=np.bool_)
-    for start, stop in zip(
-        structure.segments[:-1], structure.segments[1:], strict=True
-    ):
-        constants &= np.all(sorted_raw[start:stop] == sorted_raw[start], axis=0)
+    # Every row equals the first row of its group, for all groups at once: the
+    # conjunction over groups of each group's own comparison.
+    heads = sorted_raw[structure.starts][structure.sorted_codes]
+    constants = np.all(sorted_raw == heads, axis=0)
     for index, reason in geometry.omitted_slopes:
         if reason == "centered_constant" and not constants[index]:
             raise GeometryAdmissionError(
                 "raw_constancy", f"slope {index} is not exactly constant within groups"
             )
+    omitted = geometry.omitted_slope_indices
+    if (
+        geometry.selected_columns is not None
+        and omitted.size
+        and not _original_constants(design, inputs.original_slopes, omitted)
+    ):
+        raise GeometryAdmissionError(
+            "raw_constancy", "original omitted slopes vary within groups"
+        )
     return constants
 
 
@@ -161,6 +196,107 @@ def _original_checks(geometry: NumericalGeometry) -> tuple[float, float]:
     return max_null, max_reconstruction
 
 
+def _quotient_consistent(
+    geometry: NumericalGeometry, quotient: QuotientRank, columns: IndexArray
+) -> bool:
+    """Whether ``geometry``'s discrete metadata agrees with ``quotient``."""
+    k = geometry.n_slopes_full
+    zero = (
+        ~np.any(geometry.design.centered_slopes, axis=0)
+        if geometry.omitted_slope_indices.size
+        else np.zeros(k, dtype=bool)
+    )
+    kept, omitted = np.flatnonzero(~zero), np.flatnonzero(zero)
+    expected = np.concatenate([kept, k + np.asarray(quotient.kept, dtype=np.intp)])
+    annihilated = tuple(
+        tuple(bool(x) for x in levels) for levels in geometry.annihilated_levels
+    )
+    return (
+        np.array_equal(columns, expected)
+        and geometry.n_identified == int(expected.size)
+        and np.array_equal(geometry.kept_slope_indices, kept)
+        and np.array_equal(geometry.omitted_slope_indices, omitted)
+        and geometry.slope_omission_reasons
+        == tuple("centered_constant" if v else None for v in zero)
+        and geometry.block_ranks == quotient.block_ranks
+        and annihilated == quotient.annihilated_levels
+        and geometry.cross_block_redundancy == sum(quotient.block_ranks) - quotient.rank
+    )
+
+
+def _proof_valid(geometry: NumericalGeometry, proof: SelectedProof) -> bool:
+    """Whether fit-owned :class:`SelectedProof` satisfies separation invariants."""
+    scalars = (
+        proof.top_high,
+        proof.delta_full,
+        proof.delta_ret,
+        proof.full_min_low,
+        proof.ret_min_low,
+        proof.selected_min_low,
+        proof.max_null_defect,
+        proof.max_reconstruction_defect,
+    )
+    if not all(np.isfinite(val) and val >= 0.0 for val in scalars):
+        return False
+    req_gap = max(geometry.gap_min, CLEAR_MARGIN)
+    return bool(
+        proof.top_high > 0.0
+        and proof.full_min_low > 0.0
+        and proof.selected_min_low >= CLEAR_MARGIN * geometry.gram_rtol * proof.top_high
+        and proof.delta_ret <= proof.delta_full
+        and geometry.spectrum_provenance == "certified_bounds"
+        and geometry.gap_ratio >= req_gap
+        and geometry.retained_gap_ratio >= req_gap
+    )
+
+
+def _maps_consistent(
+    geometry: NumericalGeometry, quotient: QuotientRank, columns: IndexArray
+) -> bool:
+    """Whether ``geometry``'s stored maps equal those of ``quotient``'s witnesses."""
+    try:
+        maps = _witness_maps(
+            geometry.n_slopes_full, quotient, columns, geometry.n_columns_full
+        )
+    except OverflowError:
+        return False
+    stored = (geometry.basis_matrix, geometry.reduction_matrix, geometry.null_basis)
+    return all(same_bits(a, b) for a, b in zip(maps, stored, strict=True))
+
+
+def _selected_checks(geometry: NumericalGeometry) -> tuple[float, float]:
+    """Verify immutable fit-owned selection proof and operator bounds at ``rtol``."""
+    held = geometry.exact_quotient
+    columns = geometry.selected_columns
+    proof = geometry.selected_proof
+    if (
+        held is None
+        or columns is None
+        or type(proof) is not SelectedProof
+        or not _quotient_consistent(geometry, held[0], columns)
+        or not _proof_valid(geometry, proof)
+    ):
+        raise GeometryAdmissionError("fresh_rank", "Gram candidate rank disagrees")
+    fresh = geometry.gram[np.ix_(columns, columns)]
+    if not same_bits(fresh, geometry.identified_gram):
+        raise GeometryAdmissionError("fresh_rank", "Gram candidate rank disagrees")
+    if not _maps_consistent(geometry, held[0], columns):
+        raise GeometryAdmissionError(
+            "original_reconstruction",
+            "maps differ from the exact quotient's witnesses",
+        )
+    rtol = geometry.gram_rtol
+    for value, cause in (
+        (proof.max_reconstruction_defect, "original_reconstruction"),
+        (proof.max_null_defect, "original_null"),
+    ):
+        if not value <= rtol:
+            raise GeometryAdmissionError(
+                cause, f"certified operator bound {value} exceeds {rtol}"
+            )
+    return proof.max_null_defect, proof.max_reconstruction_defect
+
+
 def check_geometry(
     geometry: NumericalGeometry, inputs: GeometryInputs, *, max_bytes: int
 ) -> GeometryCheck:
@@ -185,14 +321,21 @@ def check_geometry(
     reserve_geometry(geometry.design, max_bytes)
     if type(inputs) is not GeometryInputs:
         raise TypeError("inputs must be a GeometryInputs request")
+    selected = geometry.selected_columns is not None
     with np.errstate(over="raise", invalid="raise"):
         constants = _bound_raw(geometry, inputs)
-        _, _, zero, _, _ = _spectral_rank(
-            geometry.gram, geometry.gram_rtol, geometry.gap_min, "fresh_full_gram"
-        )
-        if int(np.sum(~zero)) != geometry.n_identified:
-            raise GeometryAdmissionError("fresh_rank", "Gram candidate rank disagrees")
-        max_null, max_reconstruction = _original_checks(geometry)
+        if selected:
+            max_null, max_reconstruction = _selected_checks(geometry)
+        else:
+            _, _, zero, _, _ = _spectral_rank(
+                geometry.gram, geometry.gram_rtol, geometry.gap_min, "fresh_full_gram"
+            )
+            if int(np.sum(~zero)) != geometry.n_identified:
+                raise GeometryAdmissionError(
+                    "fresh_rank", "Gram candidate rank disagrees"
+                )
+            max_null, max_reconstruction = _original_checks(geometry)
+    products = 0 if selected else 2 * geometry.n_columns_full + geometry.nullity
     return cast(
         GeometryCheck,
         _build_record(
@@ -201,14 +344,10 @@ def check_geometry(
             source_columns=tuple(inputs.source_columns),
             max_null_defect=max_null,
             max_reconstruction_defect=max_reconstruction,
-            n_matvec_sorted_calls=2 * geometry.n_columns_full + geometry.nullity,
-            n_eigh_calls=1,
+            n_matvec_sorted_calls=products,
+            n_eigh_calls=0 if selected else 1,
             n_center_sorted_calls=1
-            + (
-                2 * geometry.n_columns_full + geometry.nullity
-                if geometry.structure.block_sizes
-                else 0
-            ),
+            + (products if geometry.structure.block_sizes else 0),
             n_raw_group_segments=geometry.structure.n_groups,
         ),
     )

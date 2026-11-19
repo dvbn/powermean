@@ -31,8 +31,11 @@ def _integer_key_codes(
     """
     found = tuple(keys)
     if len(found) not in (1, 2) or any(
-        type(key) is not np.ndarray or key.ndim != 1 or not key.size
-        or key.dtype.kind not in "iu" for key in found
+        type(key) is not np.ndarray
+        or key.ndim != 1
+        or not key.size
+        or key.dtype.kind not in "iu"
+        for key in found
     ):
         return key_codes(found)
     if len(found) == 1:
@@ -46,11 +49,15 @@ def _integer_key_codes(
         span_b = int(b.max()) - int(low_b) + 1
         if span_a * span_b > np.iinfo(np.int64).max:
             return key_codes(found)
-        key = (np.subtract(
-            a, low_a, dtype=np.int64 if a.dtype.kind == "i" else np.uint64,
+        key = np.subtract(
+            a,
+            low_a,
+            dtype=np.int64 if a.dtype.kind == "i" else np.uint64,
         ).astype(np.int64) * span_b + np.subtract(
-            b, low_b, dtype=np.int64 if b.dtype.kind == "i" else np.uint64,
-        ).astype(np.int64))
+            b,
+            low_b,
+            dtype=np.int64 if b.dtype.kind == "i" else np.uint64,
+        ).astype(np.int64)
     codes = pd.factorize(key, sort=False, use_na_sentinel=False)[0]
     codes = codes.astype(np.intp, copy=False)
     first = first_rows(codes)

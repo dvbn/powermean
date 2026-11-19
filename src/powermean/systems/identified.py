@@ -1,4 +1,4 @@
-"""Internal coordinate actions for the actual cancelled equations.
+"""Internal coordinate actions for the actual cancelled equations (03 Section 3.4).
 
 S_id=T'S, H_id v=T'H(Tv), H_id'v=T'H'(Tv). The full CancelledState remains
 available for original-coordinate inference contributions. This is numerical
@@ -13,15 +13,19 @@ from typing import cast
 import numpy as np
 from numpy.typing import ArrayLike
 
+from powermean.data.sample_fe_source import same_bits
 from powermean.fe._cancel_storage import BuilderRecord, FloatStorage, finite_product
+from powermean.fe.admission import AdmittedGeometry
 from powermean.fe.geometry_checks import GeometryCheck, GeometryInputs, check_geometry
 from powermean.fe.geometry_design import NumericalGeometry
+from powermean.fe.geometry_gram import reserve_geometry
 from powermean.fe.geometry_storage import _build_record
 from powermean.model.variance import FloatArray, Variance
 from powermean.systems.cancelled import (
     CancelledAccounting,
     CancelledRows,
     CancelledState,
+    assembled_jacobian,
     cancelled_equations,
 )
 
@@ -57,6 +61,23 @@ class IdentifiedState(BuilderRecord):
         """T'H(Tv), validating the new coordinate vector."""
         return self.design.expand_transpose(
             self.full_state.jac_vec(self.design.expand(values))
+        )
+
+    def jacobian(self) -> FloatArray | None:
+        """``T'HT`` at this point, assembled from its rows, or None.
+
+        The actual nonsymmetric negative Jacobian whose columns are ``jac_vec`` of
+        the unit vectors, from the same current ``k`` and ``pi``, with the sums in
+        another order (:func:`powermean.systems.cancelled.assembled_jacobian`).
+        None where that assembly does not apply; the caller then forms the columns.
+        """
+        full = self.full_state
+        return assembled_jacobian(
+            full.design,
+            full.k,
+            full.pi,
+            self.design.basis_matrix,
+            self.design.selected_columns,
         )
 
     def jac_t_vec(self, values: ArrayLike) -> FloatArray:
@@ -98,6 +119,45 @@ class IdentifiedState(BuilderRecord):
         return self.full_state.accounting()
 
 
+def _admitted_check(
+    geometry: NumericalGeometry,
+    inputs: GeometryInputs,
+    admitted: AdmittedGeometry | None,
+) -> GeometryCheck | None:
+    """The fit's own check, only for its geometry and the very inputs it bound.
+
+    An admission owns the geometry it checked and the bytes of the raw slopes it
+    bound. Its check stands for a later call on that same geometry object whose
+    raw slopes and positions have the same dtype and bytes and whose names are
+    the same strings: a fresh check of those inputs would bind, decide and
+    report identically, since every other quantity it reads belongs to the
+    immutable geometry. Anything else returns ``None``, and the caller runs the
+    fresh check, which decides, raises and reports as before.
+    """
+    if type(admitted) is not AdmittedGeometry or admitted.geometry is not geometry:
+        return None
+    if type(inputs) is not GeometryInputs:
+        return None
+    raw, positions, names = inputs.raw_slopes, inputs.positions, inputs.source_columns
+    if not (
+        isinstance(raw, np.ndarray)
+        and raw.dtype == np.float64
+        and isinstance(positions, np.ndarray)
+        and positions.dtype == np.intp
+        and type(names) is tuple
+        and all(type(name) is str for name in names)
+    ):
+        return None
+    if (
+        names != admitted.check.source_columns
+        or not same_bits(raw, admitted.raw_slopes)
+        or not same_bits(positions, geometry.structure.positions)
+    ):
+        return None
+    reserve_geometry(geometry.design, geometry.max_bytes)
+    return admitted.check
+
+
 def identified_equations(
     geometry: NumericalGeometry,
     z: ArrayLike,
@@ -107,6 +167,7 @@ def identified_equations(
     variance: Variance,
     centered_offset: ArrayLike | None = None,
     obs_weights: ArrayLike | None = None,
+    admitted: AdmittedGeometry | None = None,
 ) -> IdentifiedState:
     """Evaluate actual cancelled equations after fresh geometry veto checks.
 
@@ -125,7 +186,11 @@ def identified_equations(
     centered_offset : array_like, optional
         Already centered transformed offset, added exactly once by the core.
     obs_weights : array_like, optional
-        Existing positive multipliers, with no new weight policy.
+        Existing positive D12 multipliers, with no new weight policy.
+    admitted : AdmittedGeometry, optional
+        The admission of the fit that owns ``geometry``. Its check is reused,
+        not repeated, for the same geometry object and bit-identical raw
+        inputs; every other case is checked afresh.
 
     Returns
     -------
@@ -134,7 +199,9 @@ def identified_equations(
     """
     if type(geometry) is not NumericalGeometry:
         raise TypeError("geometry must come from numerical_geometry")
-    evidence = check_geometry(geometry, inputs, max_bytes=geometry.max_bytes)
+    evidence = _admitted_check(geometry, inputs, admitted)
+    if evidence is None:
+        evidence = check_geometry(geometry, inputs, max_bytes=geometry.max_bytes)
     return _identified_equations(
         geometry,
         z,

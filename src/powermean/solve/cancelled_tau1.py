@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, NamedTuple
 
 import numpy as np
 
+from powermean.data.numeric_fit import NumericFit, NumericParts
 from powermean.data.sample_fe_state import FESample
 from powermean.fe.admission_records import WorkLog
+from powermean.fe.cancelled_joint_basis import _basis_from_cancelled_quotient
 from powermean.fe.profile import ProfileState
 from powermean.model.variance import (
     CancelledFamily,
@@ -17,6 +19,7 @@ from powermean.model.variance import (
     NB2Variance,
     PowerVariance,
 )
+from powermean.solve import newton_profiled
 from powermean.solve.absorbed_direction import IndexStart
 from powermean.solve.assessment import (
     Assessment,
@@ -35,13 +38,14 @@ from powermean.solve.cancelled_records import (
     resolve_absorbed_options,
 )
 from powermean.solve.cancelled_tau1_bridge import (
+    _BridgeLayout,
     _build_bridge_layout,
     _effects_to_identified,
     _index_point_to_identified,
     _Tau1Context,
     _warm_effects_from_start,
 )
-from powermean.solve.absorbed import AbsorbedOptions
+from powermean.solve.m1_options import AbsorbedOptions
 from powermean.solve.newton_absorbed import (
     IndexCandidate,
     IndexWholePoint,
@@ -59,11 +63,20 @@ from powermean.solve.newton_profiled import (
 from powermean.solve.newton_trace import NativeReason
 from powermean.solve.options import SolverOptions
 from powermean.solve.profiled_trigger import Admission, Trigger
+from powermean.solve.reduced_execution import ReducedExecution
+from powermean.solve.reduced_nonlinear import ConditionalSpace
 from powermean.solve.starts import Start
 from powermean.solve.status import NATIVE_STATUS
 from powermean.systems.admitted import CapturedFit
+from powermean.systems.profiled import ProfiledProblem
 
 __all__ = ["Tau1SolveResult", "resolve_absorbed_options", "solve_cancelled_tau1"]
+
+_BRIDGE_LAYOUT = _build_bridge_layout
+_PROFILED_SOLVE = solve_profiled
+_PROFILED_PROBLEM = newton_profiled._problem
+_DEFAULT_SOLVER = SolverOptions()
+_DEFAULT_PROFILED = AbsorbedOptions(absorbed="profiled")
 
 
 @dataclass(frozen=True)
@@ -72,6 +85,23 @@ class Tau1ExecutionBounds:
 
     certificate: AttemptBounds
     coordinator: Callable[[FESample, CancelledFamily], tuple[Trigger, Admission]] | None
+    reduced_origin: (
+        Callable[[], tuple[_BridgeLayout, Trigger, Admission] | None] | None
+    ) = None
+
+
+class _ReducedProgram(NamedTuple):
+    """The prepared numerical engine for one accepted full-row origin."""
+
+    problem: ProfiledProblem
+    space: ConditionalSpace
+    execution: ReducedExecution
+
+    def release_projections(self) -> None:
+        """Drop joint factors and current projection scratch before outer use."""
+        self.execution.current = None
+        self.execution.final = None
+        self.execution.layout._structure = None
 
 
 def _validate_tau1_family(variance: CancelledFamily) -> PowerVariance | NB2Variance:
@@ -170,12 +200,16 @@ def _run_index_organization(
 
 
 def _run_profiled_organization(
-    ctx: _Tau1Context,
+    ctx: _Tau1Context, *, reduced: _ReducedProgram | None = None
 ) -> tuple[ProfiledCandidate, FloatArray | None]:
     """Return the evaluated canonical point, or None without substituting a start."""
     geometry = ctx.capture.admission.geometry
 
     def assess_prof(pt: FullPoint, ctrl: CertificateControls, /) -> Assessment:
+        if reduced is not None:
+            # The independent cancelled certificate uses its own operator. A retry
+            # rebuilds the joint projections and factors from its new curvature.
+            reduced.release_projections()
         p = pt.point
         theta = _effects_to_identified(
             geometry, ctx.layout, p.theta, p.state.coefficients
@@ -189,19 +223,25 @@ def _run_profiled_organization(
 
     assess_fn = assess_prof if ctx.options.retry == 1 else None
     s_in, fam, opts, ab = ctx.layout.sample, ctx.family, ctx.options, ctx.absorbed
-    candidate = ctx.work.run(
-        "tau1_absorbed_profiled_solve",
-        lambda: solve_profiled(
-            s_in,
-            fam,
-            opts,
-            ab,
-            trigger=ctx.trigger,
-            admit=ctx.admit,
-            assess=assess_fn,
-            start=p_start,
-        ),
-    )
+    if reduced is not None:
+        call = newton_profiled._ProfiledCall(
+            s_in, fam, opts, ab, ctx.trigger, ctx.admit, assess_fn, p_start
+        )
+        candidate = _solve_with_quotient(reduced, call, ctx.work)
+    else:
+        candidate = ctx.work.run(
+            "tau1_absorbed_profiled_solve",
+            lambda: solve_profiled(
+                s_in,
+                fam,
+                opts,
+                ab,
+                trigger=ctx.trigger,
+                admit=ctx.admit,
+                assess=assess_fn,
+                start=p_start,
+            ),
+        )
     ctx.candidate = candidate
     # Its documented ValueError means that no retained evaluated point is available.
     try:
@@ -211,6 +251,101 @@ def _run_profiled_organization(
     return candidate, _effects_to_identified(
         geometry, ctx.layout, sp.theta, sp.state.coefficients
     )
+
+
+def _quotient_program(
+    capture: CapturedFit, sample: FESample, variance: PowerVariance, work: WorkLog
+) -> _ReducedProgram | None:
+    """Bind the original coordinator's numeric rows and exact joint FE span."""
+    admission = capture.admission
+    geometry = admission.geometry
+    quotient = geometry.exact_quotient
+    if quotient is None or quotient[0] is not admission.quotient:
+        return None
+    design, grouping = sample.design, sample.grouping
+    assert design is not None
+    assert grouping is not None
+    numeric = NumericFit.from_owned_parts(
+        NumericParts(
+            sample.problem.response,
+            design.matrix,
+            sample.problem.offset,
+            sample.data.weight_values,
+            sample.positions,
+            sample.active,
+            design.scale,
+            grouping,
+            sample.active_names,
+            sample.omega,
+            False,
+        )
+    )
+    problem = ProfiledProblem._from_numeric(numeric, variance)
+    basis = work.run(
+        "tau1_quotient_binding",
+        lambda: _basis_from_cancelled_quotient(
+            problem.grouping, geometry.structure, quotient[0]
+        ),
+    )
+    if basis is None:
+        return None
+    space = ConditionalSpace.for_problem(problem, basis)
+    if space is None or space.block != 0:
+        return None
+    return _ReducedProgram(problem, space, ReducedExecution._from_owned(problem, basis))
+
+
+def _solve_with_quotient(
+    program: _ReducedProgram, call: newton_profiled._ProfiledCall, work: WorkLog
+) -> ProfiledCandidate:
+    """Run the chosen solver once and release its fit-scoped workspace."""
+    problem, space, execution = program
+    object.__setattr__(problem, "_reduced_nonlinear", space)
+    object.__setattr__(problem, "_reduced_execution", execution)
+    try:
+        return work.run(
+            "tau1_absorbed_profiled_solve",
+            lambda: newton_profiled._solve_numeric(call, problem),
+        )
+    finally:
+        program.release_projections()
+        vars(problem).pop("_reduced_nonlinear", None)
+        vars(problem).pop("_reduced_execution", None)
+
+
+def _reduced_setup(
+    capture: CapturedFit,
+    family: PowerVariance | NB2Variance,
+    options: SolverOptions,
+    absorbed: AbsorbedOptions,
+    *,
+    execution: Tau1ExecutionBounds,
+    work: WorkLog,
+    start: FloatArray | None,
+) -> tuple[_BridgeLayout, Trigger, Admission, _ReducedProgram] | None:
+    """Choose the shared numeric engine only before any Newton evaluation."""
+    origin = execution.reduced_origin
+    if not (
+        origin is not None
+        and start is None
+        and type(family) is PowerVariance
+        and options == _DEFAULT_SOLVER
+        and absorbed == _DEFAULT_PROFILED
+        and solve_profiled is _PROFILED_SOLVE
+        and newton_profiled._problem is _PROFILED_PROBLEM
+        and _build_bridge_layout is _BRIDGE_LAYOUT
+    ):
+        return None
+    try:
+        found = origin()
+        if found is None:
+            return None
+        layout, trigger, admit = found
+        program = _quotient_program(capture, layout.sample, family, work)
+        return None if program is None else (layout, trigger, admit, program)
+    except (ValueError, FloatingPointError, MemoryError, np.linalg.LinAlgError):
+        # Only preparation failed. The ordinary preparation owns the refusal.
+        return None
 
 
 def solve_cancelled_tau1(
@@ -248,11 +383,21 @@ def solve_cancelled_tau1(
     no_evaluated_point = False
     origin_failure: object | None = None
     try:
-        layout = work.run("tau1_bridge_sample", lambda: _build_bridge_layout(capture))
-        rows = int(layout.active_rows.size)
-        if coordinator is None:
-            raise ValueError("tau=1 requires a genuine inner coordinator origin")
-        trigger, admit = coordinator(layout.sample, family)
+        reduced = _reduced_setup(
+            capture, family, options, ab, execution=execution, work=work, start=start
+        )
+        if reduced is None:
+            layout = work.run(
+                "tau1_bridge_sample", lambda: _build_bridge_layout(capture)
+            )
+            rows = int(layout.active_rows.size)
+            if coordinator is None:
+                raise ValueError("tau=1 requires a genuine inner coordinator origin")
+            trigger, admit = coordinator(layout.sample, family)
+            program = None
+        else:
+            layout, trigger, admit, program = reduced
+            rows = int(layout.active_rows.size)
         ctx = _Tau1Context(
             capture,
             layout,
@@ -268,15 +413,17 @@ def solve_cancelled_tau1(
             start,
             history,
         )
-        runner = (
-            _run_index_organization if org == "index" else _run_profiled_organization
+        candidate, evaluated = (
+            _run_index_organization(ctx)
+            if org == "index"
+            else _run_profiled_organization(ctx, reduced=program)
         )
-        candidate, evaluated = runner(ctx)
         iters = candidate.iterations
         native_reason = _map_native_reason(candidate.reason)
         no_evaluated_point = evaluated is None
-        if no_evaluated_point:
-            message = candidate.attempts[candidate.retained].message
+        message = (
+            candidate.attempts[candidate.retained].message if no_evaluated_point else ""
+        )
         theta = fb if evaluated is None else evaluated
     except (ValueError, FloatingPointError) as error:
         message = f"{type(error).__name__}: {error}"

@@ -1,6 +1,8 @@
 """Detached snapshots of linear WLS decompositions and candidate states.
 
-This module defines :class:`RetainedDecomposition`, :class:`RetainedLinearState`, and
+``design/02_computation.md``, Sections 5.2 and 7; ``plan/evidence/M1.15_contract.txt``,
+items 2, 3 and 7; ``brief/layout_C_ownership.txt`` (P06).  This module defines
+:class:`RetainedDecomposition`, :class:`RetainedLinearState`, and
 :func:`_snapshot_linear_state`.
 """
 
@@ -29,7 +31,7 @@ from powermean.results.absorbed_sample import SampleIdentityMap
 from powermean.results.absorbed_state_records import (
     RetainedAbsorptionResult,
     RetainedAbsorptionState,
-    _owned_absorption_result,
+    _resolve_state_grouping,
 )
 from powermean.results.absorbed_states import RetainedPreparedWeights
 from powermean.results.owned import _optional, owned_array
@@ -148,6 +150,30 @@ class RetainedLinearState:
         return self.normalized
 
 
+def _stage_view(
+    cand: AbsorbedLinearCandidate,
+    grouping_snapshot: RetainedGroupingSnapshot | None,
+    grouping_map: GroupingIdentityMap | None,
+) -> RetainedGroupingSnapshot | None:
+    """The one internally owned grouping snapshot the stage records share, or ``None``.
+
+    Every stage of the solve is bound to the sample's final grouping, that of its
+    weight preparation.  Its snapshot is resolved once, as each stage resolved it,
+    and each stage record stores it without a copy of its own; each still
+    rematerializes it on every outward exposure.  A fit has no certificate on this
+    route, so nothing else reads these records' grouping.  Labels that are not
+    immutable built-ins (``_copy_free`` false) keep a copy per stage, as before.
+    """
+    if cand.prepared is None:
+        return None
+    found = _resolve_state_grouping(
+        cand.prepared.grouping,
+        grouping_snapshot=grouping_snapshot,
+        grouping_map=grouping_map,
+    )
+    return found if found._copy_free else None
+
+
 def _snapshot_linear_state(
     cand: AbsorbedLinearCandidate,
     pt: RetainedPointSnapshot | None,
@@ -158,13 +184,25 @@ def _snapshot_linear_state(
     sample_map: SampleIdentityMap | None = None,
     grouping_map: GroupingIdentityMap | None = None,
 ) -> RetainedLinearState:
-    """Detach all stages of an admitted ``AbsorbedLinearCandidate``."""
+    """Detach all stages of an admitted ``AbsorbedLinearCandidate``.
+
+    The stage records share one grouping snapshot (:func:`_stage_view`).
+    """
     p, s = cand.prepared, cand.seed
+    view = _stage_view(cand, grouping_snapshot, grouping_map)
+    held = None if p is None else p.grouping
+
+    def shared(grouping: object) -> RetainedGroupingSnapshot | None:
+        return view if grouping is held else None
+
     pw = (
         None
         if p is None
         else RetainedPreparedWeights.from_prepared(
-            p, grouping_snapshot=grouping_snapshot, grouping_map=grouping_map
+            p,
+            grouping_snapshot=grouping_snapshot,
+            grouping_map=grouping_map,
+            view=view,
         )
     )
     dc = tuple(RetainedDecomposition.from_decomposition(d) for d in cand.decompositions)
@@ -172,14 +210,31 @@ def _snapshot_linear_state(
         None
         if s is None
         else RetainedAbsorptionState.from_state(
-            s, grouping_snapshot=grouping_snapshot, grouping_map=grouping_map
+            s,
+            grouping_snapshot=grouping_snapshot,
+            grouping_map=grouping_map,
+            view=shared(s.grouping),
         )
     )
-    jnt = _owned_absorption_result(
-        cand.joint, grouping_snapshot=grouping_snapshot, grouping_map=grouping_map
+    jnt = (
+        None
+        if cand.joint is None
+        else RetainedAbsorptionResult.from_result(
+            cand.joint,
+            grouping_snapshot=grouping_snapshot,
+            grouping_map=grouping_map,
+            view=shared(cand.joint.state.grouping),
+        )
     )
-    fin = _owned_absorption_result(
-        cand.final, grouping_snapshot=grouping_snapshot, grouping_map=grouping_map
+    fin = (
+        None
+        if cand.final is None
+        else RetainedAbsorptionResult.from_result(
+            cand.final,
+            grouping_snapshot=grouping_snapshot,
+            grouping_map=grouping_map,
+            view=shared(cand.final.state.grouping),
+        )
     )
     skey = sample_key if pt is None else pt.sample_key
     pkey = PointKey(0) if pt is None else pt.key

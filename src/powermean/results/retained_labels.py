@@ -1,10 +1,13 @@
 """Narrow label batch storage and per-view memo materialization for FE partitions.
 
-This module owns :class:`RetainedLabelBatch` and :func:`build_label_batch`, copying
-source-block level representatives, final-block level representatives, and derived
-component-column representatives with one memo on ingress and materializing each
-complete outward compound view in a single pass with one fresh local memo, without
-storing consumable memos or exposing raw mutable items.
+``design/02_computation.md``, Sections 2 and 7; ``design/03_fixed_effects.md``,
+Section 2; ``plan/evidence/M1.15_contract.txt``, items 1, 3 and 4;
+``plan/evidence/M1.15_detachment_scope.txt`` and ``M1.15_detachment_scope_A.txt``;
+decisions D51, D55 and D66.  This module owns :class:`RetainedLabelBatch` and
+:func:`build_label_batch`, copying source-block level representatives, final-block
+level representatives, and derived component-column representatives with one memo on
+ingress and materializing each complete outward compound view in a single pass with one
+fresh local memo, without storing consumable memos or exposing raw mutable items.
 """
 
 from __future__ import annotations
@@ -27,7 +30,10 @@ from powermean.data.fe_component_storage import (
 )
 from powermean.data.raw import _IMMUTABLE_TYPES, Column
 from powermean.data.sample_fe_source import (
-    Derived, Source, _native_source_parts, same_bits,
+    Derived,
+    Source,
+    _native_source_parts,
+    same_bits,
 )
 from powermean.fe.groups import Grouping
 from powermean.formula.formulaic_api import formulaic
@@ -289,7 +295,9 @@ class RetainedLabelBatch:
 
     @classmethod
     def _from_runs(
-        cls, source: Grouping, grouping: Grouping,
+        cls,
+        source: Grouping,
+        grouping: Grouping,
     ) -> RetainedLabelBatch | None:
         """Compose full immutable runs only for actual owned-order capture.
 
@@ -298,12 +306,16 @@ class RetainedLabelBatch:
         blocks; the complete original component columns are never compressed by
         numeric equality, source level codes or final/source ordinals.
         """
-        if (cls is not RetainedLabelBatch or type(source) is not Derived
-                or type(grouping) not in (Grouping, Derived)
-                or not original_producers() or _copy_with_memo is not _RUN_COPY
-                or _copy_free_labels is not _RUN_COPY_FREE
-                or _stored_raw_elements is not _RUN_ELEMENTS
-                or _native_source_parts is not _RUN_NATIVE_PARTS):
+        if (
+            cls is not RetainedLabelBatch
+            or type(source) is not Derived
+            or type(grouping) not in (Grouping, Derived)
+            or not original_producers()
+            or _copy_with_memo is not _RUN_COPY
+            or _copy_free_labels is not _RUN_COPY_FREE
+            or _stored_raw_elements is not _RUN_ELEMENTS
+            or _native_source_parts is not _RUN_NATIVE_PARTS
+        ):
             return None
         origin = source.source
         if type(origin) is not Source:
@@ -324,11 +336,14 @@ class RetainedLabelBatch:
         final_runs = cast("tuple[ComponentRun, ...]", final_runs)
         result = object.__new__(cls)
         for name, value in (
-            ("component_names", tuple(runs)), ("_items", ()),
-            ("_source_indices", ()), ("_final_indices", ()),
+            ("component_names", tuple(runs)),
+            ("_items", ()),
+            ("_source_indices", ()),
+            ("_final_indices", ()),
             ("_component_indices", ()),
             ("_component_dtypes", tuple(run.dtype for run in runs.values())),
-            ("_source_runs", source_runs), ("_final_runs", final_runs),
+            ("_source_runs", source_runs),
+            ("_final_runs", final_runs),
             ("_component_runs", tuple(runs.values())),
         ):
             object.__setattr__(result, name, value)
@@ -341,19 +356,22 @@ class RetainedLabelBatch:
         offset = sum(run.size for group in groups[:part] for run in group)
         result: list[IndexArray] = []
         for run in groups[part]:
-            result.append(owned_array(np.arange(offset, offset + run.size,
-                                                dtype=np.intp)))
+            result.append(
+                owned_array(np.arange(offset, offset + run.size, dtype=np.intp))
+            )
             offset += run.size
         return tuple(result)
 
     def _run_views(
         self,
     ) -> tuple[
-        tuple[tuple[object, ...], ...], tuple[tuple[object, ...], ...],
+        tuple[tuple[object, ...], ...],
+        tuple[tuple[object, ...], ...],
         dict[str, ComponentRun],
     ]:
         """Only small level tuples plus full-column run handles, never row gathers."""
         assert self._source_runs is not None
+
         def levels(run: ComponentRun) -> tuple[object, ...]:
             return run.objects()
 
@@ -434,13 +452,21 @@ class RetainedLabelBatch:
     def _copy_free(self) -> bool:
         """Check the actual owned labels, not a cached eligibility assertion."""
         if self._source_runs is not None:
-            return (original_producers()
-                    and _copy_with_memo is _RUN_COPY
-                    and _copy_free_labels is _RUN_COPY_FREE
-                    and _stored_raw_elements is _RUN_ELEMENTS
-                    and all(type(run) is ComponentRun and run.bound()
-                            for group in (self._source_runs, self._final_runs,
-                                          self._component_runs) for run in group))
+            return (
+                original_producers()
+                and _copy_with_memo is _RUN_COPY
+                and _copy_free_labels is _RUN_COPY_FREE
+                and _stored_raw_elements is _RUN_ELEMENTS
+                and all(
+                    type(run) is ComponentRun and run.bound()
+                    for group in (
+                        self._source_runs,
+                        self._final_runs,
+                        self._component_runs,
+                    )
+                    for run in group
+                )
+            )
         return _copy_free_labels(self._items)
 
     def materialize(
@@ -458,8 +484,10 @@ class RetainedLabelBatch:
             return (
                 tuple(_copy_with_memo(items, active_memo) for items in src),
                 tuple(_copy_with_memo(items, active_memo) for items in fin),
-                {name: _copy_with_memo(items, active_memo)
-                 for name, items in components.items()},
+                {
+                    name: _copy_with_memo(items, active_memo)
+                    for name, items in components.items()
+                },
                 self._dtypes,
             )
         src, fin, comp = self._slices(_copy_with_memo(self._items, active_memo))

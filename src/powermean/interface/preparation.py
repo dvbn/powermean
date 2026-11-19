@@ -1,27 +1,28 @@
 """The preparation of a public fit: the frame, the sample base and the domain, once.
 
-``pm.prepare`` builds the sample and design once and returns an object whose
-``.fit(omega=, tau=)`` reuses them: it caches everything that does not depend on
-``(omega, tau)``, the sample included (for a common outcome domain).
-:func:`prepare_problem` runs the preparation boundary exactly once for a formula and
-its data:
+``DESIGN.md``, Sections 4.1 (``pm.prepare`` "builds the sample and design once and
+returns an object whose ``.fit(omega=, tau=)`` reuses them") and 6.1;
+``design/02_computation.md``, Sections 2 and 8.4 ("``prepare`` caches everything
+that does not depend on ``(omega, tau)``: the sample (for a common outcome domain)");
+decisions D41, D51 and D56; task M0.22.  :func:`prepare_problem` runs the accepted
+preparation boundary exactly once for a formula and its data:
 
-1. the formula is parsed; instruments are not available. Fixed effects are
-   prepared with their order-neutral owned base;
+1. the formula is parsed; instruments remain unavailable. Fixed effects use the
+   explicitly selected private preview, with their order-neutral owned base;
 2. the offset or exposure is a column, or an expression evaluated once on every
    row (:mod:`powermean.interface.expressions`); each requested cluster dimension is
    a column, or the interaction ``a^b`` formed from two; each evaluated column joins
    an owned working copy of the data, which the caller's data frame never sees.  One
-   dimension is the plain cluster column; the dimensions
+   dimension is the cluster column of the first milestone, as before; the dimensions
    of a request of several (``"a + b"``) are fit-used dependence columns of the
-   preparation (:class:`~powermean._prepare.dependence.UsedDependence`),
+   accepted preparation (:class:`~powermean._prepare.dependence.UsedDependence`),
    whose missing values exclude their rows at step 2 as a cluster variable's do and
    whose raw values are retained aligned with the rows, for the fit and for later
-   requests;
+   requests (``plan/evidence/M1_contract.txt``, rule B7 and Section 6(f));
 3. the first part is evaluated by Formulaic on every row of the working copy, with
    its transformations and categories trained on the full input
    (:func:`powermean.formula.frame.model_frame`), before any exclusion;
-4. the sample base of steps 1, 2 and 4 of the sample construction is built once
+4. the sample base of steps 1, 2 and 4 of file 02, Section 2, is built once
    (:func:`powermean._prepare.compose.prepare_frame`): subset, missing values by
    group, weights, with every input row retained or excluded for one reason.
 
@@ -29,17 +30,17 @@ its data:
 the owned prepared frame with its fitted right-hand side, the outcome domain
 (``positive_only``, fixed here so that every mean order of the problem shares one
 domain), the default inference and the design of an offset or exposure expression.
-The sample of a mean order is derived from the base by the order rule
+The sample of a mean order is derived from the base by the accepted order rule
 (:meth:`~powermean._prepare.compose.PreparedFrame.for_order`): with
 ``positive_only`` every order keeps the same rows; without it, an order at or below
-zero on an outcome with zeros is refused by ``SampleError``, and no
+zero on an outcome with zeros is refused by the accepted ``SampleError``, and no
 row is selected anew.  The caller's data, subset and options are read once and
 never retained or modified.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, is_dataclass
 from typing import Any, Literal
 
 import numpy as np
@@ -60,7 +61,7 @@ from powermean.data.retained import OrderSample
 from powermean.data.sample_fe import _fixed_original
 from powermean.data.specs import Inference
 from powermean.errors import SpecificationError
-from powermean.formula.frame import Design, model_frame
+from powermean.formula.frame import Design, model_frame, names_read
 from powermean.formula.grammar import parse_formula
 from powermean.interface.expressions import (
     evaluate_expression,
@@ -115,7 +116,11 @@ class PreparedProblem:
         str | Literal[True] | None,
     ] = ("robust", OMITTED, "observed", False, None)
     bias_correction: BiasRequest = None
-    _numeric_source: RetainedInputSnapshot | None = field(default=None, init=False, repr=False)
+    explicit_cancel: bool = False
+    explicit_bias_correction: bool = False
+    _numeric_source: RetainedInputSnapshot | None = field(
+        default=None, init=False, repr=False
+    )
 
     @property
     def has_fixed_effects(self) -> bool:
@@ -134,6 +139,62 @@ def _check_inputs(formula: object, data: object) -> pd.DataFrame:
     if not isinstance(data, pd.DataFrame):
         raise TypeError("data must be a pandas DataFrame")
     return data
+
+
+def _named(value: object, found: list[str], depth: int = 0) -> None:
+    """Every string held by ``value``: itself, its items or its dataclass fields."""
+    if isinstance(value, str):
+        found.append(value)
+    elif depth > 4:
+        return
+    elif isinstance(value, (tuple, list, frozenset, set)):
+        for item in value:
+            _named(item, found, depth + 1)
+    elif is_dataclass(value) and not isinstance(value, type):
+        for item in fields(value):
+            _named(getattr(value, item.name), found, depth + 1)
+
+
+def _working_copy(
+    data: pd.DataFrame, formula: str, preparation: Preparation
+) -> pd.DataFrame:
+    """The owned deep copy of the columns that the call can read.
+
+    A column is copied when its name occurs, as a substring, in the formula or in a
+    string of the preparation (weights, offset, exposure, subset, cluster and retained
+    names), or when Formulaic's parse of the first part, or of an offset or exposure
+    expression, says that its evaluation reads it (``Q("name")`` with an escape;
+    :func:`~powermean.formula.frame.names_read`).  Every column is copied when a column
+    name is not a string, or when that parse cannot tell the columns read before the
+    evaluation: the operator ``.`` (every column of the frame evaluated that is not on
+    the left-hand side), a column read by a computed string, a text that does not
+    parse.  Every column that preparation, a cluster request or a later request of the
+    fit reads is so copied, and a name that the formula evaluates is never resolved
+    outside the data because its column was left out; the other columns are not read
+    by the fit, and no evaluation enumerates the columns of the copy.
+    """
+    names = data.columns
+    if not all(isinstance(name, str) for name in names):
+        return data.copy(deep=True)
+    texts = [formula]
+    _named(preparation, texts)
+    evaluated = [parse_formula(formula).first_part]
+    for expression in (preparation.offset, preparation.exposure):
+        if expression is not None and expression not in names:
+            evaluated.append(f"0 + {expression}")
+    for text in evaluated:
+        read = names_read(text, names)
+        if read is None:
+            return data.copy(deep=True)
+        texts.extend(read)
+    keep = np.fromiter(
+        (any(name in text for text in texts) for name in names),
+        dtype=bool,
+        count=len(names),
+    )
+    if keep.all():
+        return data.copy(deep=True)
+    return data.loc[:, keep].copy(deep=True)
 
 
 def _check_parts(formula: str, *, solver: Solver = "newton") -> bool:
@@ -189,7 +250,7 @@ def _ordinary_columns(
 
     Every requested cluster dimension, in order and once, formed in the working copy
     where it is an interaction (module docstring, step 2): one dimension is the
-    plain cluster column, several the fit-used dependence columns.
+    cluster column of the first milestone, several the fit-used dependence columns.
     """
     names: dict[str, None] = {}
     for name in preparation.inference.dimensions:
@@ -216,7 +277,9 @@ _RETAIN_NAMES = interaction_names
 
 
 def _numeric_retained(
-    data: pd.DataFrame, used: UsedDependence, regressors: str,
+    data: pd.DataFrame,
+    used: UsedDependence,
+    regressors: str,
 ) -> dict[str, tuple[str, ...]] | None:
     """Original native columns only; unknown hooks keep ordered eager preparation.
 
@@ -224,37 +287,51 @@ def _numeric_retained(
     creation. Literal interaction-named columns always precede derived pairs.
     There is no stored eligibility flag and no final-level reconstruction.
     """
-    if (not _fixed_original() or not _native_retained_original()
-            or not _numeric_ownership_original()
-            or model_frame is not _RETAIN_MODEL
-            or interaction_names is not _RETAIN_NAMES
-            or type(regressors) is not str
-            or type(used.retained) is not tuple or type(used.clusters) is not tuple
-            or not all(type(name) is str for name in (*used.clusters, *used.retained))
-            or prepare_frame is not _RETAIN_FRAME
-            or _prepare_frame is not _RETAIN_NUMERIC_FRAME
-            or type(data) is not pd.DataFrame
-            or interaction_column is not _RETAIN_INTERACTION
-            or _cluster_column is not _RETAIN_CLUSTER):
+    if (
+        not _fixed_original()
+        or not _native_retained_original()
+        or not _numeric_ownership_original()
+        or model_frame is not _RETAIN_MODEL
+        or interaction_names is not _RETAIN_NAMES
+        or type(regressors) is not str
+        or type(used.retained) is not tuple
+        or type(used.clusters) is not tuple
+        or not all(type(name) is str for name in (*used.clusters, *used.retained))
+        or prepare_frame is not _RETAIN_FRAME
+        or _prepare_frame is not _RETAIN_NUMERIC_FRAME
+        or type(data) is not pd.DataFrame
+        or interaction_column is not _RETAIN_INTERACTION
+        or _cluster_column is not _RETAIN_CLUSTER
+    ):
         return None
     # Unknown formula/data callbacks keep the original early interaction order.
     # This admits numeric first parts generally, not one FE topology or family.
     tokens = tuple(part.strip() for part in regressors.replace("-", "+").split("+"))
-    if (data.attrs or type(data.index) is not pd.RangeIndex
-            or (data.index.name is not None and type(data.index.name) is not str)
-            or (data.columns.name is not None and type(data.columns.name) is not str)
-            or not all(type(name) is str for name in data.columns)
-            or not all(isinstance(dtype, np.dtype) and dtype.kind in "biuf"
-                       and dtype.fields is None and dtype.metadata is None
-                       for dtype in data.dtypes)
-            or any(token not in ("", "0", "1") and (
-                not token.isidentifier() or token not in data.columns
-            ) for token in tokens)):
+    if (
+        data.attrs
+        or type(data.index) is not pd.RangeIndex
+        or (data.index.name is not None and type(data.index.name) is not str)
+        or (data.columns.name is not None and type(data.columns.name) is not str)
+        or not all(type(name) is str for name in data.columns)
+        or not all(
+            isinstance(dtype, np.dtype)
+            and dtype.kind in "biuf"
+            and dtype.fields is None
+            and dtype.metadata is None
+            for dtype in data.dtypes
+        )
+        or any(
+            token not in ("", "0", "1")
+            and (not token.isidentifier() or token not in data.columns)
+            for token in tokens
+        )
+    ):
         return None
     result: dict[str, tuple[str, ...]] = {}
     for name in used.retained:
         if name in used.clusters:
             continue
+        terms: tuple[str, ...]
         if name in data.columns:
             terms = (name,)
         else:
@@ -266,10 +343,13 @@ def _numeric_retained(
             if term not in data.columns:
                 return None
             column = data[term]
-            if (type(column) is not pd.Series or not isinstance(column.dtype, np.dtype)
-                    or column.dtype.kind not in "biuf"
-                    or column.dtype.fields is not None
-                    or column.dtype.metadata is not None):
+            if (
+                type(column) is not pd.Series
+                or not isinstance(column.dtype, np.dtype)
+                or column.dtype.kind not in "biuf"
+                or column.dtype.fields is not None
+                or column.dtype.metadata is not None
+            ):
                 return None
         result[name] = tuple(terms)
     return result
@@ -291,8 +371,7 @@ def prepare_problem(
     Parameters
     ----------
     formula : str
-        A formula of the grammar of :mod:`powermean.formula.grammar`, with its first
-        part only.
+        A formula of ``DESIGN.md``, Section 4.2, with its first part only.
     data : pandas.DataFrame
         The data, read by position and never modified.
     preparation : Preparation
@@ -308,10 +387,10 @@ def prepare_problem(
     TypeError
         A formula that is not a string, or data that are not a data frame.
     SpecificationError
-        A malformed formula, fixed effects or instruments, an
+        A malformed formula, fixed effects or instruments (decision D41), an
         expression that is not one numeric column.
     KeyError, ValueError, SampleError
-        The refusals of the preparation: a column that the data do not
+        The refusals of the accepted preparation: a column that the data do not
         have, a subset that is not Boolean or not aligned, both an offset and an
         exposure, a negative outcome, no complete row.
     """
@@ -322,7 +401,7 @@ def prepare_problem(
             refuse_iols("weights")
         if preparation.offset is not None or preparation.exposure is not None:
             refuse_iols("offsets or exposure")
-    working = frame_data.copy(deep=True)
+    working = _working_copy(frame_data, formula, preparation)
     offset = exposure = None
     design: Design | None = None
     if preparation.offset is not None:
@@ -362,8 +441,8 @@ def prepare_problem(
     )
     retained = (
         _numeric_retained(working, used_dep, fe_parts.regressors)
-        if (_single_fit and type(frame_data) is pd.DataFrame
-            and type(formula) is str) else None
+        if (_single_fit and type(frame_data) is pd.DataFrame and type(formula) is str)
+        else None
     )
     for dep_name in (*used_dep.clusters, *used_dep.retained):
         if retained is None or dep_name not in retained:
@@ -382,8 +461,12 @@ def prepare_problem(
         )
     else:
         fe_prepared = _prepare_frame(
-            fe_frame, working, columns=fe_columns, subset=fe_subset,
-            dependence=used_dep, _retained=retained,
+            fe_frame,
+            working,
+            columns=fe_columns,
+            subset=fe_subset,
+            dependence=used_dep,
+            _retained=retained,
         )
     retained_prep = RetainedPreparation._from_normalized(
         fe_prepared,
@@ -392,6 +475,7 @@ def prepare_problem(
         cluster_request=c_req,
         offset_design=design,
         single_fit=_single_fit,
+        deferred_retained=retained is not None,
     )
     result = PreparedProblem(
         frame=fe_prepared,
@@ -407,6 +491,8 @@ def prepare_problem(
             preparation.cancel,
         ),
         bias_correction=preparation.bias_correction,
+        explicit_cancel=preparation.explicit_cancel,
+        explicit_bias_correction=preparation.explicit_bias_correction,
     )
     # This is the actual detached input owner of the normal normalization producer,
     # not a trust boolean on an arbitrary externally supplied preparation graph.

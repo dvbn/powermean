@@ -12,7 +12,6 @@ from typing import Any, Final, Literal
 import numpy as np
 import numpy.typing as npt
 
-from powermean.errors import SolverCapabilityError
 from powermean.solve.iols._numeric import FloatArray
 from powermean.solve.iols.kernel import (
     DIRECT_NOFE_FIXED_TAU_ALGORITHM,
@@ -31,12 +30,6 @@ from powermean.solve.iols.kernel import (
 )
 from powermean.solve.iols.records import owned_value, plain_value
 from powermean.solve.iols.source import source_receipt
-
-# The compiled kernel is not part of this version; the NumPy kernel is.
-_NO_COMPILED_KERNEL = (
-    "iols_backend='cpp': this version has no compiled kernel; "
-    "omit iols_backend or pass iols_backend='numpy'"
-)
 
 DirectNoFEBackend = Literal["auto", "cpp", "numpy", "python_reference"]
 DIRECT_NOFE_BACKENDS: Final = ("cpp", "numpy")
@@ -198,11 +191,6 @@ def resolve_iols_backend(
                 availability_reason=f"native_module_absent:{module_name}",
                 cpp_module=None,
             )
-        if backend == "cpp" and is_target_absent:
-            raise SolverCapabilityError(
-                "solver.unsupported_case",
-                {"solver": "iols", "case": _NO_COMPILED_KERNEL},
-            ) from exc
         raise
 
     if getattr(cpp_module, "direct_test_hooks_compiled", False):

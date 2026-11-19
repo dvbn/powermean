@@ -1,7 +1,10 @@
 """The admitted inputs, the full point and the absorption evidence of the linear path.
 
-Internal module; nothing here certifies a point or forms inference.  The
-notation and the checked
+``design/01_statistical_core.md``, Section 3.3; ``design/02_computation.md``, Sections
+5.2, 5.5 and 7; ``design/03_fixed_effects.md``, Section 2; the adopted contract
+``plan/evidence/M1.13_contract.txt`` and its final-interface binding; its correction A
+(``plan/evidence/M1.13_revision_A.txt``); decision D51.  Task M1.13, private; nothing
+here certifies a point or forms inference (task M1.14).  The notation and the checked
 arithmetic are those of :mod:`powermean.solve.linear_absorbed_numeric`.
 
 Inputs.  The admitted sample, an ``FESample`` at ``omega = 0`` with fixed-effect
@@ -10,28 +13,29 @@ the absorber's domains.
 
 Records.  :class:`LinearPoint`, :class:`PointNormalization` and :class:`FreshEquations`
 derive their values from their inputs, so no construction can supply them: the order
-map applied once and the authoritative ``q``; the fitted-index route's normalization,
+map applied once and the authoritative ``q``; the accepted normalization of task M1.12,
 the only reuse of its solvers, with the gap of its index rebuilt in the same order; and
 the original equations evaluated afresh at ``q`` (``e = l - q``, ``Xraw'(a e)``, every
 level sum of ``a e``, the raw-weight level totals and the level means).
 
 Absorption evidence.  :func:`_bound_absorption` admits one result of the absorber as
-the outcome of one call (its values, columns and prepared weights) under the explicit
+the outcome of one call (its columns and prepared weights) under the explicit
 controls, with the convergence that the caller's ending states; it reads the result,
 never a candidate.  The state is bound to the call; the result states the call's
 tolerance (a float equal to the control) and acceleration (a bool equal to it); its
 work counts are nonnegative integers, never booleans, with the sweeps within the
-call's budget; its reason is a string, empty exactly on convergence; its residual is
-the values less the lift of its state, bit for bit.  The fresh check of that residual
-with the current weights is re-run for every result, converged or not, and decides
-the diagnostics as the absorber states them (success is a completed check within the
-tolerance): where the
-check refuses by range, the result holds neither errors nor maximum and its status is
-``range``; where it completes, the errors are its own bit for bit, the maximum is a
-float equal to its maximum, and the check passes exactly when the result converged, so
-that budget and breakdown keep a failing check and range a failing check or none.  No
-iteration is replayed: the positive counts, and budget against breakdown, are the
-absorber's report, checked in their domains only.
+call's budget; its reason is a string, empty exactly on convergence; its residual has
+one row per row of the grouping and one column per name.  Its diagnostics are those of
+the absorber's own fresh check, as the absorber's contract C states them
+(``plan/evidence/M1.4_contract.txt``; success is a completed check within the
+tolerance): where the check refused by range, the result holds neither errors nor
+maximum and its status is ``range``; otherwise the maximum is a float and is within
+the tolerance exactly when the result converged.  The residual and the fresh check are
+the absorber's, formed once by the absorber itself (its acceptance); they are not
+recomputed here, as an independent recomputation is not part of the normal path (the
+owner's engineering policy, rule 10(a); LEANLOG2).  No iteration is replayed: the
+positive counts, and budget against breakdown, are the absorber's report, checked in
+their domains only.
 """
 
 from __future__ import annotations
@@ -42,7 +46,7 @@ import numpy as np
 
 from powermean.data.accounting import frozen_index
 from powermean.data.collinearity_numeric import is_integer, owned
-from powermean.data.sample_fe_state import FESample, same_bits
+from powermean.data.sample_fe_state import FESample
 from powermean.fe.absorb import (
     AbsorptionResult,
     AbsorptionState,
@@ -52,16 +56,12 @@ from powermean.fe.absorb import (
 )
 from powermean.fe.absorb_acceleration import RANGE
 from powermean.fe.absorb_numeric import (
-    FreshCheck,
     PreparedWeights,
-    candidate,
     checked_difference,
     checked_product,
     checked_quotient,
-    fresh_check,
     group_sums,
 )
-from powermean.fe.connectivity import IndicatorRank, indicator_rank
 from powermean.fe.groups import Grouping
 from powermean.fe.reductions import immutable_array
 from powermean.model.order import IndexArray
@@ -187,9 +187,9 @@ class PointNormalization:
 
     Derived from ``point``: the ``effects``, ``references`` and ``shifts`` of
     :func:`powermean.solve.absorbed_direction.normalize`; ``index``, those effects added
-    to the point's base in the same order and arithmetic; ``gap = max |index - q|``;
-    ``rank``, the indicator rank (bounded for three or more blocks, whose effects are a
-    deterministic representative, not unique).  ``q`` stays authoritative.
+    to the point's base in the same order and arithmetic; ``gap = max |index - q|``.
+    For three or more blocks the effects are a deterministic representative, not
+    unique.  ``q`` stays authoritative.
     """
 
     point: LinearPoint
@@ -198,7 +198,6 @@ class PointNormalization:
     shifts: tuple[FloatArray, ...] = field(init=False)
     index: FloatArray = field(init=False)
     gap: float = field(init=False)
-    rank: IndicatorRank = field(init=False)
 
     def __post_init__(self) -> None:
         """Normalize, rebuild the index the same way and measure the gap."""
@@ -217,7 +216,6 @@ class PointNormalization:
             shifts=tuple(map(immutable_array, found.shifts)),
             index=index,
             gap=float(np.max(np.abs(gap))),
-            rank=indicator_rank(grouping.blocks),
         )
 
     def within(self, tolerance: float) -> bool:
@@ -232,7 +230,7 @@ class FreshEquations:
     Derived from ``point``: ``residual`` ``e = l - q``, ``weighted`` ``a e`` (raw
     weights), ``slope_sums`` ``Xraw'(a e)`` (raw original active columns), every
     ``level_sums`` of ``a e``, the raw-weight ``level_totals`` and their quotients
-    ``level_means``.  Evidence for the certificate, not a verdict.
+    ``level_means``.  Evidence for the certificate of task M1.14, not a verdict.
     """
 
     point: LinearPoint
@@ -282,20 +280,20 @@ class FreshEquations:
 def _bound_absorption(
     controls: LinearControls,
     result: object,
-    call: tuple[FloatArray, tuple[str, ...], PreparedWeights],
+    call: tuple[tuple[str, ...], PreparedWeights],
     *,
     converged: bool,
 ) -> None:
-    """A result of the absorber on these values and columns, under these controls.
+    """A result of the absorber for these columns and weights, under these controls.
 
     Its state is bound to the prepared grouping and the columns; it states the call's
     controls (:func:`_requested`) and reports its work and reason in their domains
-    (:func:`_reported`); its residual is the values less the lift of its state, bit for
-    bit; its diagnostics are those of the fresh check of that residual, re-run here for
-    every result (:func:`_diagnosed`).  ``converged`` is the outcome that the caller's
-    ending states for this call.  ``ValueError`` otherwise.
+    (:func:`_reported`); its residual has the call's shape; its diagnostics are those
+    of a fresh check as the absorber reports them (:func:`_diagnosed`).  ``converged``
+    is the outcome that the caller's ending states for this call.  ``ValueError``
+    otherwise.  Nothing is recomputed (module docstring).
     """
-    values, columns, prepared = call
+    columns, prepared = call
     if (
         type(result) is not AbsorptionResult
         or type(result.state) is not AbsorptionState
@@ -307,14 +305,10 @@ def _bound_absorption(
     same = same and _reported(result, controls.absorb_max_sweeps)
     if not same or result.converged != converged:
         raise ValueError(BOUND)
-    try:
-        residual = candidate(values, state.coefficients, prepared.grouping)
-    except FloatingPointError as error:
-        raise ValueError(BOUND) from error
-    if not same_bits(result.residual, residual):
+    shape = (prepared.grouping.n_rows, len(columns))
+    if np.shape(result.residual) != shape:
         raise ValueError(BOUND)
-    check = _fresh(residual, prepared)
-    if not _diagnosed(result, check, controls.absorb_tol_final):
+    if not _diagnosed(result, controls.absorb_tol_final):
         raise ValueError(BOUND)
 
 
@@ -351,30 +345,14 @@ def _count(value: object) -> bool:
     return is_integer(value) and bool(value >= 0)
 
 
-def _fresh(residual: FloatArray, prepared: PreparedWeights) -> FreshCheck | None:
-    """The fresh check of ``residual`` with the current weights; ``None`` if refused."""
-    try:
-        return fresh_check(residual, prepared)
-    except FloatingPointError:
-        return None
+def _diagnosed(result: AbsorptionResult, tolerance: float) -> bool:
+    """Whether the result's diagnostics are those of a fresh check, as reported.
 
-
-def _diagnosed(
-    result: AbsorptionResult, check: FreshCheck | None, tolerance: float
-) -> bool:
-    """Whether the result's diagnostics are ``check``'s, or absent where it refused.
-
-    Absent errors and maximum, together, only with the status ``range`` and only where
-    the fresh check refuses; else the errors are the check's bit for bit, the maximum a
-    float equal to its maximum, and the check passes exactly when the result converged.
+    Absent errors and maximum, together, only with the status ``range`` (the check
+    refused); else the maximum is a float, within the tolerance exactly when the result
+    converged.
     """
     errors, maximum = result.column_errors, result.maximum
-    if check is None:
+    if errors is None or maximum is None:
         return errors is None and maximum is None and result.status == RANGE
-    return (
-        errors is not None
-        and same_bits(errors, check.column_errors)
-        and isinstance(maximum, float)
-        and maximum == check.maximum
-        and (check.maximum <= tolerance) == result.converged
-    )
+    return isinstance(maximum, float) and (maximum <= tolerance) == result.converged

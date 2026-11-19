@@ -1,21 +1,30 @@
 """The resolved numerical settings of one solve: the solver and its options.
 
+``DESIGN.md``, Sections 5.3, 6.2 and 6.5; ``design/02_computation.md``, Sections 5.1,
+5.7 and 9; ``design/11_engineering.md``, Section 3.1, rule 2; decisions D24, D41, D47
+and D51.  Port of ``Computation`` of ``specs.py`` of expreg (source S7 of
+``design/06_reuse_map.md``), adapted to the accepted options of the package;
+``PROVENANCE.md``, Section 13, records the source and every change.
+
 :class:`Computation` holds the resolved numerical settings of one solve: the solver,
 ``"newton"`` (the damped Newton algorithm with two providers) or optional no-FE
-``"iols"``, and ``options``, the snapshot of a
-:class:`~powermean.solve.options.SolverOptions` that the composing caller has resolved
-with :func:`powermean.solve.options.resolve_options` and serialized with its
-``to_dict``.  The record stores an owned read-only copy of that mapping and checks its
-representation only: a nonempty mapping of names to Python floats, integers or strings,
-each float finite, so that it converts to JSON and back without loss.  It defines no
-default, schema or domain of a solver option and imports nothing of the solve stage (a
-stage of the pipeline imports earlier stages only): a serialized mapping is not evidence
-that it was validated, so a caller passes the ``options`` of a record read back through
-``resolve_options`` before it uses them, and an unknown or invalid option is refused
-there, by the one table of defaults and domains.  The record holds no initialization,
-reference backend, pilot or certificate threshold: the start of a solve is an argument
-of the interface, the provider an option, and the thresholds of the certificate are
-options too.
+``"iols"``,
+and ``options``, the snapshot of a :class:`~powermean.solve.options.SolverOptions`
+that the composing caller has resolved with
+:func:`powermean.solve.options.resolve_options` and serialized with its ``to_dict``.
+The record stores an owned read-only copy of that mapping and checks its
+representation only: a nonempty mapping of names to Python floats, integers or
+strings, each float finite, so that it converts to JSON and back without loss.  It
+defines no default, schema or domain of a solver option and imports nothing of the
+solve stage (rule 2: a stage of the pipeline imports earlier stages only): a
+serialized mapping is not evidence that it was validated, so a caller passes the
+``options`` of a record read back through ``resolve_options`` before it uses them, and
+an unknown or invalid option is refused there, by the one accepted table of defaults
+and domains.  S7's ``Computation()`` without arguments, its ``"standard"`` and
+``"warm_start"`` initialization, its reference backend, its pilot and its
+``ExactCertificate`` thresholds are not carried: the start of a solve is an argument of
+the interface (``DESIGN.md``, Section 6.3), the provider an option, and the thresholds
+of the certificate are options too (file 02, Section 7).
 """
 
 from __future__ import annotations
@@ -100,7 +109,7 @@ def _snapshot(
 
 @dataclass(frozen=True)
 class Computation:
-    """The resolved numerical settings of one solve.
+    """The resolved numerical settings of one solve (S7 ``Computation``, adapted).
 
     Parameters
     ----------

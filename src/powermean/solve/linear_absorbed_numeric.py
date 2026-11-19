@@ -1,10 +1,13 @@
 """The checked arithmetic and the LAPACK attempts of the absorbed linear path.
 
-Internal module: the formulas that the solve
+``design/01_statistical_core.md``, Section 3.3; ``design/02_computation.md``, Sections
+1, 3, 5.5 and 7; the adopted contract ``plan/evidence/M1.13_contract.txt`` and its
+final-interface binding; its correction A (``plan/evidence/M1.13_revision_A.txt``);
+decision D51.  Task M1.13, private: the formulas that the solve
 (:mod:`powermean.solve.linear_absorbed`) and the admission of its records
 (:mod:`powermean.solve.linear_absorbed_point`,
 :mod:`powermean.solve.linear_absorbed_state`) share.  Nothing here binds a record to a
-sample, certifies a point or forms inference.
+sample, certifies a point or forms inference (task M1.14).
 
 Notation.  At ``omega = 0``: ``l`` the log response, ``o`` the RAW offset (entered
 once), ``a`` the raw weights (one without weights), ``Xraw`` the original active
@@ -26,7 +29,7 @@ The attempts.  With ``W = sqrt(a) Xtilde``: the singular values of ``W`` (NumPy,
 K) s_max`` with the physical rows ``n``, never a frequency total; the pivoted economic
 QR ``W[:, P] = Q R`` (SciPy); and the back substitution ``R z = Q'r`` (SciPy) with
 ``theta[P] = z``.  No Gram matrix is formed.  Each attempt is one
-:class:`Decomposition`, its outputs checked before use: real
+:class:`Decomposition`, its outputs checked before use as task M1.9 checks them: real
 floating arrays of the declared shapes, finite, singular values nonnegative and
 nonincreasing, pivots a permutation; a ``LinAlgError`` of the call is ``failed``, an
 output that fails a check ``unusable``.  SciPy has no type information:
@@ -317,8 +320,8 @@ class Factors(NamedTuple):
 def pivoted_qr(matrix: FloatArray) -> tuple[Decomposition, Factors | None, str]:
     """The pivoted economic QR of a full-column-rank ``W``, checked and recorded.
 
-    ``R`` must be ``K``-by-``K`` and finite with a permutation of pivots,
-    ``Q`` a finite real ``n``-by-``K`` array; ``None`` factors otherwise.
+    ``R`` must be ``K``-by-``K`` and finite with a permutation of pivots (M1.9's
+    checks), ``Q`` a finite real ``n``-by-``K`` array; ``None`` factors otherwise.
     """
     shape = (int(matrix.shape[0]), int(matrix.shape[1]))
     try:

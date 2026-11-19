@@ -1,7 +1,9 @@
 """Post-fit covariance request normalization and initial-cache matching helpers.
 
-This module normalizes post-fit covariance specifications
-(:data:`PostFitCovarianceSpec`)
+``design/04_inference_and_effects.md``, Sections 1 to 3; ``design/11_api.md``;
+``plan/evidence/M1.15_contract.txt``, items 4, 8, 9 and 10;
+``brief/layout_C_ownership.txt`` (P20); decisions D49, D51, D54, D55 and D65.  This
+module normalizes post-fit covariance specifications (:data:`PostFitCovarianceSpec`)
 into :class:`~powermean.solve.absorbed_certificate_scale.CovarianceRequest` records and
 evaluates initial-cache or recomputed scale results on a
 :class:`~powermean.results.absorbed_retained.RetainedAbsorbedEnvelope`.
@@ -17,8 +19,8 @@ import numpy as np
 from powermean import messages
 from powermean.data.inference_requests import ClusterRequest
 from powermean.errors import SpecificationError
-from powermean.interface.retained_metadata import BoundDependence
-from powermean.interface.retained_time import _is_missing_metadata
+from powermean.formula.validity import raw_invalid_count
+from powermean.interface.retained_metadata import BoundDependence, _sample_missing_count
 from powermean.results.absorbed_handoff import (
     check_cluster_request_rows,
 )
@@ -51,18 +53,21 @@ def _encode_sample_cluster_codes(
     """Encode first-appearance cluster codes on ``envelope.sample``."""
     if dependence is not None:
         return dependence.cluster_codes(name).codes
-    if name not in envelope.sample.metadata:
-        available = (
-            messages.format_keys(envelope.sample.metadata)
-            if envelope.sample.metadata
-            else "none"
-        )
+    metadata = envelope.sample.metadata
+    if name not in metadata:
+        available = messages.format_keys(metadata) if metadata else "none"
         raise SpecificationError(
             "specification.cluster_not_retained",
             {"name": name, "retained": available},
         )
-    raw_vals = envelope.sample.metadata[name]
-    missing_count = sum(1 for val in raw_vals.tolist() if _is_missing_metadata(val))
+    raw_vals = metadata[name]
+    source = envelope.sample.input_snapshot._dependence
+    column = None if source is None else source.columns.get(name)
+    missing_count = (
+        raw_invalid_count(raw_vals)
+        if column is None
+        else _sample_missing_count(column._missing_mask, envelope.sample.positions)
+    )
     if missing_count > 0:
         raise SpecificationError(
             "specification.cluster_missing_values",

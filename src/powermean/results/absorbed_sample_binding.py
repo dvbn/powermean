@@ -1,4 +1,9 @@
-"""Sample integrity and prepared-frame binding checks before retained detachment."""
+"""Sample integrity and prepared-frame binding checks before retained detachment.
+
+``design/02_computation.md``, Sections 2 and 7; ``plan/evidence/M1.15_contract.txt``,
+item 9; ``plan/evidence/M1.15_interfaces.txt``, Section 2.A;
+``brief/layout_C_ownership.txt`` (P15).
+"""
 
 from __future__ import annotations
 
@@ -17,17 +22,17 @@ from powermean.data.sample_fe import EffectColumns
 from powermean.data.sample_fe_source import Derived, same_bits
 from powermean.data.sample_fe_state import FESample, same_missing
 from powermean.fe.groups import Block, Grouping
-from powermean.model.order import IndexArray
+from powermean.model.order import BoolArray, IndexArray
 from powermean.results.absorbed_partitions import validate_partition_lineage
+from powermean.results.retained_index_values import (
+    numeric_index_snapshots,
+    same_numeric_index_values,
+)
 from powermean.results.retained_input_values import (
     _is_missing_scalar,
     _label_values,
     _plain_kind,
     _same_column_values,
-)
-from powermean.results.retained_index_values import (
-    numeric_index_snapshots,
-    same_numeric_index_values,
 )
 from powermean.results.retained_labels import _one_exact_type, _same_design_spec
 
@@ -47,7 +52,6 @@ __all__ = [
     "_same_array_values",
     "_same_design_spec",
     "_same_index_values",
-    "check_parts_match_sample",
     "check_prepared_matches_sample",
 ]
 
@@ -339,10 +343,26 @@ def _check_inputs_and_metadata(
         raise ValueError(UNBOUND)
 
 
+def _same_missing_group(
+    base: SampleBase, name: str, raw: BoolArray, additional: BoolArray | None = None
+) -> bool:
+    """Match raw, full-length Boolean masks to the ledger after the subset."""
+    group = base.missing.groups[name]
+    if any(
+        mask.shape != (base.nobs,) or mask.dtype != np.bool_
+        for mask in (group, raw, additional, base.subset)
+        if mask is not None
+    ):
+        return False
+    expected = raw if additional is None else raw | additional
+    if base.subset is not None:
+        expected = expected & base.subset
+    return same_bits(expected, group)
+
+
 def _check_prepared_frame_and_provenance(prepared: PreparedFrame) -> None:
     """Verify internal frame, label, spec, and dependence provenance consistency."""
     f, d, base = prepared._frame, prepared._frame.design, prepared.base
-    m_grps = base.missing.groups
     if (
         type(prepared.subset_missing) is not int
         or prepared.subset_missing < 0
@@ -352,23 +372,41 @@ def _check_prepared_frame_and_provenance(prepared: PreparedFrame) -> None:
         != d.terms
         or (len(f.outcome), base.inputs.metadata.rows, d.matrix.shape, d.columns)
         != (base.nobs, base.nobs, base.inputs.design.shape, base.inputs.column_names)
-        or not same_bits(f.outcome_invalid, m_grps["outcome"])
-        or not same_bits(
-            d.referenced_invalid | d.evaluated_invalid, m_grps["regressors"]
+        or not _same_missing_group(base, "outcome", f.outcome_invalid)
+        or not _same_missing_group(
+            base, "regressors", d.referenced_invalid, d.evaluated_invalid
         )
         or bool(f.parts.fixed_effects) != (prepared.effects is not None)
     ):
         raise ValueError(UNBOUND)
     dep = prepared.dependence
-    if dep is not None and (
-        not same_bits(dep.used_missing_union, m_grps["clusters"])
-        or any(
-            c.name != k
-            or k not in base.inputs.metadata
-            or c.missing_mask.shape != (base.nobs,)
-            or not _same_column_values(c.values, base.inputs.metadata[k])
-            for k, c in dep.columns.items()
-        )
+    if dep is None:
+        return
+    raw_union = dep.used_missing_union
+    if not _same_missing_group(base, "clusters", raw_union):
+        raise ValueError(UNBOUND)
+    # The ledger cannot authenticate entries outside the subset; retain that
+    # check only at those positions against the classifications used to fit.
+    outside = None if base.subset is None else np.flatnonzero(~base.subset)
+    missing_outside = (
+        np.zeros(outside.size, dtype=np.bool_) if outside is not None else None
+    )
+    for name, column in dep.columns.items():
+        mask = column.missing_mask
+        if (
+            column.name != name
+            or name not in base.inputs.metadata
+            or mask.shape != (base.nobs,)
+            or mask.dtype != np.bool_
+            or not _same_column_values(column.values, base.inputs.metadata[name])
+        ):
+            raise ValueError(UNBOUND)
+        if outside is not None and missing_outside is not None and column.used_in_fit:
+            missing_outside |= mask[outside]
+    if (
+        outside is not None
+        and missing_outside is not None
+        and not same_bits(raw_union[outside], missing_outside)
     ):
         raise ValueError(UNBOUND)
 
@@ -610,7 +648,7 @@ def _plain_effect_blocks(
                 or type(block._levels._stored) is not tuple
             ):
                 return False
-            levels = cast("tuple[object, ...]", block._levels._stored)
+            levels = block._levels._stored
             if not levels or not _codes_within(block.codes, len(levels)):
                 return False
             if block.codes.shape != partition.positions.shape:
@@ -751,28 +789,6 @@ def check_prepared_matches_sample(prepared: PreparedFrame, sample: FESample) -> 
     _check_prepared_frame_and_provenance(prepared)
     _check_prepared_inputs_and_metadata(prepared, sample)
     _check_prepared_effects_and_partitions(prepared, sample)
-
-
-def check_parts_match_sample(
-    *,
-    base: SampleBase,
-    effects: EffectColumns | None,
-    columns: Columns,
-    labels_size: int,
-    sample: FESample,
-) -> None:
-    """Verify that a live ``sample`` is bound to the parts of a frame.
-
-    The three sample-versus-frame checks of :func:`check_prepared_matches_sample`, in
-    their order, on the parts that the owning context materialized once from an
-    immutable primitive capture (:mod:`powermean.results.primitive_parts`); the frame's
-    own internal consistency (:func:`_check_prepared_frame_and_provenance`) was verified
-    on the capture's exact materialization when the capture was formed and cannot have
-    changed since.  ``sample`` is read afresh on every call.
-    """
-    _check_base_and_masks(base, effects, labels_size, sample)
-    _check_inputs_and_metadata(base, columns, sample)
-    _check_effects_and_partitions(effects, base.nobs, sample)
 
 
 _check_prepared_matches_sample = check_prepared_matches_sample

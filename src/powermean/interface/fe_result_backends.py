@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import importlib
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from typing import Any, Literal, Protocol, cast
 
@@ -19,12 +19,13 @@ from powermean.data.inference_requests import (
 )
 from powermean.data.request_values import Omitted
 from powermean.data.retained import OrderSample
-from powermean.data.specs import Estimator, Inference
+from powermean.data.specs import Estimator, FixedEffectFormulation, Inference
 from powermean.effects.targets import ReportingContext, ReportingPoint
 from powermean.errors import SpecificationError
 from powermean.fe.groups import Grouping
 from powermean.formula.frame import Design
 from powermean.formula.grammar import FormulaParts
+from powermean.inference.absorbed_rank import IntegerArray, absorbed_count
 from powermean.inference.convention import ClusterCodes
 from powermean.inference.ssc import ReferenceDistribution
 from powermean.interface.cancelled_selection import CancelledFitControls
@@ -32,6 +33,7 @@ from powermean.interface.fe_options import (
     FEBread,
     FEVcovRequest,
     check_deferred_vcov,
+    refuse_hc_with_wz,
     resolve_fe_vcov,
 )
 from powermean.interface.retained_metadata import BoundDependence
@@ -50,15 +52,17 @@ from powermean.results.fe_helpers import (
     normal_quantile,
     two_sided_p,
 )
+from powermean.results.fe_sample import ClosedRows
 from powermean.results.retained_hc import (
     RetainedHC,
 )
 from powermean.results.retained_inference import (
     RetainedInference,
 )
+from powermean.results.saturated import SaturatedCovariance, saturated_covariance
 from powermean.results.wz_bias import WZBias
 from powermean.solve.cancelled_records import RootOptions
-from powermean.solve.absorbed import AbsorbedOptions
+from powermean.solve.m1_options import AbsorbedOptions
 from powermean.solve.no_point import StartFailure
 from powermean.solve.options import SolverOptions
 
@@ -90,6 +94,55 @@ def _reference_quantile_and_p(
     quantile = float(student_t.ppf((1.0 + level) / 2.0, reference.df))
     p_values: FloatArray = 2.0 * student_t.sf(np.abs(statistic), reference.df)
     return quantile, p_values
+
+
+def _fe_summary_lines(
+    estimator: Estimator,
+    counts: Mapping[str, int],
+    nobs: int,
+    coverage: Mapping[str, object],
+) -> tuple[str, str, str]:
+    """Format the FE summary's ordered roles and retained scalar accounting."""
+    formulation = cast(FixedEffectFormulation, estimator.fixed_effects)
+    blocks = ", ".join(
+        f"{block} ({'cancelled' if block == formulation.cancelled else 'estimated'})"
+        for block in formulation.blocks
+    )
+    excluded = ", ".join(
+        f"{reason.replace('_', ' ')} {count}"
+        for reason, count in counts.items()
+        if reason != "retained" and count
+    )
+    accounting = excluded if excluded else "none dropped"
+    return (
+        f"Fixed effects: {blocks}",
+        f"Observations: {counts['retained']} of {nobs} input rows ({accounting})",
+        f"Coverage: {coverage['label']} ({coverage['basis']})",
+    )
+
+
+def _joint_block_lines(
+    blocks: Sequence[tuple[str, IntegerArray]], clusters: tuple[ClusterCodes, ...]
+) -> list[str]:
+    """Count the fitted-row incidence graph in formula order for this covariance view.
+
+    The exact aggregate rank used by some corrections has no unique decomposition
+    by block. The report instead uses the graph redundancies of design/03 §2.
+    """
+    found = absorbed_count(blocks, [cluster.codes for cluster in clusters])
+    lines = ["Fixed-effect block counts (fitted rows, active covariance)"]
+    for block in found.blocks:
+        nested = "none" if block.nested_in is None else clusters[block.nested_in].name
+        precision = "exact" if block.exact else "pairwise lower bound"
+        lines.append(
+            f"  {block.name}: levels={block.levels}, redundant={block.redundant} "
+            f"({precision}), nested in={nested}"
+        )
+    if found.nested_adjustment:
+        lines.append("Nested blocks count as fully redundant in these block counts.")
+    if len(clusters) > 1:
+        lines.append("Nesting names the first matching cluster in request order.")
+    return lines
 
 
 def _tidy_frame(
@@ -124,7 +177,7 @@ def _tidy_frame(
         half = np.where(usable, quantile * err, np.nan)
     _, p_values = _reference_quantile_and_p(level, statistic, reference)
     status = np.where(usable, "ok", np.where(err == 0.0, "degenerate", "missing"))
-    return pd.DataFrame(
+    table = pd.DataFrame(
         {
             "term": list(names),
             "estimate": est,
@@ -136,10 +189,13 @@ def _tidy_frame(
             "inference": status.astype(object),
         }
     )
+    if reference is not None and usable.any():
+        table.attrs.update(reference=reference.kind, reference_df=reference.df)
+    return table
 
 
 def _covariance_diagnostics(record: RetainedInference) -> tuple[str, ...]:
-    """Final adjustment disposition outward; untouched raw diagnostics stay retained."""
+    """Final D4 disposition outward; the untouched raw diagnostics stay retained."""
     if record.adjustment is not None and record.adjustment.active:
         return ("covariance.psd_adjusted",) + (
             ("covariance.indefinite",) if record.adjustment.final_indefinite else ()
@@ -151,10 +207,37 @@ def _covariance_diagnostics(record: RetainedInference) -> tuple[str, ...]:
     return ()
 
 
+def saturated_fe(
+    fe_vcov: object, bread: str, count: int, k: int, *, cancelled: str | None = None
+) -> SaturatedCovariance:
+    """The missing covariance of a fixed-effects request on a saturated fit.
+
+    ``fe_vcov`` is the parsed request (``"robust"``, ``"cluster_cancelled"``, a
+    ``ClusterRequest`` or an ``HCRequest``), ``cancelled`` the cancelled block's name;
+    the note is issued (:mod:`powermean.results.saturated`).
+    """
+    method: str = "robust"
+    cluster: str | tuple[str, ...] | None = None
+    if isinstance(fe_vcov, HCRequest):
+        method = fe_vcov.method
+    elif isinstance(fe_vcov, ClusterRequest):
+        dimensions = tuple(fe_vcov.dimensions)
+        method, cluster = (
+            "cluster",
+            (dimensions[0] if len(dimensions) == 1 else dimensions),
+        )
+    elif fe_vcov == "cluster_cancelled":
+        method, cluster = "cluster", cancelled
+    return saturated_covariance(method, cluster, bread, count, k, stacklevel=4)
+
+
 def _vcov_attrs_from_retained(
-    record: RetainedInference | RetainedHC,
+    record: RetainedInference | RetainedHC | SaturatedCovariance,
 ) -> dict[str, object]:
     """Build the ``DataFrame.attrs`` dictionary for a retained covariance record."""
+    if type(record) is SaturatedCovariance:
+        return record.fe_attributes()
+    record = cast("RetainedInference | RetainedHC", record)
     if isinstance(record, RetainedHC):
         return {
             "method": record.request.method,
@@ -163,7 +246,11 @@ def _vcov_attrs_from_retained(
             "N": int(record.applied.counts.count),
             "G": None,
             "rank": int(record.applied.counts.rank),
-            "diagnostics": (),
+            # A request left missing by a hat value of one names its note (rulings
+            # 74 and 88).
+            "diagnostics": (
+                ("covariance.unstable_leverage",) if record.hc.undefined else ()
+            ),
             "bread": record.request.bread,
             "coordinate": "reported",
             "convention": record.applied.convention.preset,
@@ -201,6 +288,9 @@ def _vcov_attrs_from_retained(
         "coordinate": "reported",
         "convention": record.applied.convention.preset,
     }
+    if record.psd is not None:
+        # The treatment of the signed multiway estimate: the rule used (ruling 84).
+        attributes["psd"] = record.psd
     if record.wz is not None:
         attributes.update(
             adjustment="wz",
@@ -214,7 +304,7 @@ def _vcov_attrs_from_retained(
 
 
 def _vcov_frame_from_retained(
-    record: RetainedInference | RetainedHC,
+    record: RetainedInference | RetainedHC | SaturatedCovariance,
     names: tuple[str, ...],
 ) -> pd.DataFrame:
     """Convert a ``RetainedInference`` or ``RetainedHC`` into a DataFrame with attrs."""
@@ -228,12 +318,23 @@ def _vcov_frame_from_retained(
 def _target_reporting_context(
     names: tuple[str, ...],
     beta: FloatArray,
-    record: RetainedInference | RetainedHC,
+    record: RetainedInference | RetainedHC | SaturatedCovariance,
     omega: float,
     point: ReportingPoint,
 ) -> ReportingContext:
     """Compose an FE numeric snapshot from its already selected reporting record."""
     metadata = _vcov_attrs_from_retained(record)
+    if type(record) is SaturatedCovariance:
+        return context_snapshot(
+            names,
+            beta,
+            record.require_reported_covariance(),
+            record.reference,
+            omega,
+            point=point,
+            metadata=metadata,
+        )
+    record = cast("RetainedInference | RetainedHC", record)
     applied = record.applied
     metadata.update(
         ssc=applied.convention.values.to_dict(),
@@ -287,7 +388,9 @@ def _bind_cancelled_cluster_codes(
 ) -> tuple[ClusterCodes, ...]:
     """Bind ``ClusterCodes`` for a post-fit ``ClusterRequest`` on a cancelled fit."""
     block_map = {b.name: b.codes for b in grouping.blocks}
-    positions = np.arange(envelope.n_rows, dtype=np.intp)
+    # The original row positions of the retained labels, which bind_cluster checks
+    # against the fitted rows' (not 0 .. n - 1: rows removed before the fit leave gaps).
+    positions = dependence.positions
     codes_list: list[ClusterCodes] = []
     for dim in request.dimensions:
         if dim == envelope.cancelled_name:
@@ -367,6 +470,7 @@ def _parse_vcov_spec_for_absorbed(
                         "valid": messages.format_keys(["cluster", "multiway", "psd"]),
                     },
                 )
+        refuse_hc_with_wz(spec)
         ssc_in = spec.get("ssc", default_ssc)
         bread_in = spec.get("bread", default_bread)
         if "method" in spec or "vcov" in spec:
@@ -394,6 +498,17 @@ def _parse_vcov_spec_for_absorbed(
     )
 
 
+def default_announcement(cancelled: str | None, correction: str | None) -> str:
+    """Describe the fixed effects and bias correction used in this fit."""
+    effects = (
+        "all estimated jointly" if cancelled is None else f"`{cancelled}` cancelled"
+    )
+    bias = (
+        "no bias correction" if correction is None else f"{correction} bias correction"
+    )
+    return f"Fixed effects: {effects}, {bias}."
+
+
 @dataclass(frozen=True)
 class FEView:
     """Owned normal-call reporting and provenance inputs."""
@@ -409,6 +524,7 @@ class FEView:
     solver_options: SolverOptions
     fit_vcov_spec: tuple[FEVcovRequest, str | ConventionValues | Omitted, FEBread]
     requested_start: FloatArray | None
+    announce_defaults: tuple[str, ...] = ()  # options the call did not write
 
 
 @dataclass(frozen=True)
@@ -419,6 +535,9 @@ class AbsorbedState:
     actual operation of a selected-root fit's root stages (its convex initializer
     ran the requested organization), ``None`` on the convex and linear routes, and
     ``root_options`` the resolved root-Newton options with which it ran.
+    ``saturated`` is the decision of the linear route, which holds no certificate
+    (:func:`powermean.interface.fe_linear.linear_saturated`); the other routes read
+    theirs from the certificate.
     """
 
     retained_result: RetainedAbsorbedResult | None
@@ -432,6 +551,7 @@ class AbsorbedState:
     bias_correction: WZBias | None = None
     operation: str | None = None
     root_options: RootOptions | None = None
+    saturated: bool = False
 
 
 @dataclass(frozen=True)
@@ -444,3 +564,6 @@ class CancelledState:
     controls: CancelledFitControls
     requested_absorbed_options: AbsorbedOptions
     bias_correction: CancelledBias | WZBias | None = None
+    # With zero outcomes, when the joint sample step removed rows: the order sample
+    # before that step and the step's retained outcome, for the sample accounting.
+    walked: tuple[OrderSample, RetainedOutcomeSnapshot | ClosedRows] | None = None

@@ -1,6 +1,7 @@
 """The status of a solve: the certificate of its candidate beside its native reason.
 
-After the solver returns, :func:`conclude`
+``design/02_computation.md``, Sections 1 (rule 3) and 7 (the statuses); ``DESIGN.md``,
+Section 4.6; decisions D41 and D45.  After the solver returns, :func:`conclude`
 certifies the retained candidate afresh (:func:`powermean.solve.certificate.certify`,
 with the controls of the solve's options) and composes the status of the solve from
 that certificate and the native reason of the retained attempt, which it keeps beside
@@ -27,7 +28,9 @@ How the native reasons are kept apart from the gates:
 - A native stop never verifies a root: whatever the native reason, only the
   certificate gives ``verified`` and ``verified_secondary``, and a native stop at a
   candidate that the certificate rejects is ``solver_error``.  The solver's own test
-  stopped where the certificate does not certify.
+  stopped where the certificate does not certify; S1 named this
+  ``premature_native_stop`` or, after its retry, ``precision_stagnation``, which are
+  not statuses of the package.
 - ``iteration_limit`` and ``line_search_failure`` come from the native reason only,
   never from failed quantities.
 - ``evaluation_limit`` is a native reason and not a status: a spent budget of
@@ -35,18 +38,19 @@ How the native reasons are kept apart from the gates:
   SciPy's L-BFGS-B reports both of its budgets with one flag and names them in its
   message; the reason itself stays in :attr:`Conclusion.reason`.
 - ``nonfinite`` and ``singular_system`` describe the candidate, and come from its gates
-  before the native reason: a rank-deficient design ends with the status of the
-  certificate.  In the convex systems that the solver
-  accepts, ``C`` is positive semidefinite, so a curvature that is not positive
-  definite is a singular one.
-- ``no_finite_root`` needs an existence certificate, which this path does not form:
-  it is never assigned here.
+  before the native reason: a design that is still rank deficient after the
+  interface's collinearity analysis ends with the status of the certificate
+  (D41, rulings 109 and 110).  In the convex systems that the solver of the first
+  milestone accepts, ``C`` is positive semidefinite, so a curvature that is not
+  positive definite is a singular one.
+- ``no_finite_root`` needs an existence certificate (Section 4), which the first
+  milestone does not form (D41): it is never assigned here.
 
 A failure of the coefficient gate alone, including missing, negative or nonfinite
-standard errors, takes the status of the native reason; the certificate shows
-which coefficient failed and why.  No status is added:
-``ConvergenceError``, ``ExistenceError`` and ``NumericalWarning`` carry
-:data:`STATUSES` as they are.
+standard errors (D49), takes the status of the native reason; the certificate shows
+which coefficient failed and why.  No status is added: :data:`STATUSES` are those of
+file 02, Section 7, which ``ConvergenceError``, ``ExistenceError`` and
+``NumericalWarning`` carry as they are (task M0.3).
 """
 
 from __future__ import annotations

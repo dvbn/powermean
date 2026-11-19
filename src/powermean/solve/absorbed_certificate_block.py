@@ -1,7 +1,7 @@
 """Analytical incidence-block factors with full-system actions and diagnostics.
 
-The analytical system may use a different elimination order, not different
-equations, thresholds or inference.
+The author's 4 November 2026 analytical-system exception to M1.14 permits a
+different elimination order, not different equations, thresholds or inference.
 For A = [[D, B], [C, G]], D is one kept categorical block's exact diagonal.
 Store C/D, B and D and factor only G - (C/D) B. No full block L/U or inverse
 is materialized. Both adjoint actions include the eliminated right-hand side.
@@ -10,7 +10,7 @@ The ordinary and curvature matrices are prepared and factored independently.
 Any number/topology of admitted blocks is allowed. A reduction is attempted
 only if the selected principal block is diagonal and invertible. Ordinary
 systems may use the directly constructed dense remainder when its accounted
-array workspace fits the internal allowance. The existing stored-entry rule
+array workspace fits the private allowance. The existing stored-entry rule
 remains for the sparse producer and for curvature/merit; these are optimization
 eligibility tests, not new fit refusals or public resource limits. Other cases
 use the original factor before attempting reduction. A failed reduced factor
@@ -47,11 +47,7 @@ from powermean.solve.absorbed_certificate_factor import (
     index_width,
     sparse,
 )
-from powermean.solve.absorbed_certificate_geometry import (
-    FEGeometry,
-    SparseMatrix,
-    scaled_curvature,
-)
+from powermean.solve.absorbed_certificate_geometry import FEGeometry, scaled_curvature
 from powermean.solve.absorbed_dense_factor import (
     DENSE_WORKSPACE_BYTES,
     DenseCholesky,
@@ -62,8 +58,10 @@ from powermean.solve.absorbed_dense_factor import (
     workspace_bytes,
 )
 from powermean.solve.compact_matrix import CompactMatrix, CscStorage, matrix_nnz
+from powermean.solve.sparse_matrix import SparseMatrix
 
 Block = tuple[int, int]
+_CSC_ARRAY = sparse.csc_array
 
 
 class _Csc(CscView, Protocol):
@@ -111,7 +109,7 @@ def elimination_block(geometry: FEGeometry) -> Block | None:
     """Largest contiguous kept categorical block, with deterministic tie order.
 
     Exact-rank/gauge selection already occurred in the admitted basis. Dropped
-    reference and dependent levels stay dropped; no topology or rank is inferred.
+    references/dependent levels stay dropped; no topology or rank is inferred.
     """
     selected = None
     count = 0
@@ -140,7 +138,9 @@ class _Parts:
 
 
 def _parts(
-    matrix: SparseMatrix | CompactMatrix, block: Block | None, *,
+    matrix: SparseMatrix | CompactMatrix,
+    block: Block | None,
+    *,
     ordinary: bool = False,
 ) -> _Parts | None:
     """Check structural/resource eligibility before any reduced factor attempt."""
@@ -153,9 +153,17 @@ def _parts(
     if not 0 <= start < stop <= n:
         return None
     r = n - (stop - start)
-    workspace = (schur_workspace_bytes(
-        n, r, matrix.data.size, matrix.data.size - (stop - start), compact=False,
-    ) if ordinary else 0)
+    workspace = (
+        schur_workspace_bytes(
+            n,
+            r,
+            matrix.data.size,
+            matrix.data.size - (stop - start),
+            compact=False,
+        )
+        if ordinary
+        else 0
+    )
     direct = ordinary and workspace <= DENSE_WORKSPACE_BYTES
     if not direct and r * r > matrix.data.size:
         return None
@@ -181,13 +189,21 @@ def _parts(
     with np.errstate(all="ignore"):
         left.data[:] /= np.repeat(diagonal, np.diff(left.indptr))
     return _Parts(
-        block, remaining, diagonal, left, right, remainder,
+        block,
+        remaining,
+        diagonal,
+        left,
+        right,
+        remainder,
         workspace if direct else 0,
     )
 
 
 def _compact_parts(
-    matrix: CompactMatrix, block: Block | None, *, ordinary: bool = False,
+    matrix: CompactMatrix,
+    block: Block | None,
+    *,
+    ordinary: bool = False,
 ) -> _Parts | None:
     """Select the producer from raw metadata before allocating scaled partitions."""
     raw = matrix.raw
@@ -196,9 +212,17 @@ def _compact_parts(
     n, r = matrix.shape[0], raw.remainder.shape[0]
     # Only ordinary scaling shares the raw sparse pattern used by this bound.
     ordinary = ordinary and matrix.kind != "curvature"
-    workspace = (schur_workspace_bytes(
-        n, r, raw.nnz, raw.left.nnz + raw.right.nnz, compact=True,
-    ) if ordinary else 0)
+    workspace = (
+        schur_workspace_bytes(
+            n,
+            r,
+            raw.nnz,
+            raw.left.nnz + raw.right.nnz,
+            compact=True,
+        )
+        if ordinary
+        else 0
+    )
     direct = ordinary and workspace <= DENSE_WORKSPACE_BYTES
     if ordinary and not direct and r * r > raw.nnz:
         return None
@@ -209,20 +233,35 @@ def _compact_parts(
     if np.any(diagonal == 0) or not np.isfinite(diagonal).all():
         return None
 
-    def scipy_partition(storage: CscStorage) -> _Csc:
-        """Make only the private partition buffers needed by the existing action."""
+    def scipy_partition(storage: CscStorage, *, divide: bool = False) -> _Csc:
+        """Share immutable buffers when only the divided coupling needs a copy."""
         stored = storage.matrix
-        return cast("_Csc", sparse.csc_array(
-            (np.array(stored.data, copy=True), np.array(stored.indices, copy=True),
-             np.array(stored.indptr, copy=True)), shape=stored.shape))
+        if (
+            type(matrix) is CompactMatrix
+            and type(storage) is CscStorage
+            and sparse.csc_array is _CSC_ARRAY
+        ):
+            data = stored.data.copy() if divide else stored.data
+            indices, pointers = stored.indices, stored.indptr
+        else:
+            data = np.array(stored.data, copy=True)
+            indices = np.array(stored.indices, copy=True)
+            pointers = np.array(stored.indptr, copy=True)
+        return cast(
+            "_Csc", sparse.csc_array((data, indices, pointers), shape=stored.shape)
+        )
 
-    left, right, remainder = (
-        scipy_partition(p) for p in (parts.left, parts.right, parts.remainder)
-    )
+    left = scipy_partition(parts.left, divide=True)
+    right, remainder = (scipy_partition(p) for p in (parts.right, parts.remainder))
     with np.errstate(all="ignore"):
         left.data[:] /= np.repeat(diagonal, np.diff(left.indptr))
     return _Parts(
-        parts.block, remaining, diagonal, left, right, remainder,
+        parts.block,
+        remaining,
+        diagonal,
+        left,
+        right,
+        remainder,
         workspace if direct else 0,
     )
 
@@ -241,7 +280,7 @@ class BlockFactor:
     separately records their counts and the actual reduced splu call. Current
     dense factor records its own call and leaves L/U counts unavailable.
     Ordinary dense LU supplies final/certificate ordinary actions; eligible
-    curvature uses the Cholesky verdict and whitening action.
+    curvature uses the approved Cholesky verdict and whitening action.
     """
 
     block: Block
@@ -328,7 +367,8 @@ class BlockFactor:
         if isinstance(self.reduced, DenseLU):
             raise TypeError("the ordinary dense LU supplies no whitened score")
         record = self.reduced_record
-        assert record is not None and record.perm_r is not None
+        assert record is not None
+        assert record.perm_r is not None
         assert record.diagonal is not None
         residual = rhs[self.remaining] - _product(self.left, rhs[start:stop])
         permuted = np.empty_like(residual)
@@ -376,7 +416,11 @@ def _dense_remainder(parts: _Parts) -> FloatArray:
 
 
 def _record(
-    parts: _Parts, kind: FactorKind, reduced: FactorRecord | None, nnz: int, *,
+    parts: _Parts,
+    kind: FactorKind,
+    reduced: FactorRecord | None,
+    nnz: int,
+    *,
     dense: bool = False,
 ) -> FactorRecord:
     """Full implicit diagnostics plus truthful reduced-call/resource provenance."""
@@ -411,11 +455,23 @@ def _record(
             "reduced_L_nnz": None if reduced is None else reduced.l_nnz,
             "reduced_U_nnz": None if reduced is None else reduced.u_nnz,
             "splu": None if reduced is None or dense else reduced.call,
-            **({("dense_cholesky" if kind == "curvature" else "dense_lu"): reduced.call}
-               if dense and reduced is not None else {}),
-            **({"dense_workspace_bytes": parts.dense_workspace,
-                "dense_workspace_allowance": DENSE_WORKSPACE_BYTES}
-               if dense and parts.dense_workspace else {}),
+            **(
+                {
+                    (
+                        "dense_cholesky" if kind == "curvature" else "dense_lu"
+                    ): reduced.call
+                }
+                if dense and reduced is not None
+                else {}
+            ),
+            **(
+                {
+                    "dense_workspace_bytes": parts.dense_workspace,
+                    "dense_workspace_allowance": DENSE_WORKSPACE_BYTES,
+                }
+                if dense and parts.dense_workspace
+                else {}
+            ),
         }
     )
     status: FactorStatus = "factored" if reduced is None else reduced.status
@@ -454,29 +510,36 @@ def block_factorized(
         return factor_record(kind, "refused", refusal), None
     parts = _parts(matrix, block, ordinary=kind == "ordinary")
     if parts is None:
-        return factorized(matrix.materialize() if isinstance(matrix, CompactMatrix) else matrix, kind)
+        return factorized(
+            matrix.materialize() if isinstance(matrix, CompactMatrix) else matrix, kind
+        )
     return _factor_parts(
-        parts, kind,
-        dense_entry_budget=matrix_nnz(matrix) if kind in ("ordinary", "curvature") else 0,
+        parts,
+        kind,
+        dense_entry_budget=matrix_nnz(matrix)
+        if kind in ("ordinary", "curvature")
+        else 0,
     )
 
 
 def _factor_parts(
-    parts: _Parts, kind: FactorKind, *, dense_entry_budget: int = 0,
+    parts: _Parts,
+    kind: FactorKind,
+    *,
+    dense_entry_budget: int = 0,
 ) -> tuple[FactorRecord, SuperLU | None]:
     """Factor an eligible partition; choose storage before a factor, never after.
 
     The ordinary direct producer is selected before partition allocation.
-    Otherwise the existing sparse producer and dense-buffer bound remain.
+    Otherwise the existing sparse producer and P75 dense-buffer bound remain.
     Curvature may use Cholesky only within that same bound, after the unchanged
     ordered symmetrization of its sparse remainder. Merit stays sparse.
     A failed selected factor is never retried.
     """
-    if not (
-        np.isfinite(parts.left.data).all() and np.isfinite(parts.right.data).all()
-    ):
+    if not (np.isfinite(parts.left.data).all() and np.isfinite(parts.right.data).all()):
         reason = "the block coupling is not representable"
         return factor_record(kind, "failed", reason), None
+    reduced: SuperLU | DenseLU | DenseCholesky | None
     reduced_record, reduced, nnz = None, None, 0
     dense = False
     if parts.remaining.size:
@@ -494,8 +557,11 @@ def _factor_parts(
             except FloatingPointError as error:
                 return factor_record(kind, "failed", str(error)), None
             nnz = int(remainder.data.size)
-            dense = (kind in ("ordinary", "curvature") and dense_entry_budget > 0
-                     and workspace_bytes(remainder) <= 8 * dense_entry_budget)
+            dense = (
+                kind in ("ordinary", "curvature")
+                and dense_entry_budget > 0
+                and workspace_bytes(remainder) <= 8 * dense_entry_budget
+            )
             if dense:
                 if kind == "curvature":
                     reduced_record, reduced = dense_cholesky(remainder)
@@ -506,7 +572,8 @@ def _factor_parts(
     record = _record(parts, kind, reduced_record, nnz, dense=dense)
     if record.status != "factored":
         return record, None
-    assert record.perm_r is not None and record.perm_c is not None
+    assert record.perm_r is not None
+    assert record.perm_c is not None
     factor = BlockFactor(
         parts.block,
         parts.remaining,

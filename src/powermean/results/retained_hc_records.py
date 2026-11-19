@@ -1,9 +1,14 @@
-"""Internal retained adapter of the named HC covariances: capability and computation.
+"""Private retained adapter of the named HC covariances: capability and computation.
 
-Internal module: no public name, option, message, default or dispatch.
+``design/04_inference_and_effects.md``, Sections 1, 2.3 (D55, D57 and the retained
+state and staged capabilities), 3 and 5; ``plan/evidence/M1_contract.txt``, rules B1
+to B12 and Sections 3.1, 3.2 and 4; ``plan/evidence/M1_validation_plan.txt``, Sections
+4 and 8; decisions D49, D54, D57, D60, D65 and D78.  Task M1.22, private: no public
+name, option, message, default or dispatch.  The public requests and the fit-time HC
+gate arrive with M1.23, M1.24 and M1.45.
 
 What it does.  A named HC request (HC0, HC1, HC2, HC3, HC4, HC4m, HC5) after a fit is
-answered from the retained state of that fit alone, by the kernels of
+answered from the retained state of that fit alone, by the accepted kernels of
 :mod:`powermean.inference.hc`, and the answer is mapped once to the reported scale.
 Three routes, chosen by the retained formulation, never by the method name:
 
@@ -19,7 +24,7 @@ Three routes, chosen by the retained formulation, never by the method name:
   (:func:`~powermean.results.handoff.system_of`, the arrays the solve received) at the
   certificate's evaluation, which the kernel evaluates again at the SAME point and
   must find equal bit for bit; expected-information hats with the observed or the
-  expected bread;
+  expected bread (D57);
 - ``"absorbed"``, a certified :class:`~powermean.results.absorbed_retained.
   RetainedAbsorbedEnvelope` (profiled, index or WLS): the internal composition of
   :mod:`powermean.inference.hc` on the retained full nuisance basis, the retained
@@ -28,52 +33,54 @@ Three routes, chosen by the retained formulation, never by the method name:
   rows of the selected point; the composition derives the full-design hats (nuisance
   plus slopes), the bread on the full basis and the slope block.
 
-Fresh checks, at every call, before any covariance arithmetic: the point of every record
-is the selected point (bytes); the rows, weights, response and design of every record
-are the retained sample's (bytes); on the absorbed route the observed rows ``b = a r``
-and ``C = a c`` are evaluated again from the retained response, the point's ``q``, the
-raw weights and the working variance by the row kernel and must equal the retained rows
-bit for bit, and the observed joint Hessian assembled from them on the retained basis
-must equal the certificate's.  No identity, cache, seal, flag or prior success stands
-for these checks.
+Fresh checks, at every call, before any covariance arithmetic (rules B1, B5, B6,
+B7, B10): the point of every record is the selected point (bytes); the rows, weights,
+response and design of every record are the retained sample's (bytes); on the
+absorbed route the observed rows ``b = a r`` and ``C = a c`` are evaluated again from
+the retained response, the point's ``q``, the raw weights and the working variance by
+the accepted row kernel and must equal the retained rows bit for bit, and the observed
+joint Hessian assembled from them on the retained basis must equal the certificate's.
+No identity, cache, seal, flag or prior success stands for these checks.
 
-What is never done: no estimator solve, no sample construction or
+What is never done (rule B10): no estimator solve, no sample construction or
 reselection, no formula materialization, no regeneration of discarded influence from
 the certificate, a prediction or the data.  Same-point geometry (an evaluation of
 the retained equation at the retained point, a factorization of the bread, the hats)
 is formed again for each request: that is inference algebra, not a refit.
 
-Capability and discard.  :func:`hc_capability` reads the retained records only (their
-presence and kinds, no array arithmetic) and states the route, the formulation, the
-sampling unit, the weight kind, the breads, the layout and, where the request cannot be
-answered, why.  :func:`retained_hc` refuses, before any computation: a record of another
-type; an uncertified point (``ValueError``, as the robust and cluster adapter does); a
-discarded influence (``specification.influence_discarded``; a named HC request is never
-the fit-time request, so no cached covariance can answer it; the rows of a discarded
-envelope stay marked as such whatever its flag says); a route without its retained owner
+Capability and discard (rules B11, B12(b)).  :func:`hc_capability` reads the retained
+records only (their presence and kinds, no array arithmetic) and states the route,
+the formulation, the sampling unit, the weight kind, the breads, the layout and, where
+the request cannot be answered, why.  :func:`retained_hc` refuses, before any
+computation: a record of another type; an uncertified point (``ValueError``, as the
+accepted robust and cluster adapter does); a discarded influence
+(``specification.influence_discarded``; a named HC request is never the fit-time
+request, so no cached covariance can answer it; the rows of a discarded envelope stay
+marked as such whatever its flag says); a route without its retained owner
 (``specification.unsupported_inference``).  The kernels then refuse HC1 at ``N = K``
-(``specification.no_residual_dof``), an explicit second correction
-(``specification.conflicting``) and structural unit leverage
-(``specification.unit_leverage``) in their preflight, before any evaluation or
-factorization.  A refusal leaves every retained record as it was; there is nothing to
-restore, since nothing is written.
+(``specification.no_residual_dof``) and an explicit second correction
+(``specification.conflicting``) in their preflight, before any evaluation or
+factorization.  A refusal leaves every retained record as it was; there is nothing
+to restore, since nothing is written.
 
-Conventions.  The method owns its factor; an explicit ``ssc`` is checked by the kernel's
-equality rule; an omitted ``ssc`` takes the fit's convention in force as inherited (the
-retained initial request's ``"stata"`` by its name, or an internal declaration of a
-custom record, as in :mod:`powermean.results.retained_inference`), which never
-multiplies a named method and supplies its reference distribution.
+Conventions (D60, contract 3.1).  The method owns its factor; an explicit ``ssc`` is
+checked by the kernel's equality rule; an omitted ``ssc`` takes the fit's convention
+in force as inherited (the retained initial request's ``"stata"`` by its name, or a
+private declaration of a custom record, as in
+:mod:`powermean.results.retained_inference`), which never multiplies a named method
+and supplies its reference distribution.
 
-HAC and Conley.  The typed :class:`~powermean.data.inference_requests.
+HAC and Conley (D78).  The typed :class:`~powermean.data.inference_requests.
 HacRequest` and :class:`~powermean.data.inference_requests.ConleyRequest` stay
 reserved: :func:`retained_request` refuses them with ``specification.unimplemented``
-naming the later release, before reading the retained state, with no
+naming milestone M3 and the later release, before reading the retained state, with no
 substituted covariance and no refit.  Their computation is not implemented here.
 
-Reporting.  The covariance of ``theta`` is the kernel's, the method's factor applied
-once by its owner.  The direct standard errors come from its diagonal by the order scale
-(zero where zero, NaN where negative; no floor) and the reported covariance by the
-range-safe entrywise map, or its recorded range error; each map is applied once.
+Reporting (rule B3).  The covariance of ``theta`` is the kernel's, the method's factor
+applied once by its owner.  The direct standard errors come from its diagonal by the
+order scale (zero where zero, NaN where negative; D49, no floor) and the reported
+covariance by the accepted range-safe entrywise map, or its recorded range error
+(D54); each map is applied once.
 """
 
 from __future__ import annotations
@@ -104,7 +111,7 @@ from powermean.results.cancelled_retained import RetainedCancelledEnvelope
 from powermean.results.owned import _optional, owned_array
 from powermean.results.retained import RetainedFit
 
-Route = Literal["linear", "joint", "absorbed"]
+Route = Literal["linear", "joint", "absorbed", "cancelled"]
 
 WeightKind = Literal["none", "analytic", "frequency", "probability"]
 
@@ -118,17 +125,17 @@ class HCInferenceRequest:
     Parameters
     ----------
     method : {"HC0", "HC1", "HC2", "HC3", "HC4", "HC4m", "HC5"}
-        The method, an exact string (``specification.invalid_value`` otherwise, as
-        :class:`~powermean.data.inference_requests.HCRequest` refuses it).
+        The method, an exact string (``specification.invalid_value`` otherwise, as the
+        approved :class:`~powermean.data.inference_requests.HCRequest` refuses it).
     ssc : str, ConventionValues or OMITTED
         The explicit convention of this request, or :data:`OMITTED`.  An explicit
         ``None`` or another value is refused (``specification.invalid_value``).
     bread : {"observed", "expected"}
-        The bread of the influence rows; the hats use the expected geometry either way.
-        The least-squares equation's observed bread is its expected
+        The bread of the influence rows; the hats use the expected geometry either way
+        (D57).  The least-squares equation's observed bread is its expected
         information, so both give one answer on the linear routes.
     inherited : ConventionValues, optional
-        An internal declaration of the fit's custom record (inherited and custom
+        A private declaration of the fit's custom record (inherited and custom
         whatever its values); ``None`` reads the retained initial request's
         convention by its recorded name.
     """
@@ -156,7 +163,7 @@ class HCInferenceRequest:
         bread: Bread = "observed",
         inherited: ConventionValues | None = None,
     ) -> HCInferenceRequest:
-        """Bind the typed record; the parser owns the spelling."""
+        """Bind the approved typed record; the parser owns the spelling."""
         if type(request) is not HCRequest:
             raise TypeError("request must be an HCRequest")
         return cls(request.method, ssc, bread, inherited)
@@ -174,12 +181,12 @@ class HCCapability:
 
     Attributes
     ----------
-    route : {"linear", "joint", "absorbed"} or None
+    route : {"linear", "joint", "absorbed", "cancelled"} or None
         The route of the request, ``None`` where the target has no certified point.
     formulation : str
         The retained formulation, in words.
     unit : {"rows"}
-        The primitive sampling unit.
+        The primitive sampling unit (rule B4).
     weight_kind : {"none", "analytic", "frequency", "probability"}
         The stated kind of the retained weights.
     layout : {"dense", "absorbed"} or None
@@ -254,10 +261,22 @@ def _fit_capability(retained: RetainedFit) -> HCCapability:
 def _envelope_capability(envelope: RetainedAbsorbedEnvelope) -> HCCapability:
     """The capability of an absorbed envelope, from its records."""
     sample = envelope.sample
-    certificate = envelope.certificate
+    # Presence and kinds only: the compact payload of the fit answers them, so the
+    # rich certificate (its basis snapshot) is not materialized for this record.
+    certificate = envelope._certificate_data() or envelope.certificate
     formulation = f"absorbed joint ({envelope.route})"
     reason: str | None = None
-    if envelope.selected_point is None or certificate is None:
+    # Fixed-effect log-OLS by absorption holds no certificate (ruling 52): its
+    # rows are the retained influence of the within regression.
+    linear = certificate is None and envelope.route == "linear" and envelope.accepted
+    if linear:
+        if envelope.empty:
+            reason = "the model has no slope parameters (K = 0)"
+        elif envelope.influence_discarded:
+            reason = "the influence was discarded (keep_influence=False)"
+        elif sample.design is None or envelope.order is None:
+            reason = "the retained sample holds no scaled design or order scale"
+    elif envelope.selected_point is None or certificate is None:
         reason = "no selected point was certified for this candidate"
     elif not certificate.accepted:
         reason = "the selected point is not certified"
@@ -271,7 +290,7 @@ def _envelope_capability(envelope: RetainedAbsorbedEnvelope) -> HCCapability:
         reason = "the certificate retains no rows or geometry of the point"
     elif sample.design is None or envelope.order is None:
         reason = "the retained sample holds no scaled design or order scale"
-    certified = (
+    certified = linear or (
         envelope.selected_point is not None
         and certificate is not None
         and certificate.accepted
@@ -289,6 +308,26 @@ def _envelope_capability(envelope: RetainedAbsorbedEnvelope) -> HCCapability:
     )
 
 
+def cancelled_capability(accepted: bool, keep_influence: bool) -> HCCapability:
+    """The capability of a cancelled fit: its row terms and its full design."""
+    reason: str | None = None
+    if not accepted:
+        reason = "no selected point was certified for this candidate"
+    elif not keep_influence:
+        reason = "the influence was discarded (keep_influence=False)"
+    return HCCapability(
+        route="cancelled" if accepted else None,
+        formulation="cancelled group equations",
+        unit="rows",
+        weight_kind="none",
+        layout="absorbed",
+        breads=("observed",),
+        geometry="the cancelled point, its row terms and its full design",
+        available=reason is None,
+        reason=reason,
+    )
+
+
 def hc_capability(target: object) -> HCCapability:
     """The capability of a retained target for a named HC request (module docstring).
 
@@ -301,17 +340,7 @@ def hc_capability(target: object) -> HCCapability:
         ``target`` is neither a ``RetainedFit`` nor a ``RetainedAbsorbedEnvelope``.
     """
     if type(target) is RetainedCancelledEnvelope:
-        return HCCapability(
-            route=None,
-            formulation="cancelled group equations",
-            unit="groups",
-            weight_kind="none",
-            layout="dense",
-            breads=("observed",),
-            geometry="retained implicit design and original cancelled point",
-            available=False,
-            reason="cancelled HC leverage extension remains open",
-        )
+        return cancelled_capability(target.accepted, target.keep_influence)
     if type(target) is RetainedFit:
         return _fit_capability(target)
     if type(target) is RetainedAbsorbedEnvelope:
@@ -388,7 +417,7 @@ class RetainedHC:
 
     @property
     def degenerate(self) -> bool:
-        """Whether a reported standard error is exactly zero."""
+        """Whether a reported standard error is exactly zero (decision D49)."""
         return bool((self.standard_errors == 0.0).any())
 
     @property

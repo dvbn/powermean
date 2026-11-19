@@ -1,8 +1,11 @@
 """The forced full-RHS nuisance solve of the fitted-index Newton direction.
 
-Newton in the fitted index, one weighted absorption per iteration, no dense indicator
-matrix; the absorption controls are taken here as explicit arguments.  Internal
-module: ``powermean`` exports nothing of it.
+``design/02_computation.md``, Section 5.2 (Newton in the fitted index, one weighted
+absorption per iteration, no dense indicator matrix) and Section 5.7 (the absorption
+controls, taken here as explicit arguments); the M1.12 contract
+(``plan/evidence/M1.12_contract.txt``: the scope, Section 2 and private gap A; the
+mechanics, Section 1; the engineering and mathematical reviews); decision D51.  Task
+M1.12, private: ``powermean`` exports nothing of it.
 
 The equation.  With ``b = a r`` and ``C = diag(a c)`` (``a w`` only when the expected
 curvature was explicitly requested) at the current index, the nuisance part of the full
@@ -30,25 +33,25 @@ separately drifting ``h`` or ``u``.  The fresh error of level ``g`` of block ``k
 in the existing absorption units, and NOT the C-weighted mean of ``u``.  With ``rho``
 the maximum of ``|e|`` over every ORIGINAL block and level, and ``rho0`` that of the
 call's cold initial check (``alpha = 0``, the existing first check, held fixed for the
-call), success is
+call), success is (decision D74, correction B; ``plan/evidence/M1.12_revision_B.txt``)
 
     rho <= tolerance  and  [rho <= forcing * rho0  or  (rho <= af and sigma <= gtol)],
 
 each equality passing, decided in that order: the ceiling first, then the relative
 bound, then ``rho <= af``, and only then ``sigma``, which is evaluated nowhere else.
 
-The relative bound.  ``tolerance`` keeps
+The relative bound (D74; ``plan/evidence/M1.12_revision_A.txt``).  ``tolerance`` keeps
 its absolute meaning and schedule.  ``forcing`` is a dimensionless factor in
 ``[0, 0.9999]``, and ``rho <= forcing * rho0`` is decided exactly by
 :func:`within_forcing`, never through a rounded product: ``rho0 = 0`` passes at the
 initial check, ``rho0 > 0`` never admits ``h = 0`` by this branch, ``forcing = 0``
 admits an exactly zero residual only, and a positive subnormal ``rho0`` is kept.
 :func:`next_forcing` is the guarded accepted-progress update of SciPy v1.16.2
-``nonlin_solve`` (its four constants and its rule, not its code, norm, raw-norm
-multiplier, Krylov solver or outer optimizer), which the caller
+``nonlin_solve`` (``design/06_reuse_map.md``, X3: its four constants and its rule, not
+its code, norm, raw-norm multiplier, Krylov solver or outer optimizer), which the caller
 applies to the full native score ``s = max |G|`` of each new accepted origin.
 
-The guarded exception.  The EXISTING final absorption accuracy ``af``,
+The guarded exception (correction B).  The EXISTING final absorption accuracy ``af``,
 the raw-weight total ``A`` that the native score arithmetic has already formed (never
 ``sum(C)``) and the EXISTING native gradient tolerance ``gtol`` arrive together in the
 frozen :class:`RHSGuard`; no new control, floor on ``forcing * rho0`` or clamp exists.
@@ -62,7 +65,7 @@ first, and charged as diagnostic passes whether the solve then stops or continue
 refusal ends the call with ``range`` at the same candidate, its check, ``u``, ``rho``
 and work kept.  An unevaluated ``sigma`` is unavailable, never a pass.  At a final call
 (``tolerance = af``) success is ``rho <= af`` and (relative or ``sigma <= gtol``), not
-absolute-only.  A limitation: at ``rho0 = 0`` the relative branch passes
+absolute-only.  A disclosed limitation, kept: at ``rho0 = 0`` the relative branch passes
 the cold candidate without ``sigma``, even where the native row-first residual is not
 zero (``u = (1e16, 1, -1e16)``, ``A = 3``: the level sum of ``u`` is exactly zero, the
 native residual ``-0.5``); no universal no-false-zero guarantee follows.
@@ -101,8 +104,8 @@ symmetric conjugate gradient with an affine forcing; with additional C-null dire
 it is only a quotient argument, and neither unique zero-row predictions nor solvability
 follows.  A passing fresh check is not evidence that the equations are consistent.
 
-Work and statuses (:class:`~powermean.fe.absorb_acceleration.Work`): the initial
-check, and each native residual of the guarded exception, costs
+Work and statuses, charged as in task M1.4 (:class:`~powermean.fe.absorb_acceleration
+.Work`): the initial check, and each native residual of the guarded exception, costs
 diagnostic passes, one per block attempted, not sweeps; a forward traversal (G
 visits) or the direct visit costs one sweep; every symmetric application, the forced
 initialization included, reserves two sweeps and one operator before it starts and
@@ -121,17 +124,19 @@ from typing import Literal
 import numpy as np
 from numpy.typing import ArrayLike
 
-from powermean.fe.absorb import _budget, _flag, _tolerance
+from powermean.fe.absorb import _budget as _absorption_budget
+from powermean.fe.absorb import _flag as _absorption_flag
+from powermean.fe.absorb import _tolerance as _absorption_tolerance
 from powermean.fe.absorb_acceleration import (
     BREAKDOWN,
     BUDGET,
     CONVERGED,
-    RANGE,
     STATUSES,
     Work,
     _positive_finite,
     operator_cost,
 )
+from powermean.fe.absorb_acceleration import RANGE as _RANGE
 from powermean.fe.absorb_numeric import (
     Attempted,
     Coefficients,
@@ -154,6 +159,12 @@ from powermean.fe.absorb_numeric import (
 from powermean.fe.reductions import immutable_array
 from powermean.model.variance import FloatArray
 
+# The reduced right-hand-side route shares these exact controls and status.
+_budget = _absorption_budget
+_flag = _absorption_flag
+_tolerance = _absorption_tolerance
+RANGE = _RANGE
+
 RIGHT = "b must be a real vector with one finite value per row"
 RHO = (
     "zero or nonfinite recurrence residual norm while the full right-hand-side "
@@ -172,7 +183,7 @@ UNREPRESENTABLE = "the selected positive forcing factor is not representable in 
 POSITIVE = "must be a finite positive real number"
 NATIVE = "the native normalization (-u)/A is not representable in float64"
 
-# SciPy v1.16.2 nonlin_solve's forcing constants: the first factor, the
+# SciPy v1.16.2 nonlin_solve's forcing constants (design/06, X3): the first factor, the
 # progress weight gamma, the cap eta_max and the safeguard threshold.
 FORCING_INITIAL = 1e-3
 FORCING_GAMMA = 0.9
@@ -184,7 +195,7 @@ FORCING_THRESHOLD = 0.1
 
 
 def within_forcing(maximum: float, forcing: float, initial: float) -> bool:
-    """``maximum <= forcing * initial``, decided exactly.
+    """``maximum <= forcing * initial``, decided exactly (decision D74).
 
     With ``maximum = p / q``, ``forcing = u / v`` and ``initial = r / t`` the exact
     ratios of the doubles (``float.as_integer_ratio``, positive denominators), the
@@ -205,7 +216,7 @@ def within_forcing(maximum: float, forcing: float, initial: float) -> bool:
 
 
 def next_forcing(previous: tuple[float, float], score: float) -> float:
-    """The forcing factor of a new accepted origin (SciPy's rule).
+    """The forcing factor of a new accepted origin (decision D74, SciPy's rule).
 
     ``previous`` is the last issued pair ``(s_old, eta_old)`` and ``score`` the new
     origin's full native ``s = max |G|``.  In this order, each a binary64 operation:
@@ -280,7 +291,7 @@ def _positive(value: object, name: str) -> float:
 
 @dataclass(frozen=True)
 class RHSGuard:
-    """The existing accuracies of the guarded exception.
+    """The existing accuracies of the guarded exception (D74, correction B).
 
     Attributes
     ----------
@@ -308,7 +319,7 @@ class RHSGuard:
 
 @dataclass(frozen=True, eq=False)
 class NativeCheck:
-    """The native FE linear residual of one candidate.
+    """The native FE linear residual of one candidate (D74, correction B).
 
     Attributes
     ----------
@@ -413,7 +424,7 @@ class RHSResult:
         The fresh equations at the candidate; ``None`` when that check refused.
     native_check : NativeCheck or None
         The native residual of the guarded exception at the candidate, when it was
-        evaluated there; ``None`` otherwise: unavailable, not a pass.
+        evaluated there (correction B); ``None`` otherwise: unavailable, not a pass.
     status : str
         ``converged``, ``budget``, ``range`` or ``breakdown``.
     reason : str
@@ -516,10 +527,10 @@ class RHSCall:
     tolerance and the accepted score that set it (``None`` for an attempt's first
     direction and the final call), the budget and realization, the status and reason,
     the work and the largest equation; the counters are ``None`` when the call was
-    refused before solving (``status`` ``refused``).  Then the relative bound:
-    the issued ``forcing``, the cold ``initial`` maximum, and whether the
+    refused before solving (``status`` ``refused``).  Then the relative bound of
+    decision D74: the issued ``forcing``, the cold ``initial`` maximum, and whether the
     returned candidate met the ``absolute`` and the ``relative`` bound (``None`` where
-    unavailable).  Then the guarded exception: the actual ``guard``
+    unavailable).  Then the guarded exception of correction B: the actual ``guard``
     (``af``, ``A``, ``gtol``, kept by a refused call too), whether the candidate met
     ``af`` (``final_accuracy``), and its ``sigma`` and ``native`` pass when the guard
     evaluated them there (``None`` otherwise: unavailable, not a pass).
@@ -836,9 +847,7 @@ def _start(
     attempted = Attempted()
     try:
         if _forced is _ACCEPTED_FORCED:
-            r = _forced(
-                b, prepared, point.alpha, attempted, u_initial=point.u
-            )
+            r = _forced(b, prepared, point.alpha, attempted, u_initial=point.u)
         else:
             r = _forced(b, prepared, point.alpha, attempted)
         rows = lift(r, prepared.grouping)

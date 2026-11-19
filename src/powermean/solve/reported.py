@@ -1,26 +1,28 @@
 """The coefficients of a candidate on the reported scale, and the coefficient gate.
 
-The coefficient correction is measured in units of its standard error and must be at
-most ``coef_tol``; zero standard errors follow the gate below.
+``design/02_computation.md``, Section 7 (the coefficient correction, "in units of its
+standard error", at most ``coef_tol``, and the zero standard errors of decision D49);
+ledger note on task M0.11; decisions D49 and D51.
 
 The coefficient correction of the certificate is the Newton correction ``p = C^-1 S``
 of a candidate, mapped to the reported coefficients and compared with their standard
 errors.  Both belong to later stages: the standard errors to the covariance of the
-inference layer, the reported scale to the order layer and the column
-scaling.  A stage does not import a later one, so the caller supplies them, at
+inference layer (task M0.16), the reported scale to the order layer and the column
+scaling (tasks M0.17 and M0.20).  A stage does not import a later one
+(``design/11_engineering.md``, Section 3.1, rule 2), so the caller supplies them, at
 the candidate, through a :class:`ReportedScaleProvider`.  Called with the fresh
 evaluation that the certificate made at the candidate, it returns a
 :class:`ReportedScale`: that candidate, a matrix ``M`` that maps a correction of
 ``gamma`` to the reported coefficients, and their standard errors at the candidate, on
 the reported scale.  The certificate forms the reported correction ``M p`` from its own
 correction and refuses a record that names another candidate; it forms no covariance
-and no standard error.  Without effects, a caller whose coefficients are
+and no standard error.  At M0, without effects, a caller whose coefficients are
 ``beta = D^-1 gamma / omega`` (column scale ``D``, mean order ``omega``) supplies
 ``M = diag(1 / (omega d))`` and the standard errors ``sqrt(diag(M V M'))`` of the
 covariance ``V`` of ``gamma``: one map for the correction and for the covariance, so
 that their ratio does not depend on the scale.
 
-Two forms of the map.  The generic form is the dense matrix ``M``, which
+Two forms of the map (task M0.22).  The generic form is the dense matrix ``M``, which
 the certificate applies as the product ``M p``.  The direct form is the accepted
 :class:`~powermean.model.order_scale.OrderScale` itself, whose ``coefficients`` maps a
 correction entry by entry with exact exponents and whose ``covariance`` and
@@ -34,13 +36,13 @@ provider supplies one form or the other; the record applies the one it holds, an
 that is not representable, or formed from a correction that is not finite, is NaN,
 which the gate fails: nothing is floored or replaced by a zero.
 
-The gate.  For each reported coefficient ``j``, with the correction ``c_j`` and
+The gate (D49).  For each reported coefficient ``j``, with the correction ``c_j`` and
 the standard error ``se_j``:
 
     passed     c_j and se_j finite, se_j >= 0, and |c_j| <= coef_tol * se_j
     ratio      |c_j| / se_j where se_j is finite and positive; undefined (NaN) otherwise
 
-The product form decides, not the ratio: a correction equal to
+The product form of D49 decides, not the ratio: a correction equal to
 ``coef_tol * se_j`` passes, and at ``se_j = 0`` (``-0.0`` included, which equals zero)
 only an exactly zero correction passes.  The ratio of a zero standard error is
 undefined, and the record flags inference as degenerate
@@ -250,7 +252,7 @@ class ReportedScaleProvider(Protocol):
 
 @dataclass(frozen=True, eq=False)
 class CoefficientCheck:
-    """The coefficient gate, coefficient by coefficient, on the reported scale.
+    """The coefficient gate of D49, coefficient by coefficient, on the reported scale.
 
     ``corrections`` are the reported corrections ``M p`` and ``standard_errors`` those
     supplied; ``passed`` says whether each coefficient passes at ``coef_tol``, and
@@ -270,7 +272,7 @@ class CoefficientCheck:
 
     @property
     def degenerate(self) -> bool:
-        """Whether a standard error is zero: its ratio is undefined."""
+        """Whether a standard error is zero: its ratio is undefined (D49)."""
         return bool(np.any(self.standard_errors == 0))
 
     @property
@@ -284,7 +286,7 @@ class CoefficientCheck:
 def coefficient_check(
     corrections: FloatArray, standard_errors: FloatArray, coef_tol: float
 ) -> CoefficientCheck:
-    """The coefficient gate: ``|c_j| <= coef_tol * se_j`` for finite ``se_j >= 0``.
+    """The gate of D49: ``|c_j| <= coef_tol * se_j`` for finite ``se_j >= 0``.
 
     Parameters
     ----------
@@ -303,7 +305,7 @@ def coefficient_check(
     if corrections.ndim != 1 or corrections.shape != standard_errors.shape:
         raise ValueError("corrections and standard errors must be aligned vectors")
     with np.errstate(over="ignore", invalid="ignore"):
-        # The gate admits finite nonnegative standard errors only, tested as such: the
+        # D49 admits finite nonnegative standard errors only, tested as such: the
         # inequality does not exclude a negative one, since coef_tol below one times
         # the smallest negative subnormal rounds to -0.0, which a zero correction meets.
         valid = np.isfinite(standard_errors) & (standard_errors >= 0)
@@ -321,6 +323,39 @@ def coefficient_check(
         passed=_frozen_flags(passed),
         ratios=_immutable(ratios),
     )
+
+
+def saturated(count: int, dimension: int) -> bool:
+    """Whether a fit is saturated: as many observations as parameters.
+
+    ``count`` is the statistical count of the rows of positive weight: their number, or
+    their frequency total with frequency weights (:func:`saturated_rows`); ``dimension``
+    the identified dimension of the estimating equation.  A structural decision, an
+    integer comparison and never a threshold (owner's rulings 65 and 74;
+    ``briefs/SATFIX.md``).  With as many observations as that dimension and a design of
+    full column rank, the equation's root is exact: every residual is zero, and so are
+    the Newton correction and every sandwich meat, whose computed values are rounding
+    noise.  The gate of D49 compares two such noises and cannot decide, so it does not
+    apply to a saturated fit; no standard error is formed for it, and every
+    covariance of the fit is missing (``covariance.saturated``).  A design that is
+    not of full column rank fails the conditioning gate whatever this says.
+    """
+    return count == dimension
+
+
+def saturated_rows(weights: FloatArray, dimension: int, *, frequency: bool) -> bool:
+    """:func:`saturated` on the statistical count of the rows of positive weight given.
+
+    ``weights`` are the raw weights of those rows.  The count is their frequency total
+    with frequency weights, else their number, so that a frequency-weighted sample and
+    its expansion are decided alike (``pyfixest`` fweights and Stata ``fweight`` count
+    observations this way).  A frequency total is at least the number of rows, which is
+    at least an identified dimension, so the total is formed only where the rows equal
+    the dimension: elsewhere the decision is one comparison.
+    """
+    if not saturated(int(weights.size), dimension):
+        return False
+    return not frequency or saturated(int(np.sum(weights)), dimension)
 
 
 def _frozen_flags(flags: BoolArray) -> BoolArray:

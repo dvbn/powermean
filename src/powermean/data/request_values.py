@@ -1,13 +1,16 @@
-"""The value rules and the serialization shared by the internal request records.
+"""The value rules and the serialization shared by the private records of milestone M1.
 
-The records of :mod:`powermean.data.inference_requests` and
-:mod:`powermean.data.inference_conventions` check their fields with the functions below
-and serialize themselves through :func:`serialized` and :func:`settings`.  Nothing here
-reads data, resolves a convention or computes.
+``plan/evidence/M1_contract.txt``, Sections 2 (rule B9), 5.1 and 6; decisions D47,
+whose pattern the contract applies to every new value, and D65.  The records of
+:mod:`powermean.data.inference_requests` and
+:mod:`powermean.data.inference_conventions` check their fields with the functions
+below and serialize themselves through :func:`serialized` and :func:`settings`.
+Nothing here reads data, resolves a convention or computes.
 
-Omitted and explicit settings.  A setting that a request omits holds :data:`OMITTED`,
-not a value: an omitted lag or cutoff is left to its automatic rule, and an omitted
-step, units or distance takes the default, which the ``resolved_*`` properties of the
+Omitted and explicit settings (rule B9).  A setting that a request omits holds
+:data:`OMITTED`, not a value: an omitted lag leaves it to the automatic rule of
+decision D63, an omitted cutoff to that of decision D64, and an omitted step, units or
+distance takes the approved default, which the ``resolved_*`` properties of the
 request return; an explicit lag or cutoff of zero is a value.  ``None`` is never an
 omission: it is refused wherever the domain excludes it, ``lag=None`` included.
 
@@ -15,17 +18,18 @@ Values.  A name is a nonempty string, stored as given.  An integer setting accep
 number of a type registered as ``numbers.Integral`` and stores the exact ``int``; the
 cutoff accepts a number of a type registered as ``numbers.Real`` and stores the nearest
 ``float``, ``-0.0`` as ``0.0``.  Booleans, NumPy durations, strings and floats for an
-integer are refused, never converted: the rules of :mod:`powermean.solve.options`, which
-this layer does not import.  A value outside its domain raises ``SpecificationError``
-(``specification.invalid_value``) whose ``argument`` is the key in its public spelling;
-a forbidden combination raises ``specification.conflicting``.
+integer are refused, never converted: the rules of
+:mod:`powermean.solve.options`, which this layer does not import.  A value outside its
+domain raises ``SpecificationError`` (``specification.invalid_value``) whose
+``argument`` is the key of the approved spelling; a forbidden combination raises
+``specification.conflicting``.
 
 Serialization.  ``to_dict`` returns a new mapping of plain data, the type of the record
 under ``"type"`` and only the settings given, sequences as lists; ``from_dict`` reads
 it back, an absent setting as omitted, so that the round trip keeps presence.  What
 ``from_dict`` reads must be a mapping: anything else, a list of pairs included, is
 refused (``specification.invalid_value``, argument ``record``) before any key is read,
-as the solver records of :mod:`powermean.solve.absorbed` refuse it, so that no
+as the solver records of :mod:`powermean.solve.m1_options` refuse it, so that no
 repeated key of a sequence of pairs is silently reduced to its last value.  A mapping
 of another type raises ``ValueError``; a key that names no field raises
 ``SpecificationError`` (``specification.unknown_option``).  A JSON text with a

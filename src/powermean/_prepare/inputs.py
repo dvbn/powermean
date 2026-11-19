@@ -1,10 +1,11 @@
 """Input column extraction and subset-mask helpers for frame preparation.
 
-These helpers belong to steps 1 and 2 of the sample construction.  The module
-provides :class:`Columns`, :func:`_column`, :func:`_values`, :func:`_doubles`,
-:func:`_nan`, :func:`_object_subset`, :func:`_subset_mask`,
-:func:`_check_same_data`, and :func:`_inputs`, extracted from
-:mod:`powermean._prepare.compose`.
+``design/02_computation.md``, Section 2, steps 1 and 2; ``design/11_engineering.md``,
+Section 3.1; decisions D41, D51 and D55.  Extracts :class:`Columns`, :func:`_column`,
+:func:`_values`, :func:`_doubles`, :func:`_nan`, :func:`_object_subset`,
+:func:`_subset_mask`, :func:`_check_same_data`, and :func:`_inputs` from
+:mod:`powermean._prepare.compose`. An empty evaluated frame is refused as an
+empty estimation sample before constructing the nonempty raw input record.
 """
 
 from __future__ import annotations
@@ -17,10 +18,15 @@ import numpy as np
 import pandas as pd
 from numpy.typing import ArrayLike
 
-from powermean.data.raw import AnyArray, RawInputs, RawWeights
+from powermean.data import raw
+from powermean.data.raw import AnyArray
 from powermean.data.weights import WeightKind
+from powermean.errors import SampleError
 from powermean.formula import validity
 from powermean.formula.frame import ModelFrame
+
+RawInputs = raw.RawInputs
+RawWeights = raw.RawWeights
 
 
 @dataclass(frozen=True)
@@ -159,6 +165,8 @@ def _inputs(
         metadata[columns.cluster] = _values(column)
     for name in columns.metadata:
         metadata[name] = _values(_column(data, name))
+    if frame.outcome.size == 0:
+        raise SampleError("sample.empty", {"count": 0})
     inputs = RawInputs(
         _doubles(frame.outcome),
         design.matrix.to_numpy(dtype=np.float64, na_value=np.nan),

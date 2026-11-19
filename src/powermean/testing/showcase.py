@@ -2,7 +2,7 @@
 
 The showcase is not a design of the paper.  It exists so that every argument of the
 package can be tried on one dataset whose parameters are known.  Its outcome laws
-are those of the solver study.
+are those of the solver campaign.
 
 The mean of ``y`` is ``exposure * exp(index)``, where the index sums a firm effect,
 a year effect and the regressors with the coefficients of ``SHOWCASE_TRUTH``.  Every
@@ -53,7 +53,7 @@ SHOWCASE_LAWS: dict[str, tuple[str, Mapping[str, float]]] = {
     "lognormal_heavy": ("lognormal_dmc", {"residual_sd": 2.5}),
     "contamination": ("contamination", CONTAMINATION),
 }
-"""Outcome laws of the solver study, by the names used in its design ids."""
+"""Outcome laws of the solver campaign, by the names used in its design ids."""
 
 SHOWCASE_TRUTH: dict[str, float] = {
     "treat": TREATMENT_COEFFICIENT,

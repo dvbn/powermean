@@ -1,18 +1,20 @@
 """The reported scale of a mean order: what the transformed problem maps back to.
 
-The systems, solvers, the certificate and the covariances of the package work in the
-coordinates of the solver: the coefficients ``theta`` of the transformed problem of
-:mod:`powermean.model.order`, on a design whose columns the data layer scales, ``X
-D^-1`` with ``D = diag(d)`` and ``d > 0``.  So ``gamma = D^-1 theta``, and the reported
-coefficients are ``beta = gamma / omega`` (``theta / scale / omega``):
+``design/01_statistical_core.md``, Section 3.1 (the table of the mapping);
+``DESIGN.md``, Section 3.1; decisions D49, D51 and D54.  The systems, solvers, the
+certificate and the covariances of the package work in the coordinates of the solver:
+the coefficients ``theta`` of the transformed problem of :mod:`powermean.model.order`,
+on a design whose columns the data layer scales, ``X D^-1`` with ``D = diag(d)`` and
+``d > 0`` (task M0.20).  So ``gamma = D^-1 theta``, and the reported coefficients are
+``beta = gamma / omega``, as S5 forms them (``theta / scale / omega``):
 
     M = D^-1 / omega     at an order omega != 0
     M = D^-1             at omega = 0, log OLS: the identity order scale
 
-Every coefficient of the system is reported: the selector ``L`` is the identity, and a
-selection of reported coefficients takes rows of ``M``.  :class:`OrderScale` applies the
-column unscaling and the order once, together, to quantities in the coordinates of the
-solver:
+At the first milestone every coefficient of the system is reported: the selector ``L``
+of file 01 is the identity, and a selection of reported coefficients takes rows of
+``M``.  :class:`OrderScale` applies the column unscaling and the order once, together,
+to quantities in the coordinates of the solver:
 
     in the coordinates of theta              reported                    method
     coefficients, corrections, biases t      t_j / d_j / omega           coefficients
@@ -25,35 +27,42 @@ solver:
     a start beta of the coefficients    d_j omega beta_j             solver_coefficients
 
 At ``omega = 0`` no division by ``omega`` is formed, and the forward map of a start is
-``d_j beta_j``.  The forward map is the inverse of ``coefficients``, written with the
-same exact exponents: ``omega = d = 2^-600`` and ``beta = 2^300`` give ``theta =
-2^-900`` although the product ``omega d`` underflows, and ``omega = d = 2^600`` and
-``beta = 2^-900`` give ``theta = 2^300`` although ``omega d`` overflows; the sign of
-``beta`` and of ``omega`` is kept, a nonzero result that is not representable raises
-``FloatingPointError``, and the start is otherwise the exact value requested where it is
-a double.  A negative order reverses the signed maps, not the covariance or the standard
-errors: ``se_gamma / omega`` holds for a positive order only and is not used.  The
-influences are coefficient influences, the contributions of an influence record mapped
-by its influence map (``powermean.inference.influence.influence_values``): neither the
-raw scores nor the bread are rescaled, and the order is applied once.  A missing
-standard error (NaN) stays missing and a zero one stays zero.  ``M`` is the map that the
-certificate and ``powermean.inference.provider.CovarianceScale`` receive; their
+``d_j beta_j``.  The forward map (task M0.22) is the inverse of ``coefficients``,
+written with the same exact exponents: ``omega = d = 2^-600`` and ``beta = 2^300`` give
+``theta = 2^-900`` although the product ``omega d`` underflows, and ``omega = d =
+2^600`` and ``beta = 2^-900`` give ``theta = 2^300`` although ``omega d`` overflows;
+the sign of ``beta`` and of ``omega`` is kept, a nonzero result that is not
+representable raises ``FloatingPointError``, and the start is otherwise the exact
+value requested where it is a double.  A negative order reverses the
+signed maps, not the covariance or the standard errors: S5's ``se_gamma / omega`` holds
+on its positive domain only and is not carried.  The influences are coefficient
+influences, the contributions of an influence record mapped by its influence map
+(``powermean.inference.influence.influence_values``): neither the raw scores nor the
+bread are rescaled, and the order is applied once.  A missing standard error (NaN) stays
+missing and a zero one stays zero, as decision D49 reads them.  ``M`` is the map that
+the certificate and ``powermean.inference.provider.CovarianceScale`` receive; their
 candidate stays in the coordinates of the solver.  Absorbed effects, which carry no
 column scale, map with a scale of ones.  A working variance never enters.
 
-Arithmetic.  The divisors are applied with exact exponents.  A value is split into its
-significand and its power of two (``frexp``, exact); an intermediate quotient or product
-rounds its significand once, as a double would; and the last quotient is one correctly
-rounded division of two exact doubles, normal or subnormal (``ldexp``).  So no
-intermediate ``omega^2``, ``omega d`` or ``theta / d`` overflows or underflows on the
-way to a representable result, and no finite order is restricted for it.  ``omega^2`` is
-``omega**2`` wherever that is a normal double, and the square of the significand of
-``omega`` elsewhere.  Where the direct expressions (``theta / scale / omega``, ``V /
-omega**2``, ``se / omega``) form normal intermediates, the result is theirs bit for bit;
-elsewhere it keeps the bits that they lose.  A result beyond the largest double, or a
-nonzero result that rounds to zero, raises ``FloatingPointError``: nothing is floored,
-clipped or replaced, and no zero is made of a nonzero value.  Arguments are not
-modified, and the results are owned read-only arrays.
+Arithmetic (decision D51).  The divisors are applied with exact exponents.  A value is
+split into its significand and its power of two (``frexp``, exact); an intermediate
+quotient or product rounds its significand once, as a double would; and the last
+quotient is one correctly rounded division of two exact doubles, normal or subnormal
+(``ldexp``).  So no intermediate ``omega^2``, ``omega d`` or ``theta / d`` overflows or
+underflows on the way to a representable result, and no finite order is restricted for
+it.  ``omega^2`` is S5's ``omega**2`` wherever that is a normal double, and the square
+of the significand of ``omega`` elsewhere.  Where S5's expressions (``theta / scale /
+omega``, ``V / omega**2``, ``se / omega``) form normal intermediates, the result is
+theirs bit for bit (``tools/verify_ports.py``, Section 10); elsewhere it keeps the bits
+that they lose.  A result beyond the largest double, or a nonzero result that rounds to
+zero, raises ``FloatingPointError``: nothing is floored, clipped or replaced, and no
+zero is made of a nonzero value (decisions D49 and D54).  Arguments are not modified,
+and the results are owned read-only arrays.
+
+Adaptation of the order maps of ``power_mean.fit_omega`` of the application replication
+(source S5 of ``design/06_reuse_map.md``, lines 128-130, 150 and 175-181); the
+generalizations to every finite order, to the identity order scale of log OLS and to the
+range-safe arithmetic are recorded in ``PROVENANCE.md``, Section 11.
 """
 
 from __future__ import annotations
@@ -143,7 +152,7 @@ def _final_quotient(left: Split, right: Split, name: str) -> FloatArray:
 
 
 def _square(omega: float) -> Split:
-    """``omega^2``: ``omega**2`` where it is a normal double, else carried exactly.
+    """``omega^2``: S5's ``omega**2`` where it is a normal double, else carried exactly.
 
     Outside :data:`SQUARE_EXPONENTS` the double ``omega**2`` overflows or loses bits
     below the normal range; its significand is then the square of that of ``omega``,

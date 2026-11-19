@@ -1,6 +1,6 @@
 """Partitioned FE geometry without a full joint CSC assembly.
 
-The exact categorical
+Design 02, Section 7 and the analytical-system exception: the exact categorical
 principal block is diagonal. Raw entries retain their row-order sums. Ordinary
 and curvature views retain raw partition storage plus scales, not three full
 joint matrices. Full CSC materialization is a separate, lossless rich operation.
@@ -9,15 +9,19 @@ No factor, provider, sample graph or caller ndarray is retained here.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
-from typing import Literal
+from importlib import import_module
+from typing import Literal, cast
 
 import numpy as np
 
 from powermean.fe._cancel_storage import FloatStorage, IndexStorage
 from powermean.model.order import IndexArray
 from powermean.model.variance import FloatArray
-from powermean.solve.sparse_matrix import SparseMatrix
+from powermean.solve.sparse_matrix import SparseMatrix as _SparseMatrix
+
+SparseMatrix = _SparseMatrix
 
 MatrixKind = Literal["raw", "ordinary", "curvature"]
 Entries = tuple[IndexArray, IndexArray, FloatArray]
@@ -35,14 +39,19 @@ class CscStorage:
     @classmethod
     def of(cls, matrix: SparseMatrix) -> CscStorage:
         """Own checked canonical partition buffers without retaining array headers."""
-        return cls(matrix.shape, IndexStorage.store(matrix.indptr),
-                   IndexStorage.store(matrix.indices), FloatStorage.store(matrix.data))
+        return cls(
+            matrix.shape,
+            IndexStorage.store(matrix.indptr),
+            IndexStorage.store(matrix.indices),
+            FloatStorage.store(matrix.data),
+        )
 
     @property
     def matrix(self) -> SparseMatrix:
         """Fresh private headers on immutable partition bytes."""
-        return SparseMatrix(self.shape, self.pointers.view(), self.rows.view(),
-                            self.values.view())
+        return SparseMatrix(
+            self.shape, self.pointers.view(), self.rows.view(), self.values.view()
+        )
 
     @property
     def nnz(self) -> int:
@@ -50,8 +59,9 @@ class CscStorage:
         return self.values.shape[0]
 
 
-def canonical_partition(entries: Entries, shape: tuple[int, int], *,
-                        omit_zeros: bool = True) -> CscStorage:
+def canonical_partition(
+    entries: Entries, shape: tuple[int, int], *, omit_zeros: bool = True
+) -> CscStorage:
     """Sort distinct entries by column then row, preserving every summed value."""
     rows, cols, values = entries
     if omit_zeros:
@@ -62,8 +72,12 @@ def canonical_partition(entries: Entries, shape: tuple[int, int], *,
     if np.any((np.diff(rows) == 0) & (np.diff(cols) == 0)):
         raise ValueError("an ordered entry of the Hessian was summed twice")
     pointers = np.concatenate(([0], np.cumsum(np.bincount(cols, minlength=shape[1]))))
-    matrix = SparseMatrix(shape, np.asarray(pointers, dtype=np.intp),
-                          np.asarray(rows, dtype=np.intp), np.asarray(values, dtype=np.float64))
+    matrix = SparseMatrix(
+        shape,
+        np.asarray(pointers, dtype=np.intp),
+        np.asarray(rows, dtype=np.intp),
+        np.asarray(values, dtype=np.float64),
+    )
     return CscStorage.of(matrix)
 
 
@@ -87,34 +101,38 @@ class MatrixParts:
     @property
     def nnz(self) -> int:
         """All stored entries of the implicit FULL matrix."""
-        return (self.stored_diagonal.view().size + self.left.nnz
-                + self.right.nnz + self.remainder.nnz)
+        return (
+            self.stored_diagonal.view().size
+            + self.left.nnz
+            + self.right.nnz
+            + self.remainder.nnz
+        )
 
 
-def partition_entries(parts: MatrixParts) -> tuple[Entries, ...]:
+def partition_entries(parts: MatrixParts) -> Iterator[Entries]:
     """Map each disjoint partition back to original full row/column coordinates."""
     start, _ = parts.block
     remaining = parts.remaining.view()
     diagonal = parts.stored_diagonal.view()
-    left, right, remainder = (p.matrix for p in
-                              (parts.left, parts.right, parts.remainder))
-    return (
-        (start + diagonal, start + diagonal, parts.diagonal.view()[diagonal]),
-        (remaining[left.indices], start + left.columns, left.data),
-        (start + right.indices, remaining[right.columns], right.data),
-        (remaining[remainder.indices], remaining[remainder.columns], remainder.data),
+    left, right, remainder = (
+        p.matrix for p in (parts.left, parts.right, parts.remainder)
     )
+    yield start + diagonal, start + diagonal, parts.diagonal.view()[diagonal]
+    yield remaining[left.indices], start + left.columns, left.data
+    yield start + right.indices, remaining[right.columns], right.data
+    yield remaining[remainder.indices], remaining[remainder.columns], remainder.data
 
 
 def materialize_parts(parts: MatrixParts) -> SparseMatrix:
     """One detached full CSC, only for an actual explicit/rich consumer."""
-    entries = partition_entries(parts)
+    entries = tuple(partition_entries(parts))
     rows = np.concatenate([e[0] for e in entries])
     cols = np.concatenate([e[1] for e in entries])
     values = np.concatenate([e[2] for e in entries])
     # Ordinary equilibration retains H's pattern even if an entry underflows.
-    return canonical_partition((rows, cols, values), (parts.dimension, parts.dimension),
-                               omit_zeros=False).matrix
+    return canonical_partition(
+        (rows, cols, values), (parts.dimension, parts.dimension), omit_zeros=False
+    ).matrix
 
 
 @dataclass(frozen=True, eq=False)
@@ -137,10 +155,14 @@ class CompactMatrix:
         if self.kind == "raw":
             return self.raw
         if not self._working:
-            from powermean.solve.compact_scaling import scaled_parts
-
             assert self.scaling is not None
-            self._working.append(scaled_parts(self.raw, self.scaling.view(), self.kind))
+            # The scaler imports these storage records. Resolve it only when a
+            # scaled view is first needed, after both modules are initialized.
+            scale = cast(
+                "Callable[[MatrixParts, FloatArray, MatrixKind], MatrixParts]",
+                import_module("powermean.solve.compact_scaling").scaled_parts,
+            )
+            self._working.append(scale(self.raw, self.scaling.view(), self.kind))
         return self._working[0]
 
     @property
@@ -185,13 +207,26 @@ class CompactMatrix:
         """A passive copy with no working graph, factor or shared mutable header."""
         return CompactMatrix(self.raw, self.kind, self.scaling)
 
+    def _release_working(self) -> None:
+        """Drop scaled partitions after the owning certificate finishes."""
+        self._working.clear()
+
     def binding(self) -> tuple[object, ...]:
         """Exact immutable value binding, without serializing a full CSC graph."""
         p = self.raw
-        matrices = tuple((m.shape, m.pointers.data, m.rows.data, m.values.data)
-                         for m in (p.left, p.right, p.remainder))
-        return (p.block, p.remaining.data, p.diagonal, p.stored_diagonal.data,
-                matrices, self.kind, self.scaling)
+        matrices = tuple(
+            (m.shape, m.pointers.data, m.rows.data, m.values.data)
+            for m in (p.left, p.right, p.remainder)
+        )
+        return (
+            p.block,
+            p.remaining.data,
+            p.diagonal,
+            p.stored_diagonal.data,
+            matrices,
+            self.kind,
+            self.scaling,
+        )
 
 
 def matrix_nnz(matrix: SparseMatrix | CompactMatrix) -> int:

@@ -1,8 +1,8 @@
-"""Explicit incremental array-byte and array-visit bounds.
+"""Explicit incremental array-byte and array-visit bounds (design03 5.2).
 
 These bounds include final immutable copies, LU/solve arrays, full-coordinate
 vectors, selected outputs and fresh accepted geometry checks. They exclude the
-already owned design and geometry, caller inputs, Python metadata, user callback
+already owned design/geometry, caller inputs, Python metadata, user callback
 internals and vendor-private work. They are not OS memory or wall-time limits.
 There is no FE-count cap and no newly chosen numerical/budget default.
 """

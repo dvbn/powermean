@@ -1,8 +1,10 @@
 """The whole-point state of a profiled Newton attempt: trials, schedule, alarms, work.
 
-During iteration the solver stops when fitted means at zero rows collapse or the
-criterion decreases without bound, and nothing is dropped on the basis of an iterate.
-Internal module.
+``design/02_computation.md``, Section 4 (during iteration: stop when fitted means at
+zero rows collapse or the criterion decreases without bound, and nothing is dropped on
+the basis of an iterate) and Sections 5.2 and 5.7; the M1.11 contract with its
+conditional outline (Sections 3 and 4), the private mechanics B (Sections 2 to 4) and
+their reviews; decisions D51 and D68 to D72.  Task M1.11, private.
 
 :class:`ProfiledEvaluator` is the state of one attempt of the profiled Newton solver,
 the :class:`~powermean.solve.newton_convex.ProfiledEvaluation` that the profiled linear
@@ -12,22 +14,22 @@ the absorption schedule and the indications.
 :func:`final_work` is the fresh final work after a native stop.  The points are those
 of :mod:`powermean.systems.profiled` (the accepted profiles and absorption, unchanged).
 
-Points and transactions.  Every trial profiles its own slopes from
+Points and transactions (outline, Section 3).  Every trial profiles its own slopes from
 the warm state, the effects of the most recent successfully evaluated point: the
-accepted one, or a completed trial of the current line search.  A trial
-whose profile refuses by range, or whose criterion or
+accepted one, or a completed trial of the current line search (S1 continues from its
+last successful profile).  A trial whose profile refuses by range, or whose criterion or
 gradient is not representable, is refused by the existing search and leaves the warm
 state as it was.  A completed trial is held, never accepted by itself: when the search
 accepts a trial, that trial's whole bundle (slopes, base, effects, index, profile, loss
 and gradient) becomes the accepted bundle, and a refused or interrupted search restores
 the accepted bundle's effects as the warm state.  The derivatives are evaluated at the
 accepted point only.  A profile or an absorption that spends its sweeps raises
-:class:`~powermean.solve.newton_convex.InnerLimitError`: the attempt stops,
-and it is not a refused trial with a new allowance.
+:class:`~powermean.solve.newton_convex.InnerLimitError`: the attempt stops (S1
+``FEInnerLimit``), it is not a refused trial with a new allowance.
 
-Schedule: :func:`next_tolerance`.  The first direction of an
+Schedule (mechanics B, Section 2): :func:`next_tolerance`.  The first direction of an
 attempt absorbs at ``a0 = absorb_tol_start``; after an accepted step, with ``s`` the
-largest absolute averaged gradient of that accepted point, the
+largest absolute averaged gradient of that accepted point (the engine's quantity), the
 next direction uses ``max(b, a / 10)`` when ``s < a`` and ``a > b``, with
 ``b = min(a0, af)``, and ``a`` otherwise; the tolerance is constant within an iteration
 and its trials; the final absorption uses exactly ``af``.  Every profile uses
@@ -45,7 +47,7 @@ calculation and creates no slope state; accepting it clears the old seed.  The s
 state is apart from the nonlinear warm state of the profiles and is never taken from
 a held or trial profile.
 
-Indications: ZC and GC of
+Indications (mechanics B, Section 3): ZC and GC of
 :mod:`powermean.solve.profiled_indications` (whose names this module still provides),
 evaluated at the completed initial profile, at each newly accepted point after the
 native convergence test (before the iteration could honor it), and at the fresh final
@@ -59,7 +61,7 @@ the accepted steps before it, its role, controls, status and the work it returne
 rejected, refused and final calls included; a call refused before the accepted routine
 counted anything has no work record, not zero work.  A completed absorption whose Schur
 matrix then proves not representable keeps its status and work, with that later range
-failure recorded apart; the direction still refuses, and the final work
+failure recorded apart (correction A); the direction still refuses, and the final work
 keeps the completed absorption.  Nothing here is charged to the pointwise-evaluation
 budget of the iteration: the profiled linear loss admits each evaluation before the work
 of this module starts (:mod:`powermean.solve.profiled_linear_loss`).
@@ -78,8 +80,8 @@ from powermean.fe.profile import BUDGET, ProfileState, Work
 from powermean.fe.profile_nb2 import ScalarWork
 from powermean.fe.reductions import immutable_array
 from powermean.model.order import IndexArray
-from powermean.model.variance import FloatArray, PowerVariance
-from powermean.solve.absorbed import AbsorbedOptions
+from powermean.model.variance import FloatArray, PowerVariance, score_unit
+from powermean.solve.m1_options import AbsorbedOptions
 from powermean.solve.newton_convex import IndicationError, InnerLimitError
 from powermean.solve.options import Curvature
 from powermean.solve.profiled_indications import (
@@ -97,24 +99,30 @@ from powermean.systems.profiled import (
     PointEquations,
     PointProfile,
     ProfiledProblem,
-    _absorb_slopes,
     _positive_slope_curvature,
     _slope_state,
-    absorb_slopes,
     point_equations,
-    profile_point,
 )
+from powermean.systems.profiled import _absorb_slopes as _project_slopes
+from powermean.systems.profiled import absorb_slopes as _profiled_slopes
+from powermean.systems.profiled import profile_point as _point_profile
 
 if TYPE_CHECKING:
+    from powermean.solve.reduced_execution import ReducedExecution
     from powermean.solve.reduced_nonlinear import ConditionalPoint
+
+# Shared live callbacks for the profiled and conditional optimizers.
+profile_point = _point_profile
+absorb_slopes = _profiled_slopes
+_absorb_slopes = _project_slopes
 
 _REDUCED_PROFILE = profile_point
 
 _REDUCED_ABSORB = absorb_slopes
 _REDUCED_PRIVATE_ABSORB = _absorb_slopes
 
-# The names of this module, and those of the indications defined in
-# solve/profiled_indications.py, whose import routes from here are kept.
+# The names of this module and of the indications that correction A moved from it to
+# solve/profiled_indications.py: their import routes from here are kept.
 __all__ = [
     "INDEX_MARGIN",
     "LOG_MEAN_TOLERANCE",
@@ -139,7 +147,7 @@ __all__ = [
     "zero_row_alarm",
 ]
 
-# ppmlhdfe 2.3.4, ppmlhdfe.mata, line 823: the partial-out tolerance tightens tenfold.
+# S9 ppmlhdfe.mata, line 823: the partial-out tolerance tightens tenfold.
 TIGHTENING = 10.0
 
 ProfileRole = Literal["initial", "trial", "final"]
@@ -153,7 +161,7 @@ REFUSED = "refused"
 def next_tolerance(
     current: float, score: float, *, start: float, final: float
 ) -> float:
-    """The absorption tolerance of the next direction.
+    """The absorption tolerance of the next direction (mechanics B, Section 2).
 
     ``max(min(start, final), current / 10)`` when ``score < current`` and ``current``
     exceeds ``min(start, final)``; otherwise ``current``.  Equality does not tighten; a
@@ -329,6 +337,7 @@ class ProfiledEvaluator:
             type(problem.variance) is PowerVariance and problem.variance.tau == 2
         )
         self.tolerance = controls.absorb_tol_start
+        self.unit = score_unit(problem.z, problem.weights, problem.variance)
         self.score: float | None = None
         self.steps = 0
         self.opening: PointProfile | ConditionalPoint | None = None
@@ -427,8 +436,12 @@ class ProfiledEvaluator:
     # ----------------------------------------------------------- directions
 
     def _absorbed(
-        self, weights: FloatArray, role: AbsorptionRole, tolerance: float,
-        *, index: FloatArray | None = None,
+        self,
+        weights: FloatArray,
+        role: AbsorptionRole,
+        tolerance: float,
+        *,
+        index: FloatArray | None = None,
     ) -> Absorbed:
         """One logged absorption of the slopes with ``weights`` at ``tolerance``.
 
@@ -452,13 +465,21 @@ class ProfiledEvaluator:
             self.slope_seed, self.slope_pending = None, None
             self.slope_cold_origin = None
         try:
-            reduced = self.problem.__dict__.get("_reduced_execution")
+            reduced: ReducedExecution | None = self.problem.__dict__.get(
+                "_reduced_execution"
+            )
             direct = None
-            if (reduced is not None and index is not None
-                    and absorb_slopes is _REDUCED_ABSORB
-                    and _absorb_slopes is _REDUCED_PRIVATE_ABSORB):
+            if (
+                reduced is not None
+                and index is not None
+                and absorb_slopes is _REDUCED_ABSORB
+                and _absorb_slopes is _REDUCED_PRIVATE_ABSORB
+            ):
                 direct = reduced.project(
-                    weights, index, tolerance=tolerance, acceleration=limits[1],
+                    weights,
+                    index,
+                    tolerance=tolerance,
+                    acceleration=limits[1],
                     final_observed=role == "final" and self.curvature == "observed",
                 )
             if direct is not None:
@@ -518,7 +539,8 @@ class ProfiledEvaluator:
         self.slope_pending = None
         self.slope_cold_origin = None
         bound = (
-            {} if self.problem.__dict__.get("_reduced_execution") is None
+            {}
+            if self.problem.__dict__.get("_reduced_execution") is None
             else {"index": self._accepted().index}
         )
         absorbed = self._absorbed(weights, "direction", self.tolerance, **bound)
@@ -614,7 +636,7 @@ class ProfiledEvaluator:
         score = float(np.max(np.abs(gradient)))
         self.tolerance = next_tolerance(
             self.tolerance,
-            score,
+            score / self.unit,
             start=self.controls.absorb_tol_start,
             final=self.controls.absorb_tol_final,
         )
@@ -629,7 +651,9 @@ class ProfiledEvaluator:
         converged: bool,
     ) -> Alarm | None:
         """ZC at ``point`` and ``chord`` coalesced into one kept alarm, or ``None``."""
-        zero = zero_row_alarm(self.problem.z, point.index, self.positions)
+        zero = None
+        if where != "accepted" or converged:  # not at an iterate that is no root
+            zero = zero_row_alarm(self.problem.z, point.index, self.positions)
         if zero is None and chord is None:
             return None
         self.alarm = Alarm(where, self.attempt, self.steps, converged, zero, chord)
@@ -675,7 +699,8 @@ class FinalWork:
 
 
 def final_work(
-    evaluator: ProfiledEvaluator, start: PointProfile | ConditionalPoint,
+    evaluator: ProfiledEvaluator,
+    start: PointProfile | ConditionalPoint,
     loss: float | None,
 ) -> FinalWork:
     """Fresh final profile, rows and absorption from the point ``start``.
@@ -700,7 +725,8 @@ def final_work(
             observed = evaluator.curvature == "observed"
             weights = equations.curvature if observed else equations.information
             bound = (
-                {} if problem.__dict__.get("_reduced_execution") is None
+                {}
+                if problem.__dict__.get("_reduced_execution") is None
                 else {"index": point.index}
             )
             absorbed = evaluator._absorbed(

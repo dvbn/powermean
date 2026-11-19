@@ -1,30 +1,33 @@
 """The profiled linear loss: the carried linear loss at the profiled index, admitted.
 
-The Newton iteration runs on the criterion with the effects profiled, and the Newton
-system is formed by weighted absorption.  Internal module.
-This module imports neither :mod:`powermean.solve.newton_convex`
+``design/02_computation.md``, Sections 5.1 and 5.2 (the iteration of Section 5.1 on the
+criterion with the effects profiled, the Newton system by weighted absorption);
+``design/11_engineering.md``, Section 3.1, rule 4; decisions D24, D40 and D50; the M1.11
+contract with its conditional outline (Sections 2 and 4) and the correction-A scope.
+Task M1.11, private.  This module imports neither :mod:`powermean.solve.newton_convex`
 nor :mod:`powermean._vendor`: the adapter, the one module that imports the carried
 files, builds :class:`ProfiledLinearLoss` with the provider's carried
 ``LinearModelLoss`` and the carried ``sandwich_dot``, handed over explicitly
 (:class:`CarriedLoss`, :class:`Sandwich`).
 
 :class:`ProfiledLinearLoss` provides the interface of the carried ``LinearModelLoss``
-that both providers' classes and the adapter's line search call by keyword.
-``loss`` evaluates the start of an attempt, ``loss_gradient`` a trial and
+that both providers' classes and the adapter's line search call by keyword (S1
+``fe_direct.ProfileLinearLoss`` likewise implements that interface without deriving from
+it).  ``loss`` evaluates the start of an attempt, ``loss_gradient`` a trial and
 ``gradient_hessian`` the accepted point: each takes the profiled index from the
 evaluation of the attempt (:class:`PointEvaluation`) and hands it, as the raw
 prediction, to the carried linear loss of the package's pointwise loss, whose offset is
 zero since the index holds the transformed offset.  The value and gradient are thus the
 carried arithmetic at the profiled index, with the slopes ``X``; a value or a gradient
-that is not representable raises ``FloatingPointError``, which refuses a trial.
-``gradient_hessian`` is the carried arithmetic of one output without
+that is not representable raises ``FloatingPointError``, which refuses a trial (S1
+``InvalidTrial``).  ``gradient_hessian`` is the carried arithmetic of one output without
 intercept, step for step, with one change: the sandwich is formed with the slopes
 absorbed on the effects with the per-row hessian of the pointwise loss (``a c``, or
 ``a w`` with the expected curvature), the Schur complement of the effects.  The convex
 scope has no negative row curvature, so the carried warning, computed by its rule, is
 never raised.
 
-Evaluations.  Each call is one evaluation of the solve's one budget
+Evaluations (correction A).  Each call is one evaluation of the solve's one budget
 (:class:`Admissions`), charged BEFORE any of its work: the profile of the start or of
 the trial, the rows and the direction's absorption.  A spent budget raises
 ``EvaluationLimitError`` before a profile starts; an admitted call whose profile, rows
@@ -305,7 +308,7 @@ class ProfiledPointLoss(PointLoss):
 
 
 def _finite(value: np.float64, gradient: FloatArray | None = None) -> None:
-    """``FloatingPointError`` unless the value and the gradient are finite."""
+    """``FloatingPointError`` unless the value and the gradient are finite (S1)."""
     finite = bool(np.isfinite(value))
     if gradient is not None:
         finite = finite and bool(np.isfinite(gradient).all())

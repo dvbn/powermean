@@ -1,6 +1,9 @@
 """Detached snapshots of FE basis, sparse matrices, factor records, and sparse measures.
 
-This module defines :func:`_owned_sparse_matrix`, :class:`RetainedBasisSnapshot`,
+``design/02_computation.md``, Section 7; ``design/03_fixed_effects.md``, Sections 2 and
+4; ``plan/evidence/M1.15_contract.txt``, items 4, 8 and 9;
+``brief/layout_C_ownership.txt`` (P13); decisions D49, D51, D54 and D55.  This module
+defines :func:`_owned_sparse_matrix`, :class:`RetainedBasisSnapshot`,
 :func:`snapshot_basis`, :class:`RetainedSparseMatrix`, :func:`snapshot_sparse_matrix`,
 :func:`_owned_factor_record`, :class:`RetainedMeasuresSnapshot`, and
 :func:`snapshot_measures`.
@@ -36,9 +39,9 @@ from powermean.results.retained_input_values import (
     _tuple_arrays,
 )
 from powermean.solve.absorbed_certificate_factor import FactorRecord
-from powermean.solve.absorbed_certificate_geometry import SparseMatrix
 from powermean.solve.absorbed_certificate_sparse import SparseMeasures
 from powermean.solve.compact_matrix import CompactMatrix
+from powermean.solve.sparse_matrix import SparseMatrix
 
 __all__ = [
     "RetainedBasisSnapshot",
@@ -153,11 +156,15 @@ def _snapshot_echelon(
     A subclass, list or other value takes the original conversion in original order.
     """
     if type(rows) is tuple and all(
-        type(row) is tuple and all(
-            type(pair) is tuple and len(pair) == 2
-            and type(pair[0]) is int and type(pair[1]) is int
+        type(row) is tuple
+        and all(
+            type(pair) is tuple
+            and len(pair) == 2
+            and type(pair[0]) is int
+            and type(pair[1]) is int
             for pair in row
-        ) for row in rows
+        )
+        for row in rows
     ):
         return rows
     return tuple(tuple((int(p[0]), int(p[1])) for p in row) for row in rows)
@@ -179,14 +186,16 @@ def snapshot_basis(
     pkey = partition_key if partition_key is not None else grp.partition_key
     proof = _witness_proof(basis)
     wit = (
-        tuple(tuple(w) for w in basis.witnesses) if proof is None
+        tuple(tuple(w) for w in basis.witnesses)
+        if proof is None
         else cast("tuple[tuple[Witness, ...], ...]", proof)
     )
-    raw_echelon = (None if proof is None
-                   else object.__getattribute__(basis, "echelon"))
-    ech = (cast("tuple[tuple[tuple[int, int], ...], ...]", proof)
-           if proof is not None and raw_echelon is proof else
-           _snapshot_echelon(basis.echelon))
+    raw_echelon = None if proof is None else object.__getattribute__(basis, "echelon")
+    ech = (
+        cast("tuple[tuple[tuple[int, int], ...], ...]", proof)
+        if proof is not None and raw_echelon is proof
+        else _snapshot_echelon(basis.echelon)
+    )
     return RetainedBasisSnapshot(
         partition_key=pkey,
         route=basis.route,
@@ -224,9 +233,16 @@ class _OperationalBasisSnapshot:
     def numerical_basis(self) -> CertificateBasis:
         """Return detached numerical coordinates without creating proof views."""
         basis = CertificateBasis(
-            cast("Any", self.grouping), self.route, self.rank,
-            self.references, self.columns, self.selected, self.positions,
-            (), (), self.rows,
+            cast("Any", self.grouping),
+            self.route,
+            self.rank,
+            self.references,
+            self.columns,
+            self.selected,
+            self.positions,
+            (),
+            (),
+            self.rows,
         )
         object.__setattr__(basis, "_operational", self.operational)
         return basis
@@ -234,7 +250,8 @@ class _OperationalBasisSnapshot:
     def materialize(self) -> RetainedBasisSnapshot:
         """Create the canonical detached basis only for an actual rich consumer."""
         return snapshot_basis(
-            self.numerical_basis(), partition_key=self.partition_key,
+            self.numerical_basis(),
+            partition_key=self.partition_key,
             grouping_snapshot=self.grouping,
         )
 
@@ -250,9 +267,16 @@ def _capture_operational_basis(
     if operational is None:
         return None
     return _OperationalBasisSnapshot(
-        partition_key, grouping_snapshot, basis.route, basis.rank, int(basis.rows),
-        _tuple_arrays(basis.references), _tuple_arrays(basis.columns),
-        owned_array(basis.selected), _tuple_arrays(basis.positions), operational,
+        partition_key,
+        grouping_snapshot,
+        basis.route,
+        basis.rank,
+        int(basis.rows),
+        _tuple_arrays(basis.references),
+        _tuple_arrays(basis.columns),
+        owned_array(basis.selected),
+        _tuple_arrays(basis.positions),
+        operational,
     )
 
 
@@ -270,17 +294,26 @@ class RetainedSparseMatrix:
     def _from_compact(cls, matrix: CompactMatrix) -> RetainedSparseMatrix:
         """Retain immutable partition bytes/scales, not three full CSC copies."""
         result = object.__new__(cls)
-        for name, value in (("shape", matrix.shape), ("_indptr", None),
-                            ("_indices", None), ("_data", None),
-                            ("_compact", matrix.detached())):
+        for name, value in (
+            ("shape", matrix.shape),
+            ("_indptr", None),
+            ("_indices", None),
+            ("_data", None),
+            ("_compact", matrix.detached()),
+        ):
             object.__setattr__(result, name, value)
         return result
 
     def __post_init__(self) -> None:
         """Own all stored CSC buffers."""
-        object.__setattr__(self, "_indptr", owned_array(self._indptr))
-        object.__setattr__(self, "_indices", owned_array(self._indices))
-        object.__setattr__(self, "_data", owned_array(self._data))
+        # The compact constructor bypasses this initializer and holds no CSC buffers.
+        object.__setattr__(
+            self, "_indptr", owned_array(cast("IndexArray", self._indptr))
+        )
+        object.__setattr__(
+            self, "_indices", owned_array(cast("IndexArray", self._indices))
+        )
+        object.__setattr__(self, "_data", owned_array(cast("FloatArray", self._data)))
 
     @property
     def indptr(self) -> IndexArray:
@@ -327,7 +360,9 @@ class RetainedSparseMatrix:
         )
 
 
-def snapshot_sparse_matrix(matrix: SparseMatrix | CompactMatrix | None) -> RetainedSparseMatrix | None:
+def snapshot_sparse_matrix(
+    matrix: SparseMatrix | CompactMatrix | None,
+) -> RetainedSparseMatrix | None:
     """Snapshot a ``SparseMatrix`` into a :class:`RetainedSparseMatrix`, or ``None``."""
     if matrix is None:
         return None

@@ -1,4 +1,4 @@
-"""Bounded coefficient algebra for coefficient combinations.
+"""Bounded coefficient algebra for design/04 Section 6 combinations.
 
 Only real constants, coefficient identifiers, unary signs, arithmetic and exp
 are interpreted. Python evaluation, attributes, indexing and caller namespaces
@@ -11,6 +11,7 @@ from __future__ import annotations
 import ast
 import math
 from dataclasses import dataclass
+from fractions import Fraction
 
 from powermean.data.request_values import invalid
 from powermean.errors import SpecificationError
@@ -64,8 +65,13 @@ def _constant(node: ast.Constant, expression: str) -> float:
 
 def affine(expression: str, names: tuple[str, ...]) -> Affine:
     """Reduce an affine expression without consulting a coefficient value."""
+    return _affine_operand(expression, names, expression)
+
+
+def _affine_operand(source: str, names: tuple[str, ...], expression: str) -> Affine:
+    """Reduce one operand, retaining the full request for a power-domain error."""
     try:
-        result = _affine(_tree(expression), names, expression)
+        result = _affine(_tree(source), names, expression)
     except (ArithmeticError, RecursionError) as error:
         raise _refusal(expression) from error
     if not all(math.isfinite(x) for x in (result.constant, *result.weights)):
@@ -110,14 +116,21 @@ def _affine_binary(
         if not any(right.weights):
             return _scale(left, right.constant)
     if isinstance(operation, ast.Div) and not any(right.weights):
-        return _scale(left, 1.0 / right.constant)
+        return Affine(
+            left.constant / right.constant,
+            tuple(weight / right.constant for weight in left.weights),
+        )
     if isinstance(operation, ast.Pow) and not any(right.weights):
         if right.constant == 1.0:
             return left
         if right.constant == 0.0:
             return Affine(1.0, (0.0,) * len(left.weights))
         if not any(left.weights):
-            return Affine(math.pow(left.constant, right.constant), left.weights)
+            try:
+                value = math.pow(left.constant, right.constant)
+            except ValueError as error:
+                raise _refusal(expression) from error
+            return Affine(value, left.weights)
     raise _refusal(expression)
 
 
@@ -127,7 +140,10 @@ def equality(expression: str, names: tuple[str, ...]) -> Affine:
         raise _refusal(expression)
     left, right = expression.split("=")
     return _affine_binary(
-        ast.Sub(), affine(left, names), affine(right, names), expression
+        ast.Sub(),
+        _affine_operand(left, names, expression),
+        _affine_operand(right, names, expression),
+        expression,
     )
 
 
@@ -193,25 +209,73 @@ def _nonlinear_binary(
     right: ExpressionValue,
     expression: str,
 ) -> ExpressionValue:
+    terms = zip(left.gradient, right.gradient, strict=True)
     if isinstance(operation, ast.Add | ast.Sub):
         sign = -1.0 if isinstance(operation, ast.Sub) else 1.0
-        value, d_left, d_right = left.value + sign * right.value, 1.0, sign
+        value = left.value + sign * right.value
+        gradient = tuple(a + sign * b for a, b in terms)
     elif isinstance(operation, ast.Mult):
-        value, d_left, d_right = left.value * right.value, right.value, left.value
+        value = left.value * right.value
+        gradient = _product_gradient(left, right)
     elif isinstance(operation, ast.Div):
         value = left.value / right.value
-        d_left, d_right = 1.0 / right.value, -value / right.value
+        if right.depends:
+            # Round (a - (x/y)*b)/y once: even a finite rounded quotient
+            # or product can erase a small derivative or invent one at zero.
+            denominator = Fraction(right.value)
+            quotient = Fraction(left.value) / denominator
+            gradient = tuple(
+                float((Fraction(a) - quotient * Fraction(b)) / denominator)
+                if b
+                else a / right.value
+                for a, b in terms
+            )
+        else:
+            gradient = tuple(a / right.value for a in left.gradient)
     elif isinstance(operation, ast.Pow):
         value, d_left, d_right = _power(left, right)
+        gradient = tuple(d_left * a + d_right * b for a, b in terms)
     else:
         raise _refusal(expression)
-    gradient = tuple(
-        d_left * a + d_right * b
+    if not math.isfinite(value):
+        raise _refusal(expression)
+    if not all(map(math.isfinite, gradient)):
+        if not isinstance(operation, ast.Pow):
+            raise _refusal(expression)
+        gradient = _recover_power_gradient(left, right, value, gradient)
+    return ExpressionValue(value, gradient, left.depends or right.depends)
+
+
+def _product_gradient(
+    left: ExpressionValue, right: ExpressionValue
+) -> tuple[float, ...]:
+    """Round each product-rule coordinate after adding both contributions."""
+    # A shared coefficient can leave a finite derivative even when the two
+    # rounded products coincide or overflow. A single contribution already
+    # gets the correctly rounded binary64 multiplication.
+    return tuple(
+        float(Fraction(right.value) * Fraction(a) + Fraction(left.value) * Fraction(b))
+        if a and b
+        else right.value * a + left.value * b
         for a, b in zip(left.gradient, right.gradient, strict=True)
     )
-    if not all(math.isfinite(x) for x in (value, *gradient)):
-        raise _refusal(expression)
-    return ExpressionValue(value, gradient, left.depends or right.depends)
+
+
+def _recover_power_gradient(
+    left: ExpressionValue,
+    right: ExpressionValue,
+    value: float,
+    gradient: tuple[float, ...],
+) -> tuple[float, ...]:
+    """Round a failed chain-rule coordinate only after combining both terms."""
+    x, y = Fraction(left.value), Fraction(right.value)
+    powered = Fraction(value)
+    d_left = powered * y / x if left.depends else Fraction(0)
+    d_right = powered * Fraction(math.log(left.value)) if right.depends else Fraction(0)
+    return tuple(
+        g if math.isfinite(g) else float(d_left * Fraction(a) + d_right * Fraction(b))
+        for g, a, b in zip(gradient, left.gradient, right.gradient, strict=True)
+    )
 
 
 def _power(left: ExpressionValue, right: ExpressionValue) -> tuple[float, float, float]:
@@ -221,10 +285,15 @@ def _power(left: ExpressionValue, right: ExpressionValue) -> tuple[float, float,
     if not left.depends and not right.depends:
         return value, 0.0, 0.0
     if not right.depends:
-        derivative = (
-            0.0
-            if right.value == 0.0
-            else right.value * math.pow(left.value, right.value - 1.0)
-        )
+        try:
+            derivative = (
+                0.0
+                if right.value == 0.0
+                else right.value * math.pow(left.value, right.value - 1.0)
+            )
+        except OverflowError:
+            # The partial may overflow even when its chain-rule product is finite.
+            derivative = math.inf
         return value, derivative, 0.0
-    return value, right.value * value / left.value, value * math.log(left.value)
+    d_left = right.value * value / left.value if left.depends else 0.0
+    return value, d_left, value * math.log(left.value)

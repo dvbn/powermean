@@ -1,12 +1,15 @@
 """The absorbed linear path: weighted least squares of ``log Y`` with absorbed effects.
 
-At ``omega = 0``, log OLS is least squares of ``log Y`` on the regressors with the fixed
-effects absorbed and no working variance.  There is no fallback, a solver proposes,
-and near-collinearity is not collinearity; the linear path is exact up to the
-absorption tolerance.  Internal module: it forms no route, certificate, covariance or
-inference.
+``design/01_statistical_core.md``, Section 3.3 (``omega = 0``, log OLS: least squares
+of ``log Y`` on the regressors with the fixed effects absorbed, no working variance);
+``design/02_computation.md``, Sections 1 (no fallback; a solver proposes), 3 (near-
+collinearity is not collinearity), 5.2, 5.5 (the linear path, exact up to the
+absorption tolerance) and 7; ``design/03_fixed_effects.md``, Section 2; the adopted
+contract ``plan/evidence/M1.13_contract.txt`` and its final-interface binding;
+decisions D41, D49 and D51.  Task M1.13: new composition of accepted primitives, not a
+port, and private: no public route, certificate, covariance or inference (M1.14).
 
-The problem.  For the admitted sample at ``omega = 0`` (route
+The problem.  For the admitted sample of task M1.10 at ``omega = 0`` (route
 ``linear``, at least one fixed-effect block), with ``l = log Y``, the RAW offset ``o``,
 the raw weights ``a`` of the sample's stated kind (one without weights; every kind
 enters the same objective), the original active columns ``Xraw`` and all blocks ``F``,
@@ -21,16 +24,18 @@ The solve, in the stages of :data:`~powermean.solve.linear_absorbed_state.STAGES
 
 1. ``preparation``: :func:`~powermean.fe.absorb_numeric.prepare_weights` of the
    sample's final grouping and raw weights (its constructor revalidates every total).
-2. ``joint``: one cold absorption of ``[t, Xs]``, ``t = l - o``, with the explicit
+2. ``joint``: one absorption of ``[t, Xs]``, ``t = l - o``, with the explicit
    ``absorb_tol_final``, ``absorb_max_sweeps`` and ``absorb_acceleration`` and the
-   positional columns ``("joint 0", ..., "joint K")``.  Its start is the values
-   themselves, so the absorber's start refusal cannot occur here.
+   positional columns ``("joint 0", ..., "joint K")``.  It starts from within's
+   coefficients (:func:`~powermean.fe.absorb_within.within_start`, ruling 79), which
+   the absorber accepts only through its own fresh check, or from the cold start (the
+   values themselves) when within gives none.
 3. ``weighting``, ``rank``, ``factorization`` (with slopes only): ``W = sqrt(a)
    Xtilde`` and ``r = sqrt(a) ttilde`` (checked); the singular values of ``W``
    (NumPy, ``compute_uv=False``) and its numerical rank, the values strictly above
    ``eps max(n, K) s_max`` with the physical rows ``n``, never a frequency total, the
-   rule of :mod:`powermean.solve.linear` and of the collinearity analysis; a rank
-   below ``K`` refuses, with no basic subset, minimum-norm solution,
+   rule of the accepted ``solve/linear.py`` and of the collinearity analysis (task
+   M1.9); a rank below ``K`` refuses, with no basic subset, minimum-norm solution,
    ridge or omission; then the pivoted economic QR ``W[:, P] = Q R`` (SciPy), ``Q'r``
    and the back substitution ``R z = Q'r`` (SciPy), ``theta[P] = z``.  No Gram matrix
    is formed.  Each attempt is recorded and its outputs checked before use, as
@@ -53,8 +58,16 @@ its stage; an absorption that does not converge, ``absorption`` or
 ``final_absorption``; a failed or unusable decomposition, ``factorization``; a rank
 below ``K``, ``rank_deficient``; a gap above the tolerance, ``normalization``.  Every
 record formed before is kept, and the point once formed; none of these outcomes is
-evidence that no solution exists, and none is retried.  Only ``FloatingPointError``
-and ``numpy.linalg.LinAlgError`` are caught, where named above.  The candidate
+evidence that no solution exists.  Within's start only accelerates the cold solve: a
+solve from it is set aside whole, and the solve is run once more from the cold start,
+whose records and ending are the candidate's, when it does not complete or when the
+condition number of ``W`` exceeds ``1/sqrt(eps)`` (:data:`UNDETERMINED`), where the
+normal equations of the slopes, which the covariance forms, hold no correct digit and
+the rounding of the start would decide the numbers and even whether they are formed.
+A solve that fails, or whose slopes rounding decides, so ends as the cold solve ends;
+a cold solve is never retried.  Only
+``FloatingPointError`` and ``numpy.linalg.LinAlgError`` are caught, where named
+above.  The candidate
 (:mod:`powermean.solve.linear_absorbed_state`) admits the records as they formed.
 """
 
@@ -71,6 +84,7 @@ from powermean.fe.absorb_numeric import (
     checked_product,
     prepare_weights,
 )
+from powermean.fe.absorb_within import within_start
 from powermean.fe.reductions import immutable_array
 from powermean.model.variance import FloatArray
 from powermean.solve.linear_absorbed_numeric import (
@@ -103,6 +117,8 @@ from powermean.solve.linear_absorbed_state import (
 )
 
 PROJECTED = "the projected response Q'r is not representable in float64"
+UNDETERMINED = 1.0 / float(np.sqrt(np.finfo(np.float64).eps))
+"""The condition number of ``W`` above which its normal equations hold no digit."""
 
 
 # --------------------------------------------------------------------- the solve
@@ -139,6 +155,7 @@ class _Run:
         self.point: LinearPoint | None = None
         self.normalized: PointNormalization | None = None
         self.equations: FreshEquations | None = None
+        self.warm = False
 
     def absorbed(
         self,
@@ -178,15 +195,22 @@ class _Run:
         )
 
 
-def _joint(run: _Run) -> _Stop | _Joint:
-    """The weight preparation and the cold joint absorption of ``[t, Xs]``."""
+def _joint(run: _Run, warm: bool) -> _Stop | _Joint:
+    """The weight preparation and the joint absorption of ``[t, Xs]``.
+
+    With ``warm``, the absorption starts from within's coefficients when within gives
+    them (``run.warm``); from the cold start otherwise.
+    """
     try:
         prepared = prepare_weights(blocks_of(run.sample), raw_weights(run.sample))
     except FloatingPointError as error:
         return _Stop("preparation", "range", f"weight preparation: {error}")
     run.prepared = prepared
     values = joint_values(run.sample, run.t)
-    result = run.absorbed(values, prepared, joint_columns(run.n_slopes))
+    columns = joint_columns(run.n_slopes)
+    start = within_start(values, prepared, columns) if warm else None
+    run.warm = start is not None
+    result = run.absorbed(values, prepared, columns, start)
     run.joint = result
     if not result.converged:
         reason = f"joint absorption: {result.status}: {result.reason}"
@@ -298,7 +322,7 @@ def solve(
     Parameters
     ----------
     sample : FESample
-        The admitted final sample at ``omega = 0``, with at least one
+        The admitted final sample of task M1.10 at ``omega = 0``, with at least one
         fixed-effect block; read, never modified or prepared again.
     absorb_tol_final : float
         The absolute weighted-mean tolerance of both absorptions and the bound of the
@@ -325,14 +349,33 @@ def solve(
     found = linear_sample(sample)
     controls = LinearControls(absorb_tol_final, absorb_max_sweeps, absorb_acceleration)
     run = _Run(found, controls)
-    joint = _joint(run)
+    stop = _stages(run, warm=True)
+    if run.warm and (stop.status != "complete" or _undetermined(run)):
+        # The solve from within's start did not complete, or its slopes are decided
+        # by rounding: the cold solve is the solve of record (module docstring).
+        run = _Run(found, controls)
+        stop = _stages(run, warm=False)
+    return run.candidate(stop)
+
+
+def _undetermined(run: _Run) -> bool:
+    """Whether the condition number of ``W`` in the direct SVD exceeds UNDETERMINED."""
+    svd = run.decompositions[0] if run.decompositions else None
+    if svd is None or svd.kind != "direct_svd" or not svd.values.size:
+        return False
+    values = svd.values
+    return bool(values[0] > UNDETERMINED * values[-1])
+
+
+def _stages(run: _Run, *, warm: bool) -> _Stop:
+    """The stages of one solve, in order, each recorded in ``run``; how it ended."""
+    joint = _joint(run, warm)
     if isinstance(joint, _Stop):
-        return run.candidate(joint)
+        return joint
     theta = _slopes(run, joint)
     if isinstance(theta, _Stop):
-        return run.candidate(theta)
+        return theta
     final = _final(run, joint, theta)
     if isinstance(final, _Stop):
-        return run.candidate(final)
-    stop = _point(run, theta, final)
-    return run.candidate(stop or _Stop("complete", "complete", ""))
+        return final
+    return _point(run, theta, final) or _Stop("complete", "complete", "")

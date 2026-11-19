@@ -1,4 +1,7 @@
 """Package solver entry and candidate record for the optional no-FE IOLS solver.
+
+``design/02_computation.md``, Sections 5.6, 5.7, 7 and 8.2;
+``plan/evidence/M1_contract.txt``, Section 1; decisions D52 and D53.
 """
 
 from __future__ import annotations
@@ -100,7 +103,7 @@ def validate_iols_system(
     omega: float = 1.0,
     flags: _IolsRequestFlags = _DEFAULT_REQUEST_FLAGS,
 ) -> tuple[int, float]:
-    """Validate that a system is within the scope of the no-FE IOLS solver."""
+    """Validate that a system satisfies the D53 / Section 5.6 no-FE IOLS scope."""
     _refuse_unsupported_request(system, flags)
     if not np.isfinite(omega) or omega <= 0.0:
         refuse_iols(
@@ -247,6 +250,7 @@ def solve_iols(
         rho_grid_policy="curvature_step_grid",
         intercept_col_idx=intercept_col,
         scale_columns=True,
+        _condition_response=True,
     )
     timing = Timing(
         wall=time.perf_counter() - wall0,

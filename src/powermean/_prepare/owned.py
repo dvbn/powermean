@@ -1,9 +1,10 @@
 """Owned pandas Index, Series, DataFrame, and ModelFrame copy helpers.
 
-These helpers belong to steps 1 and 2 of the sample construction.  The module
-provides :func:`_holds_objects`, :func:`_owned_names`, :func:`_owned_multiindex`,
-:func:`_owned_index`, :func:`_owned_series`, :func:`_owned_table`, and
-:func:`_owned_frame`, extracted from :mod:`powermean._prepare.compose`.
+``design/02_computation.md``, Section 2, steps 1 and 2; ``design/11_engineering.md``,
+Section 3.1; decisions D41, D51 and D55.  Extracts :func:`_holds_objects`,
+:func:`_owned_names`, :func:`_owned_multiindex`, :func:`_owned_index`,
+:func:`_owned_series`, :func:`_owned_table`, and :func:`_owned_frame` from
+:mod:`powermean._prepare.compose` unchanged.
 """
 
 from __future__ import annotations

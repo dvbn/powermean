@@ -1,4 +1,4 @@
-"""Full-column implicit ``B = M_C [X, F_R]`` products.
+"""Full-column implicit ``B = M_C [X, F_R]`` products (03 Sections 3.1--3.2).
 
 Only centered slopes (n by K), codes and segments are stored. Retained indicators
 are gathered and reduced; no row-by-level matrix is formed, even temporarily.

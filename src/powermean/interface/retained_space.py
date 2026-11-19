@@ -1,5 +1,7 @@
 """Geographic coordinate validation, pole/antimeridian canonicalization, and membership.
 
+``design/04_inference_and_effects.md``, Section 2.3; ``plan/evidence/M1_contract.txt``,
+Sections 3.5 and 6(c), (f), (i); decisions D51, D55, D62, D64 and D65.
 :class:`RetainedSpaceView` captures the aligned latitude and longitude metadata of a
 retained estimation sample by original row positions:
 
@@ -14,7 +16,7 @@ retained estimation sample by original row positions:
 - physical row counts per location and frequency-replica multiplicities are recorded
   distinctly alongside ``requires_pooling_confirmation`` and ``pool_times_confirmed``,
   while distance matrices, automatic cutoff heuristics, kernel weights, and score
-  pooling are not formed here.
+  pooling remain in their owner tasks (M1.20).
 """
 
 from __future__ import annotations

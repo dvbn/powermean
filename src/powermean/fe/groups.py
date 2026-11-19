@@ -1,15 +1,19 @@
 """Grouping of the fixed-effect blocks: levels, codes, counts, interactions and sorting.
 
-A block is a partition of the observations into levels, encoded before it is
-estimated, cancelled or differenced.  The preparation layer works on arrays and
-integer codes.
+``design/03_fixed_effects.md``, Sections 1 and 2 (a block is a partition of the
+observations into levels, encoded before it is estimated, cancelled or differenced);
+``DESIGN.md``, Sections 5.1 and 7; ``design/11_engineering.md``, Section 3.1 (the
+preparation layer works on arrays and integer codes); decision D66.
 
 A block is encoded by the first occurrence of its labels (the level of the first row is
-code 0, the next new label code 1, and so on).  Nothing here handles a pandas index,
-refuses duplicated row labels, builds a dense dummy matrix or a pivoted QR, or imports
-pandas.  The encoding gives the levels by first occurrence, the codes, the counts and
-the names, and refuses a missing or unhashable label, an empty or multidimensional
-array and blocks of unequal length.
+code 0, the next new label code 1, and so on), as the tested reference ``FixedEffects``
+of pyiols ``design/fixed_effects.py`` (source S6 of ``design/06_reuse_map.md``) does.
+The reference is a reference, not a port (D66): its pandas index handling, refusal of
+duplicated row labels, dense dummy matrix and pivoted QR are not taken, and nothing
+here imports pandas.  Kept of it, and compared with it by the tool
+``tools/verify_ports_groups.py``: the levels by first occurrence, the codes, the counts,
+the names, and the refusals of a missing or unhashable label, an empty or
+multidimensional array and blocks of unequal length, with its messages.
 
 Row identity.  Every row keeps its exact original position (``Grouping.positions``), a
 distinct nonnegative integer supplied by the caller (:mod:`powermean.data.sample`) or
@@ -17,15 +21,15 @@ defaulting to the row order ``0 .. n - 1``.  Labels of the user, of the rows as 
 levels, may repeat and are never a key here: levels are labels, codes are integers,
 positions are the identity.  Encoding reorders nothing and deletes nothing: a singleton
 level, a level of zero outcomes and a row of zero weight are encoded like any other
-(steps 5 to 8 of the sample construction are not done here).  A missing label is
-``None`` or a value unequal to itself, NaN of any type or NaT (:func:`_is_missing`);
-an unhashable label is refused with it.
+(``design/02``, Section 2, steps 5 to 8, are later tasks).  A missing label is ``None``
+or a value unequal to itself, NaN of any type or NaT (:func:`_is_missing`, the test of
+the reference); an unhashable label is refused with it.
 
 Exactness.  The labels are read as the Python objects given, through an object array,
 never through an inferred numeric array: an integer beyond ``2**53`` beside a float
 stays that integer, and two such integers that differ by one are two levels.  Labels
-that Python holds equal, as ``1``, ``1.0`` and ``True``, are one level.  An
-interaction is encoded from tuples of the codes of its components, by
+that Python holds equal, as ``1``, ``1.0`` and ``True``, are one level, as in the
+reference.  An interaction is encoded from tuples of the codes of its components, by
 first occurrence, without a mixed-radix product or a dense indicator matrix.  Labels
 whose exact types decide the outcome of the loop over the rows, primitive labels and
 typed integer arrays, and interactions of exact blocks are encoded in bulk instead,
@@ -37,10 +41,10 @@ own (:func:`powermean.data.accounting.frozen_index`), from a factory as from a d
 construction, which checks the invariants the record states; the levels are kept in a
 :class:`~powermean.data.raw.Column`, which copies a mutable label and hands out fresh
 copies.  A later change of a caller's input, or of an object handed out, reaches no
-record.  Sorted rows are metadata (:func:`sorted_rows`); the reductions of
-:mod:`powermean.fe.reductions` sum the rows in their original order.  Refusals are
-built-in ``ValueError`` with a plain message; their translation into the messages of
-the interface is interface work.
+record.  Sorted rows are metadata (:func:`sorted_rows`); a reduction copied from a
+source keeps that source's summation order (:mod:`powermean.fe.reductions`).  Refusals
+are built-in ``ValueError`` with a plain message, as the ported numerical helpers raise
+them; their translation into the messages of the interface is interface work.
 """
 
 from __future__ import annotations
@@ -55,7 +59,7 @@ from numpy.typing import ArrayLike
 
 from powermean.data import raw as _raw
 from powermean.data.accounting import frozen_index
-from powermean.data.raw import AnyArray, Column, _object_array, _object_column
+from powermean.data.raw import AnyArray, Column, _object_column
 from powermean.fe import primitive_codes as _primitive_codes
 from powermean.fe.primitive_codes import (
     distinct_plain,
@@ -337,6 +341,75 @@ def _block(
     return Block(str(name), codes, counts, _object_column(categories))
 
 
+@dataclass(frozen=True, slots=True, eq=False, repr=False, init=False)
+class _CancelledLabelPartition:
+    """A same-fit row-label vector backed by immutable first-occurrence codes."""
+
+    _data: bytes
+    _counts: bytes
+    _level_column: Column
+
+    @property
+    def shape(self) -> tuple[int]:
+        return (len(self._data) // np.dtype(np.intp).itemsize,)
+
+    def _codes(self) -> IndexArray:
+        return np.frombuffer(self._data, dtype=np.intp)
+
+    @property
+    def _levels(self) -> tuple[object, ...]:
+        return cast("tuple[object, ...]", self._level_column._stored)
+
+    def __array__(
+        self, dtype: np.dtype[Any] | None = None, copy: bool | None = None
+    ) -> AnyArray:
+        if copy is False:
+            raise ValueError("expanding fixed-effect labels requires a copy")
+        rows = _raw._object_array(self._levels)[self._codes()]
+        return rows if dtype is None else rows.astype(dtype, copy=False)
+
+
+def _cancelled_label_partition(
+    block: Block, n_rows: int
+) -> _CancelledLabelPartition | None:
+    """Project an owned producer's block only when its labels have no callbacks."""
+    if type(block) is not Block or type(block.name) is not str:
+        return None
+    column, codes, counts = block._levels, block.codes, block.counts
+    if (
+        type(column) is not Column
+        or type(column._stored) is not tuple
+        or type(codes) is not np.ndarray
+        or codes.shape != (n_rows,)
+        or codes.dtype != np.intp
+        or not codes.flags.c_contiguous
+        or type(counts) is not np.ndarray
+        or counts.dtype != np.intp
+        or counts.ndim != 1
+        or not counts.flags.c_contiguous
+    ):
+        return None
+    base: object = codes.base
+    count_base: object = counts.base
+    if (
+        type(base) is not bytes
+        or len(base) != codes.nbytes
+        or type(count_base) is not bytes
+        or len(count_base) != counts.nbytes
+    ):
+        return None
+    levels = column._stored
+    if len(levels) != counts.size or (
+        plain_kind(levels) is None and not _raw._flat_immutable_tuples(levels)
+    ):
+        return None
+    result = object.__new__(_CancelledLabelPartition)
+    object.__setattr__(result, "_data", base)
+    object.__setattr__(result, "_counts", count_base)
+    object.__setattr__(result, "_level_column", column)
+    return result
+
+
 def encode_block(labels: Labels, *, name: str = "fe0") -> Block:
     """Encode one block by the first occurrence of its labels.
 
@@ -355,6 +428,19 @@ def encode_block(labels: Labels, *, name: str = "fe0") -> Block:
     levels the values of the first rows; labels of one plain kind by
     :func:`~powermean.fe.primitive_codes.plain_codes`; any other labels by the loop.
     """
+    if type(labels) is _CancelledLabelPartition:
+        if type(name) is str and _owned_encoding_original():
+            # This partition comes from a checked Block. Only the name and fresh
+            # array headers are needed by selection, layout and label binding.
+            block = object.__new__(Block)
+            object.__setattr__(block, "name", name)
+            object.__setattr__(block, "codes", labels._codes())
+            object.__setattr__(
+                block, "counts", np.frombuffer(labels._counts, dtype=np.intp)
+            )
+            object.__setattr__(block, "_levels", labels._level_column)
+            return block
+        return _block(name, labels._codes(), labels._levels)
     if (
         type(labels) is np.ndarray
         and labels.ndim == 1
@@ -369,6 +455,17 @@ def encode_block(labels: Labels, *, name: str = "fe0") -> Block:
     return _block(name, *_encode(elements))
 
 
+def _distinct_integers(array: AnyArray) -> bool:
+    """Whether the integers of a vector are distinct, as ``np.unique`` would count.
+
+    A strictly increasing vector is distinct; its neighbors are compared, never
+    subtracted. Any other vector is counted by ``np.unique``.
+    """
+    if array.size < 2 or bool((array[1:] > array[:-1]).all()):
+        return True
+    return bool(np.unique(array).size == array.size)
+
+
 def _positions(positions: ArrayLike | None, n_rows: int) -> IndexArray:
     """The original positions, distinct and nonnegative; ``None`` is the row order."""
     if positions is None:
@@ -378,7 +475,7 @@ def _positions(positions: ArrayLike | None, n_rows: int) -> IndexArray:
         raise ValueError("positions must be an integer vector with one value per row")
     if array.min() < 0:
         raise ValueError("positions must be nonnegative")
-    if np.unique(array).size != array.size:
+    if not _distinct_integers(array):
         raise ValueError("positions must be distinct: one original position per row")
     return _index(array)
 
@@ -492,7 +589,9 @@ def sorted_rows(block: Block) -> SortedRows:
 
 
 def _owned_block(
-    name: str, codes: IndexArray, categories: Sequence[object],
+    name: str,
+    codes: IndexArray,
+    categories: Sequence[object],
 ) -> Block:
     """Compose one actual native encoding, with its first and only counts.
 
@@ -503,7 +602,8 @@ def _owned_block(
     """
     result = object.__new__(Block)
     for key, value in (
-        ("name", name), ("codes", frozen_index(codes)),
+        ("name", name),
+        ("codes", frozen_index(codes)),
         ("counts", frozen_index(np.bincount(codes, minlength=len(categories)))),
         ("_levels", _object_column(categories)),
     ):
@@ -515,7 +615,8 @@ def _owned_interaction(blocks: Sequence[Block], name: str) -> Block | None:
     """The existing exact interaction encoder on freshly produced native blocks."""
     made = tuple_codes(
         [block.codes for block in blocks],
-        [block._levels._stored for block in blocks],
+        # The native block constructor stores its category objects in tuples.
+        [cast("tuple[object, ...]", block._levels._stored) for block in blocks],
     )
     return None if made is None else _owned_block(name, *made)
 
@@ -524,8 +625,10 @@ def _owned_encoding_original() -> bool:
     """Changed omitted constructors/helpers retain the checked encoding route."""
     return (
         all(globals()[name] is value for name, value in _OWNED_ENCODING_GLOBALS)
-        and all(vars(owner).get(name) is value
-                for owner, name, value in _OWNED_ENCODING_METHODS)
+        and all(
+            vars(owner).get(name) is value
+            for owner, name, value in _OWNED_ENCODING_METHODS
+        )
         and _primitive_codes.key_codes is key_codes
         and _raw._owned_objects is _OWNED_OBJECTS
         and _raw._flat_immutable_tuples is _FLAT_IMMUTABLE
@@ -534,22 +637,65 @@ def _owned_encoding_original() -> bool:
 
 
 _OWNED_ENCODING_GLOBALS = tuple(
-    (name, globals()[name]) for name in (
-        "Block", "Column", "_block", "_index", "_vectors", "_distinct",
-        "_numbered", "_positions", "_object_column", "frozen_index", "key_codes",
+    (name, globals()[name])
+    for name in (
+        "Block",
+        "Column",
+        "_block",
+        "_index",
+        "_vectors",
+        "_distinct",
+        "_numbered",
+        "_positions",
+        "_distinct_integers",
+        "_object_column",
+        "frozen_index",
+        "key_codes",
         "tuple_codes",
-        "plain_codes", "plain_kind", "distinct_plain", "first_rows",
-        "_owned_block", "_owned_interaction", "_owned_encoding_original",
+        "plain_codes",
+        "plain_kind",
+        "distinct_plain",
+        "first_rows",
+        "_owned_block",
+        "_owned_interaction",
+        "_owned_encoding_original",
     )
 )
 _OWNED_ENCODING_METHODS = tuple(
-    (owner, name, vars(owner).get(name)) for owner, names in (
-        (Block, ("__new__", "__init__", "__post_init__", "__getattribute__",
-                 "__getattr__", "name", "codes", "counts", "_levels",
-                 "n_rows", "n_levels", "levels")),
-        (Column, ("__getattribute__", "__getattr__", "stored", "values",
-                  "size", "dtype", "take", "_stored")),
-    ) for name in names
+    (owner, name, vars(owner).get(name))
+    for owner, names in (
+        (
+            Block,
+            (
+                "__new__",
+                "__init__",
+                "__post_init__",
+                "__getattribute__",
+                "__getattr__",
+                "name",
+                "codes",
+                "counts",
+                "_levels",
+                "n_rows",
+                "n_levels",
+                "levels",
+            ),
+        ),
+        (
+            Column,
+            (
+                "__getattribute__",
+                "__getattr__",
+                "stored",
+                "values",
+                "size",
+                "dtype",
+                "take",
+                "_stored",
+            ),
+        ),
+    )
+    for name in names
 )
 _OWNED_OBJECTS = _raw._owned_objects
 _FLAT_IMMUTABLE = _raw._flat_immutable_tuples

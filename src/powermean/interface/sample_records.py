@@ -1,6 +1,9 @@
-"""The request, invocation and round records of the ordered sample.
+"""The request, invocation and round records of the ordered sample (task M1.10).
 
-Internal: no public name, option, default, message, tolerance or route.
+``design/02_computation.md``, Sections 2 to 4 and 8.4; decisions D14, D41, D51 and D68
+to D72; the reviewed outline ``plan/evidence/M1.10_contract.txt`` and its corrections A
+and B (``plan/evidence/M1.10_revision_A.txt`` and ``M1.10_revision_B.txt``).  Private:
+no public name, option, default, message, tolerance or route.
 :mod:`powermean.interface.sample` walks with these records, binds its outcome to them
 and still provides their names.  The rows of a composition (:func:`start`,
 :func:`current`) and each diagnostic's problem are formed here once, for a composition
@@ -8,39 +11,38 @@ and the binding of its outcome alike.
 
 Invocations are admitted when they are constructed, by the composer, directly or by
 ``dataclasses.replace``; a status alone authorizes nothing and no admission analyzes
-anything again.  Support: ``require_current``, the controls and method that ran,
+anything again.  Support (M1.7): ``require_current``, the controls and method that ran,
 the result rebuilt on this problem and these controls from owned copies of its whole
-evidence (:func:`powermean.interface.sample_evidence.owned_result`),
+evidence (correction C, :func:`powermean.interface.sample_evidence.owned_result`),
 which replays every witness from its ORIGINAL proposal and the dual with the witnessed
 union and is the record kept, and a removal exactly that union's original positions
-(:func:`witnessed`).  Recession: ``require_same``, the controls, the rebuilt
+(:func:`witnessed`).  Recession (M1.8): ``require_same``, the controls, the rebuilt
 record's binding of every report, witness and dual, the strict witness's replay;
 ``raise_for_recession`` is silent for ``no_recession`` and ``inconclusive`` alike, so an
-outcome follows the checked status, never that silence.  Collinearity: the
+outcome follows the checked status, never that silence.  Collinearity (M1.9): the
 analysis's OWN problem, actual controls and mode are the invocation's; an unbound
-analysis authorizes nothing.  The recession and collinearity records own their arrays
-and tuples through their constructors and are kept as given.  Blocks are
+analysis authorizes nothing.  The M1.8 and M1.9 records own their arrays and tuples
+through their accepted constructors and are kept as given.  Blocks (correction B) are
 compared with their original level labels wherever the composition compares them
-(:func:`same_grouping`): the partition checks of the support and recession analyses are
+(:func:`same_grouping`): the accepted partition checks of M1.7 and M1.8 are
 supplemented, never changed.  The blocks of the current rows derive from the walk's
-source, the blocks of the rows of steps 3 and 4 (:func:`current`), so
+source, the blocks of the rows of steps 3 and 4 (:func:`current`, correction C), so
 that labels whose equality is identity compare through that relation.
 
-The recorder.
+The recorder (task M1.11; the M1.11 sample bridge and partial trace).
 :class:`SampleRecorder` is the optional passive record of one triggered composition:
 bound to its very origin when the call enters, it receives the walk's events, entries
 of :data:`STAGES`, closures, each analysis as returned (``raw``) and as admitted, and
 the admitted outcome (``final``), and freezes them into a :class:`RecordedTrace`, with
 the propagated exception after a failure.  It runs nothing, and its absence changes
-nothing.  It owns what it keeps: a returned support result is kept as its
-:class:`RawSupportResult`, an owned copy of its whole finite graph
-made by the copying steps of :mod:`powermean.interface.sample_evidence`,
+nothing.  It owns what it keeps (correction A): a returned M1.7 result is kept as its
+:class:`RawSupportResult` (M1.11 correction B), an owned copy of its whole finite graph
+made by the accepted copying steps of :mod:`powermean.interface.sample_evidence`,
 before the invocation's admission runs, so that a later write to an array of the
 returned object changes nothing recorded.  The admitting ``SupportResult`` constructor
 never runs on it, so evidence that no longer passes its fresh checks is kept as it
-returned, and nothing admits it.  The recession and collinearity records, the
-problems, the closures and the admitted invocations, which their constructors own, are
-kept as given.
+returned, and nothing admits it.  The M1.8 and M1.9 records, the problems, the closures
+and the admitted invocations, which their accepted constructors own, are kept as given.
 A returned object that is not its analysis record, or a part of whose graph cannot be
 owned, is recorded without it and with the reason: never filtered, promoted or analyzed
 again, while the invocation's admission then runs as without a recorder.  The origin of
@@ -88,6 +90,7 @@ from powermean.data.sample_fe_state import (
 )
 from powermean.data.weights import ObservationWeights
 from powermean.errors import SpecificationError
+from powermean.fe.certificate_basis import CertificateBasis
 from powermean.fe.groups import Grouping
 from powermean.fe.reductions import immutable_array
 from powermean.interface.sample_encoding import _integer_key_codes
@@ -106,6 +109,7 @@ from powermean.interface.sample_evidence import (
 from powermean.model.order import IndexArray, TransformedProblem, transform_problem
 from powermean.model.order_scale import _mean_order
 from powermean.model.variance import FloatArray, NB2Variance, PowerVariance
+from powermean.solve.support import BASELINE as SUPPORT_BASELINE
 from powermean.solve.support import (
     FEStep,
     SupportControls,
@@ -113,7 +117,9 @@ from powermean.solve.support import (
     require_current,
     select_method,
 )
+from powermean.solve.support_gamma import BASELINE as RECESSION_BASELINE
 from powermean.solve.support_gamma import GammaProblem, GammaResult, raise_for_recession
+from powermean.solve.support_gamma_problem import identified_coordinates
 from powermean.solve.support_lp import LPControls, LPOutcome
 from powermean.solve.support_problem import STALE, SupportProblem, indices, same_sample
 from powermean.solve.support_rectifier import RectifierOutcome
@@ -136,8 +142,8 @@ def _cone(omega: float, variance: object) -> str:
     """The existence analysis of the order and family: support, recession, rank, none.
 
     ``"rank"`` for a power variance with ``tau`` outside ``[1, 2]`` at ``omega != 0``
-    (the existence of a finite root is not characterized there): no existence
-    analysis and no deletion for it; the closure
+    (``design/02_computation.md``, Section 4: the existence of a finite root is not
+    characterized there): no existence analysis and no deletion for it; the closure
     of steps 5 and 6 and the collinearity analysis (rank checks) only, the solver and
     the certificate deciding.
     """
@@ -158,13 +164,12 @@ def _cone(omega: float, variance: object) -> str:
 
 @dataclass(frozen=True)
 class SampleRequest:
-    """The explicit internal controls of one composition; nothing is defaulted.
+    """The explicit private controls of one composition; nothing is defaulted.
 
     ``omega`` and ``positive_only`` (steps 3 and 4); ``variance`` at ``omega != 0``
     (``None`` at ``omega = 0``); ``keep_singletons`` skips step 5 only; ``support``,
-    the support controls, exactly for ``1 <= tau < 2`` or NB2; ``recession``, the
-    recession controls, exactly for ``tau = 2``; ``collinearity``, the absorber
-    controls of the collinearity analysis,
+    the M1.7 controls, exactly for ``1 <= tau < 2`` or NB2; ``recession``, the M1.8
+    controls, exactly for ``tau = 2``; ``collinearity``, the M1.9 absorber controls,
     exactly with fixed effects; ``mode``, ``"drop"`` or ``"error"``.  A family whose
     finite root is not characterized (``tau < 1`` or ``tau > 2``) takes neither
     existence control: the rank-only route of :func:`_cone`.  ``ValueError`` for
@@ -204,6 +209,33 @@ class SampleRequest:
         if not isinstance(self.collinearity, DiagnosticControls | None):
             raise ValueError("collinearity must be DiagnosticControls or None")
 
+    @classmethod
+    def default(
+        cls,
+        omega: float,
+        variance: Family | None,
+        positive_only: bool,
+        collinearity: DiagnosticControls,
+    ) -> SampleRequest:
+        """The request of a joint fit whose call gives none.
+
+        The package's baseline existence controls for the estimator's cone
+        (:data:`powermean.solve.support.BASELINE` for ``tau < 2`` and NB2,
+        :data:`powermean.solve.support_gamma.BASELINE` at ``tau = 2``, none at
+        ``omega = 0``), singleton rows removed, collinear columns dropped in order.
+        """
+        cone = _cone(omega, variance)
+        return cls(
+            omega=omega,
+            positive_only=positive_only,
+            variance=variance,
+            keep_singletons=False,
+            support=SUPPORT_BASELINE if cone == "support" else None,
+            recession=RECESSION_BASELINE if cone == "recession" else None,
+            collinearity=collinearity,
+            mode="drop",
+        )
+
     @property
     def family(self) -> Family:
         """The working variance; ``ValueError`` at ``omega = 0``, which has none."""
@@ -234,7 +266,9 @@ def start(prepared: PreparedFrame, request: SampleRequest) -> Start:
 
 
 def _numeric_start(
-    prepared: PreparedFrame, request: SampleRequest, *,
+    prepared: PreparedFrame,
+    request: SampleRequest,
+    *,
     order_parts: tuple[OrderSample, OrderRows] | None = None,
 ) -> Start:
     """The same start of a private owned producer, without exporting its rich frame."""
@@ -250,8 +284,10 @@ def _numeric_start(
         raise ValueError("DiagnosticControls are given exactly with fixed effects")
     outcome = np.zeros(rows.nobs)
     outcome[rows.positions] = order.data.y
-    fixed = None if effects is None else _owned_fixed(
-        effects, rows.positions, _encoder=_integer_key_codes
+    fixed = (
+        None
+        if effects is None
+        else _owned_fixed(effects, rows.positions, _encoder=_integer_key_codes)
     )
     ledger = ledger_of(rows, base.missing, replicas_of(order.data, rows))
     return Start(rows, immutable_array(outcome), fixed, ledger)
@@ -293,12 +329,12 @@ def current(
     ledger: RowLedger,
     source: Source | None = None,
 ) -> Current:
-    """The record, transform and blocks of the current rows only.
+    """The accepted record, transform and blocks of the current rows only.
 
     The blocks are :class:`~powermean.data.sample_fe_state.Derived` from ``source``,
-    the walk's blocks of the rows of steps 3 and 4, or without one from
+    the walk's blocks of the rows of steps 3 and 4 (correction C), or without one from
     the prepared effects on the ledger's rows of steps 3 and 4 (codes 0 and 5 to 7):
-    the encoding of the current rows, with the source level of each level.
+    the accepted encoding of the current rows, with the source level of each level.
     """
     data = _regression_data(prepared.base.inputs, ledger.positions)
     problem = transform_problem(data.y, omega, offset=data.offset)
@@ -324,35 +360,53 @@ def _rows_of(current: Current) -> Rows:
 
 
 def support_problem(now: Current, request: SampleRequest) -> SupportProblem:
-    """The support problem of the current rows, with their weights and offset."""
+    """The M1.7 problem of the current rows, with their weights and offset."""
     weights, offset = now.data.weight_values, now.problem.offset
     found = (weights, offset, request.family, request.omega)
     return SupportProblem(*_rows_of(now), *found)
 
 
-def gamma_problem(now: Current, request: SampleRequest) -> GammaProblem:
-    """The recession problem of the current rows with their typed weights and offset."""
+def gamma_problem(
+    now: Current,
+    request: SampleRequest,
+    *,
+    active: IndexArray | None = None,
+    basis: CertificateBasis | None = None,
+    coordinates: IndexArray | None = None,
+) -> GammaProblem:
+    """The M1.8 problem of the current rows, with their typed weights and offset."""
     weights = now.data.weights
     if weights is None:
         weights = ObservationWeights(np.ones(now.data.nobs))
     # The request routes only PowerVariance(2) here; GammaProblem refuses any other.
     variance = cast("PowerVariance", request.family)
     offset = now.problem.offset
-    return GammaProblem(*_rows_of(now), weights, offset, variance, request.omega)
+    if active is None:
+        fields = (*_rows_of(now), weights, offset, variance, request.omega)
+        return (
+            GammaProblem(*fields)
+            if coordinates is None
+            else GammaProblem(*fields, coordinates=coordinates)
+        )
+    selected = identified_coordinates(
+        active, now.data.design.shape[1], now.grouping, basis
+    )
+    return GammaProblem(
+        *_rows_of(now), weights, offset, variance, request.omega, coordinates=selected
+    )
 
 
 def collinearity_problem(now: Current) -> CollinearityProblem:
-    """The collinearity problem: every original column and block of the current rows."""
+    """The M1.9 problem: every original column and block of the current rows."""
     data, positions = now.data, now.ledger.positions
     return CollinearityProblem(data.design, data.column_names, positions, now.grouping)
 
 
 def same_grouping(a: Grouping | None, b: Grouping | None) -> bool:
-    """The same blocks of the same rows with their original level labels.
+    """The same blocks of the same rows with their original level labels (correction B).
 
-    The partition that the support and recession analyses compare, and every
-    block's ordered level labels
-    (:func:`powermean.data.sample_fe_state.same_blocks`).
+    The partition that the accepted M1.7 and M1.8 compare, and every block's ordered
+    level labels (:func:`powermean.data.sample_fe_state.same_blocks`).
     """
     return same_blocks(a, b)
 
@@ -375,7 +429,7 @@ def witnessed(problem: SupportProblem, result: SupportResult) -> IndexArray:
 
 @dataclass(frozen=True, eq=False)
 class SupportInvocation:
-    """One fresh support analysis: its problem, controls, result and rows removed.
+    """One fresh M1.7 analysis: its problem, controls, result and rows removed.
 
     ``removed`` holds the original positions of the admitted witnessed union.
     """
@@ -400,9 +454,9 @@ class SupportInvocation:
         ):
             raise ValueError(BINDING)
         # The record rebuilt on this problem and these controls from owned copies of
-        # its whole evidence runs the checks: every witness replayed from its
+        # its whole evidence runs the accepted checks: every witness replayed from its
         # original proposal, the dual with the union.  It is the record kept, never a
-        # caller's array, list or mapping.
+        # caller's array, list or mapping (correction C; correction B owned the tuple).
         checked = owned_result(result, problem, controls)
         removed = _exact_index(self.removed, "removed rows", upper=LARGEST)
         if not same_bits(removed, witnessed(problem, checked)):
@@ -413,7 +467,7 @@ class SupportInvocation:
 
 @dataclass(frozen=True, eq=False)
 class RecessionInvocation:
-    """One fresh recession analysis: its problem, controls and result."""
+    """One fresh M1.8 analysis: its problem, controls and result."""
 
     problem: GammaProblem
     controls: LPControls
@@ -436,13 +490,13 @@ class RecessionInvocation:
             witness.require(problem, controls=controls, stage=witness.stage)
 
     def raise_for_recession(self) -> None:
-        """The specified ``ExistenceError`` of an admitted recession."""
+        """The specified ``ExistenceError`` of an admitted recession (accepted M1.8)."""
         raise_for_recession(self.result, self.problem)
 
 
 @dataclass(frozen=True, eq=False)
 class CollinearityInvocation:
-    """One fresh collinearity analysis: problem, actual controls, mode and analysis."""
+    """One fresh M1.9 analysis: its problem, actual controls, mode and analysis."""
 
     problem: CollinearityProblem
     controls: DiagnosticControls | None
@@ -465,7 +519,7 @@ class CollinearityInvocation:
 
 @dataclass(frozen=True, eq=False)
 class Round:
-    """Steps 5 and 6 to the fixed point, then the round's support invocation, if any."""
+    """Steps 5 and 6 to their fixed point, then the round's M1.7 invocation, if any."""
 
     closure: Closure
     support: SupportInvocation | None
@@ -488,13 +542,13 @@ class Evidence(Protocol):
     def support(
         self, problem: SupportProblem, controls: SupportControls
     ) -> SupportInvocation:
-        """The support invocation on ``problem`` under ``controls``."""
+        """The M1.7 invocation on ``problem`` under ``controls``."""
         ...
 
     def recession(
         self, problem: GammaProblem, controls: LPControls
     ) -> RecessionInvocation:
-        """The recession invocation on ``problem`` under ``controls``."""
+        """The M1.8 invocation on ``problem`` under ``controls``."""
         ...
 
     def collinearity(
@@ -503,7 +557,7 @@ class Evidence(Protocol):
         controls: DiagnosticControls | None,
         mode: str,
     ) -> CollinearityInvocation:
-        """The collinearity invocation on ``problem`` under ``controls`` in ``mode``."""
+        """The M1.9 invocation on ``problem`` under ``controls`` in ``mode``."""
         ...
 
 
@@ -527,7 +581,7 @@ class Recorded:
     def support(
         self, problem: SupportProblem, controls: SupportControls
     ) -> SupportInvocation:
-        """The next recorded support invocation, on ``problem`` under ``controls``."""
+        """The next recorded M1.7 invocation, on ``problem`` under ``controls``."""
         found = self._support.pop(0) if self._support else None
         if found is None or not same_sample(found.problem, problem):
             raise ValueError(UNBOUND)
@@ -540,7 +594,7 @@ class Recorded:
     def recession(
         self, problem: GammaProblem, controls: LPControls
     ) -> RecessionInvocation:
-        """The recorded recession invocation, on ``problem`` under ``controls``."""
+        """The recorded M1.8 invocation, on ``problem`` under ``controls``."""
         found = self._recession
         if found is None or not found.problem.same(problem):
             raise ValueError(UNBOUND)
@@ -550,13 +604,18 @@ class Recorded:
             raise ValueError(UNBOUND)
         return found
 
+    @property
+    def recession_coordinates(self) -> IndexArray | None:
+        """The recorded LP chart; replay still binds every current sample field."""
+        return None if self._recession is None else self._recession.problem.coordinates
+
     def collinearity(
         self,
         problem: CollinearityProblem,
         controls: DiagnosticControls | None,
         mode: str,
     ) -> CollinearityInvocation:
-        """The recorded collinearity invocation: ``problem``, ``controls``, ``mode``."""
+        """The recorded M1.9 invocation, on ``problem`` under ``controls``, ``mode``."""
         found = self._collinearity
         if found is None or not same_problem(found.problem, problem):
             raise ValueError(UNBOUND)
@@ -565,7 +624,7 @@ class Recorded:
         return found
 
 
-# ------------------------------------------------------------------ the recorder
+# ---------------------------------------------------- the recorder (task M1.11)
 
 STAGES = (
     "closure",
@@ -583,9 +642,9 @@ Analysis = SupportResult | GammaResult | CollinearityAnalysis
 
 @dataclass(frozen=True, eq=False)
 class RawSupportResult:
-    """A support result as its analysis returned it: owned, never admitted.
+    """An M1.7 result as its analysis returned it: owned, never admitted.
 
-    The recorder's raw view: the fields of
+    The recorder's raw view (M1.11 correction B): the fields of
     :class:`~powermean.solve.support.SupportResult`, in its order, each an owned part of
     the returned finite graph (:func:`raw_support`).  It is not a ``SupportResult`` and
     runs none of its checks: its witnesses and dual are kept as they returned, whether
@@ -609,9 +668,9 @@ Raw = RawSupportResult | GammaResult | CollinearityAnalysis
 
 
 def raw_support(result: SupportResult) -> RawSupportResult:
-    """The owned raw view of a returned support result.
+    """The owned raw view of a returned M1.7 result (M1.11 correction B).
 
-    Every part of the finite graph is owned by the copying steps of
+    Every part of the finite graph is owned by the accepted copying steps of
     :mod:`powermean.interface.sample_evidence`: each array in bytes of its own with its
     dtype, shape and every bit, read-only; each sequence a tuple; each record rebuilt
     from owned parts; the records that their constructors own (the problem, the
@@ -654,12 +713,12 @@ class RecordedEvent:
 
     ``entry``: the walk entered ``stage`` (one of :data:`STAGES`); ``closure``: steps 5
     and 6 returned ``closure``; ``raw``: an analysis returned ``result`` on ``problem``
-    under ``controls``, before any admission, kept as an owned record (a support result
+    under ``controls``, before any admission, kept as an owned record (an M1.7 result
     as its :class:`RawSupportResult`), or ``None`` with the reason in ``unowned`` when
     what returned is not its analysis record or a part of it cannot be owned;
     ``admitted``: the invocation record admitted it, with its problem, controls, kept
-    result and, for support, ``removed``, for collinearity ``mode``; ``final``: the
-    outcome was admitted.
+    result and, for M1.7, ``removed``, for M1.9 ``mode``; ``final``: the outcome was
+    admitted.
     """
 
     kind: str
@@ -699,10 +758,9 @@ Binding = tuple[Composed, FESample, SampleRequest]
 def _owned_raw(result: object) -> tuple[Raw | None, str]:
     """A returned analysis as the recorder keeps it, or ``None`` and why (module doc).
 
-    A support result is kept as its owned raw view (:func:`raw_support`), never
-    admitted, whose only refusal, a part that cannot be owned (``ValueError``), leaves
-    it unowned; the recession and collinearity records are their constructors' owned
-    records, kept as given.
+    An M1.7 result is kept as its owned raw view (:func:`raw_support`), never admitted,
+    whose only refusal, a part that cannot be owned (``ValueError``), leaves it unowned;
+    the M1.8 and M1.9 records are their constructors' owned records, kept as given.
     """
     if isinstance(result, SupportResult):
         try:
@@ -716,7 +774,7 @@ def _owned_raw(result: object) -> tuple[Raw | None, str]:
 
 
 class SampleRecorder:
-    """The passive record of one triggered composition from ``origin``.
+    """The passive record of one triggered composition from ``origin`` (task M1.11).
 
     The coordinator binds it when the call enters, to the very origin of the call, the
     request it derived and the origin's sample, then hands it each event of the walk;

@@ -1,6 +1,11 @@
-"""Thin retained-state adapter of the conventions, counts and breads.
+"""Thin retained-state adapter of the M1.16 conventions, counts and breads.
 
-Internal module: it extracts the retained arrays and records of a
+``design/04_inference_and_effects.md``, Sections 1 to 3 and 5; ``design/02``,
+Section 7; ``plan/evidence/M1_contract.txt``, rules B1 to B12 and Sections 3.1 and
+3.3; ``plan/evidence/M1.16_start_scope.txt`` and ``M1.16_binding_preparation.txt``;
+``plan/evidence/M1.17_scope.txt``; decisions D4, D49, D54, D57, D60, D65 and D76.
+Task M1.16, private, extended by task M1.17: this module extracts the
+accepted retained arrays and records of a
 :class:`~powermean.results.absorbed_retained.RetainedAbsorbedEnvelope`, checks the
 request against the cache and the discard state, and hands arrays to the kernels of
 :mod:`powermean.inference.ssc`, :mod:`powermean.inference.absorbed_rank`,
@@ -10,64 +15,68 @@ dimension arrives already bound as :class:`~powermean.inference.convention.Clust
 (one code per final row of the sample), which the interface forms from its dependence
 sidecar.  No public name, parser or export is touched.
 
-Multiway.  A request with two or more dimensions, or with an explicit ``multiway`` form,
-takes the multiway path: the raw port forms the signed (``"cgm"``) or DDG sum of the
+Multiway (task M1.17; file 04, Sections 2.1, 2.1.1 to 2.1.4 and 3; contract 3.3).  A
+request with two or more dimensions, or with an explicit ``multiway`` form, takes the
+multiway path: the accepted raw port forms the signed (``"cgm"``) or DDG sum of the
 active rows' influence with every factor off, and the convention's factor is applied
 once by its owner (``G_min`` over the requested dimensions, repetitions kept, under
-``cluster_count="min"``; each component's own count under ``"each"``).  The ``psd``
+``cluster_count="min"``; each component's own count under ``"each"``).  Decision D4's
 adjustment is then a SEPARATE step on the REPORTED factor-scaled covariance of a signed
 request with two or more dimensions, resolved from the request's explicit ``psd``, else
 the convention's: ``"cgm"`` applies the native single-fit rule of
 :func:`powermean.inference.psd.adjust_psd` in the native standardized frame and in the
-sequence of the convention in force, keeps the raw matrix, components, frame and
-replaced eigenvalues, reads the standard errors from the FINAL reported matrix's
-diagonal, and issues the notes ``covariance.psd_adjusted`` (active) and
-``covariance.indefinite`` (a final matrix that is not positive semidefinite; no second
-repair); ``"none"`` leaves the raw estimate, whose negative variance gives a missing
-standard error.  DDG and one-way requests are never adjusted.  The covariance of
-``theta`` is never adjusted, and the reported matrix must be representable for an
-adjusted request (``FloatingPointError`` otherwise, with nothing replaced).
+sequence of the convention in force (the author's third-round D4 answer of 17 October
+2026), keeps the raw matrix, components, frame and replaced eigenvalues, reads the
+standard errors from the FINAL reported matrix's diagonal, and issues the approved
+notes ``covariance.psd_adjusted`` (active) and ``covariance.indefinite`` (a final
+matrix that is not positive semidefinite; no second repair); ``"none"`` leaves the raw
+estimate, whose negative variance gives a missing standard error.  DDG and one-way
+requests are never adjusted.  The covariance of ``theta`` is never adjusted, and the
+reported matrix must be representable for an adjusted request (``FloatingPointError``
+otherwise, with nothing replaced).
 
-Frame and sequence.  The frame scales are the native unweighted row-sample standard
-deviations, floored at ``1e-3``, of the user's regressor columns as supplied (the
-retained unscaled reported columns: the scaled design times its power-of-two column
-scale, exactly) on the scale sample, which on the supported domain is the estimation
-sample, taken here as the active rows of the final sample (rows of positive weight, one
-row per compressed row whatever its frequency count); the reported intercept has scale
-exactly one.  The record keeps the scales, the deviations, the floor flags, the row
-count and the sample fingerprint (:class:`FrameRecord`).  The sequence is the
-convention's, read from the resolved record by its origin
-(:func:`powermean.inference.ssc.sequence_of`): ``"legacy"`` under the ``"stata"`` preset
-put in force by its name (an explicit ``"stata"``, the default, or inherited from the
-retained initial request, whose record holds that name), ``"modern"`` otherwise, every
-custom record included whatever its values; the frame record names the convention as it
-was put in force.  For the legacy sequence of an absorbed fit, whose reported
-coefficients hold no intercept, the internal reporting constant enters the frame matrix:
-its influence row is the weighted-mean functional of the retained nuisance geometry at
-the same fitted point (:mod:`powermean.inference.absorbed_constant`, the staged weights
-being the expected curvature of the retained rows: true weights times the IRLS working
-weight, ``mu`` at ``tau = 1``), the raw port forms its variance and cross-covariances
-beside the slopes' retained influence rows with the same cluster totals, the
-convention's factor is applied once by the same owner, the reporting map once with the
-constant at scale one, and the row is retained in the adjustment record, never reported.
-The reported intercept is the column of ones of the retained unscaled no-FE design (the
-package's own intercept rule, ``powermean.solve.starts``); absorbed fits report none,
-since a constant column is absorbed by the effects (``powermean.data.collinearity``).  A
-no-FE fit without an intercept under the legacy sequence has no nuisance geometry and
-forms no constant row (a held domain, recorded as such).  Nothing of the fit-time gate,
-the initial cache or the one-dimension path changes, and a refusal leaves the retained
-state as it is.
+Frame and sequence (file 04, Sections 2.1.1 and 2.1.2).  The frame scales are the
+native unweighted row-sample standard deviations, floored at ``1e-3``, of the user's
+regressor columns as supplied (the retained unscaled reported columns: the scaled
+design times its power-of-two column scale, exactly) on the scale sample, which on the
+supported domain is the estimation sample, taken here as the active rows of the final
+sample (rows of positive weight, one row per compressed row whatever its frequency
+count); the reported intercept has scale exactly one.  The record keeps the scales, the
+deviations, the floor flags, the row count and the sample fingerprint
+(:class:`FrameRecord`).  The sequence is the convention's, read from the resolved
+record by its origin (:func:`powermean.inference.ssc.sequence_of`): ``"legacy"`` under
+the ``"stata"`` preset put in force by its name (an explicit ``"stata"``, the default,
+or inherited from the retained initial request, whose record holds that name),
+``"modern"`` otherwise, every custom record included whatever its values; the frame
+record names the convention as it was put in force.  For the legacy sequence of an
+absorbed fit, whose reported coefficients hold no intercept, the private reporting
+constant of Section 2.1.3 enters the frame matrix: its influence row is the
+weighted-mean functional of the retained nuisance geometry at the same fitted point
+(:mod:`powermean.inference.absorbed_constant`, the staged weights being the expected
+curvature of the retained rows: true weights times the IRLS working weight, ``mu`` at
+``tau = 1``), the raw port forms its variance
+and cross-covariances beside the slopes' retained influence rows with the same cluster
+totals, the convention's factor is applied once by the same owner, the reporting map
+once with the constant at scale one, and the row is retained in the adjustment record,
+never reported.  The reported intercept is the column of ones of the retained unscaled
+no-FE design (the package's own intercept rule, ``powermean.solve.starts``); absorbed
+fits report none, since a constant column is absorbed by the effects
+(``powermean.data.collinearity``).  A no-FE fit without an intercept under the legacy
+sequence has no nuisance geometry and forms no constant row (a held domain of Section
+2.1.4, recorded as such).  Nothing of the fit-time gate, the initial cache or the
+one-dimension path changes, and a refusal leaves the retained state as it is.
 
-Warnings at the composition boundary.  The frozen raw port warns about its RAW estimate
-as it forms it ("No pseudoinverse, zero fallback, or PSD correction was applied"), which
-is accurate for a raw output and false for an adjusted one.  The multiway path therefore
-records the port's diagnostic warnings of that one call (:func:`_raw_multiway_estimate`)
-and reissues them unchanged whenever the reported matrix is the raw estimate (``"psd":
-"none"``, the ``"none"`` preset, DDG, a ``FloatingPointError`` refusal, or a ``"cgm"``
-treatment whose adjustment was inactive); when the adjustment was active they are
-withheld and the notes alone describe the reported matrix, the port's diagnostics of the
-raw estimate staying in the record (``multiway.estimate.diagnostics``).  The port is
-unchanged, no warning filter outside that call is touched and no class is suppressed.
+Warnings at the composition boundary.  The frozen raw port warns about its RAW
+estimate as it forms it ("No pseudoinverse, zero fallback, or PSD correction was
+applied"), which is accurate for a raw output and false for an adjusted one.  The
+multiway path therefore records the port's diagnostic warnings of that one call
+(:func:`_raw_multiway_estimate`) and reissues them unchanged whenever the reported
+matrix is the raw estimate (``"psd": "none"``, the ``"none"`` preset, DDG, a
+``FloatingPointError`` refusal, or a ``"cgm"`` treatment whose adjustment was
+inactive); when the adjustment was active they are withheld and the approved notes
+alone describe the reported matrix, the port's diagnostics of the raw estimate
+staying in the record (``multiway.estimate.diagnostics``).  The port is unchanged,
+no warning filter outside that call is touched and no class is suppressed.
 
 What is distinguished: the sample's original ``positions`` (identity of the final
 rows), the sampling units (the final rows of positive weight, ``units.identifiers``),
@@ -77,34 +86,38 @@ sample's ``effective_n``).  The exact full ``K`` is the certificate's
 ``geometry.dimension``; the convention counts are recomputed for every request from
 the grouping's blocks and the requested dimensions on the active rows.
 
-Cache and discard.  A robust or one-cluster request under a convention with the
-``"stata"`` values and the observed bread whose exact identity equals the fit-time
-request is served from the retained initial cache, before and after
-``keep_influence=False``, whatever the origin of that convention: such a request takes
-no ``psd`` step, so no sequence enters its answer, and its factor and reference are the
-values'.  Every other request first requires the retained influence
+Cache and discard (rules B10 and B11).  A robust or one-cluster request under a
+convention with the ``"stata"`` values and the observed bread whose exact identity
+equals the fit-time request is served from the retained initial cache, before and
+after ``keep_influence=False``, whatever the origin of that convention: such a request
+takes no D4 step, so no sequence enters its answer, and its factor and reference are
+the values'.  Every other request first requires the retained influence
 (``specification.influence_discarded`` after discard) and reads the retained observed
-influence rows, or forms the expected bread from the guarded expected inputs on the same
-full basis.  Nothing is solved, reselected or replayed; a refusal leaves the envelope as
-it is.  The reporting map is applied once: the direct standard errors by the order
-scale, the reported covariance by its range-safe entrywise map or its recorded range
-error.  The ``ValueError`` guards on a missing grouping, geometry or order scale, an
-inconsistent statistical count or cache count, and absent influence or expected inputs
-restate invariants of the retained records, which their builders cannot violate.
+influence rows, or forms the expected bread from the guarded expected inputs on the
+same full basis.  Nothing is solved, reselected or replayed; a refusal leaves the
+envelope as it is.  The reporting map is applied once: the direct standard errors by
+the order scale, the reported covariance by its range-safe entrywise map or its
+recorded range error.  The ``ValueError`` guards on a missing grouping, geometry or
+order scale, an inconsistent statistical count or cache count, and absent influence
+or expected inputs restate invariants of the accepted retained records, which the
+accepted builders cannot violate; they are not reachable by a test that forges no
+retained state.
 
-The candidate of a fit.  A cluster request of the expanded menu at a fit without fixed
-effects is answered by the same composition at the influence record of a certificate's
-fresh evaluation, before any result exists (:func:`candidate_nofe_inference`): the
-counts at the evaluation's units, the convention of the request at the fit (its explicit
-``ssc``, else the default ``"stata"``; nothing is inherited at the fit), the observed
-influence rows of that record, the port, the factor once, the reporting map once and the
-``psd`` frame and sequence, exactly as :func:`retained_nofe_inference` composes them
-after the fit.  The reported scale of a solve reads its standard errors at every
-candidate it assesses, with the adjustment's notes withheld (``Reporting.notes``); the
-record of the fit forms them once, with its notes.  The port's raw diagnostics keep
-their routing at every call.  A request answered from the retained state after the fit
-never reads an expanded fit-time record through the default initial-cache rule: that
-record answers its own request by its typed request and convention
+The candidate of a fit (``plan/evidence/M1_contract.txt``, rules B1, B3 and B12(a);
+decision D65, Section 6(e)).  A cluster request of the expanded menu at a fit without
+fixed effects is answered by the same composition at the influence record of a
+certificate's fresh evaluation, before any result exists
+(:func:`candidate_nofe_inference`): the counts at the evaluation's units, the
+convention of the request at the fit (its explicit ``ssc``, else the default
+``"stata"``; nothing is inherited at the fit), the observed influence rows of that
+record, the port, the factor once, the reporting map once and D4's frame and sequence,
+exactly as :func:`retained_nofe_inference` composes them after the fit.  The reported
+scale of a solve reads its standard errors at every candidate it assesses, with D4's
+notes withheld (``Reporting.notes``); the record of the fit forms them once, with its
+notes.  The port's raw diagnostics keep their routing at every call.  A request
+answered from the retained state after the fit never reads an expanded fit-time record
+through the initial-cache rule of the first milestone: that record answers its own
+request by its typed request and convention
 (:mod:`powermean.results.active_covariance`).
 """
 
@@ -113,7 +126,7 @@ from __future__ import annotations
 import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -136,7 +149,19 @@ from powermean.errors import CovarianceWarning, SpecificationError
 from powermean.fe.admission_records import AdmissionWork
 from powermean.inference.absorbed_constant import ConstantRow, constant_influence
 from powermean.inference.absorbed_details import InferenceDetails, typed_details
-from powermean.inference.absorbed_rank import AbsorbedCount, absorbed_count
+from powermean.inference.absorbed_linear import (
+    exact_coordinates,
+    exact_count,
+    exact_requested,
+    fixest_count,
+    fixest_rank,
+    within_constant,
+)
+from powermean.inference.absorbed_rank import (
+    AbsorbedCount,
+    absorbed_count,
+    exact_absorbed,
+)
 from powermean.inference.bread import BREADS, Bread, same_point_influence
 from powermean.inference.contributions import Influence, statistical_count
 from powermean.inference.convention import ClusterCodes, Covariance, _active_codes
@@ -147,6 +172,7 @@ from powermean.inference.multiway import (
     multiway_estimate,
 )
 from powermean.inference.psd import (
+    FIXEST_TOL,
     FrameScales,
     PsdAdjustment,
     Sequence,
@@ -179,6 +205,7 @@ from powermean.results.cancelled_retained import RetainedCancelledEnvelope
 from powermean.results.covariance import cluster_codes, frequency_of
 from powermean.results.owned import _optional, owned_array
 from powermean.results.retained import CovarianceRecord, RetainedFit
+from powermean.results.saturated import saturated_certificate
 from powermean.solve.absorbed_certificate_scale import CovarianceRequest
 from powermean.systems.joint import SamplingUnits
 
@@ -189,7 +216,7 @@ ConstantBuilder = Callable[[Bread], ConstantRow]
 
 @dataclass(frozen=True, eq=False)
 class FrameRecord:
-    """The frame of one ``psd`` operation, retained internally.
+    """The frame of one D4 operation (file 04, Section 2.1.2), retained privately.
 
     Attributes
     ----------
@@ -208,7 +235,7 @@ class FrameRecord:
     fingerprint : str
         The fingerprint of the sample whose rows entered the scales.
     constant : bool
-        Whether the internal reporting constant entered the frame matrix.
+        Whether the private reporting constant entered the frame matrix.
     constant_total : float or None
         The weight total of the constant's weighted mean, or ``None``.
     constant_diagnostics : tuple of str
@@ -245,11 +272,12 @@ class Reporting:
     ``order`` the order scale; ``intercept`` the index of the reported intercept or
     ``None``; ``columns`` the unscaled reported regressor columns of the active rows
     (the scale sample); ``fingerprint`` the sample's; ``active`` the positions of the
-    active rows among the final rows; ``constant`` the builder of the internal constant
+    active rows among the final rows; ``constant`` the builder of the private constant
     row of an absorbed fit under a bread, or ``None`` for a fit without nuisance
-    geometry; ``notes`` whether the ``psd`` notes are issued when the adjustment is
+    geometry; ``notes`` whether decision D4's notes are issued when its adjustment is
     active or its final matrix indefinite (``False`` for the reported scale of a solve,
-    whose fit-time record issues them once).
+    whose fit-time record issues them once); ``reference`` the command the note of the
+    adjustment names (:func:`_psd_reference`).
     """
 
     order: OrderScale
@@ -259,6 +287,7 @@ class Reporting:
     active: IntegerArray
     constant: ConstantBuilder | None = None
     notes: bool = True
+    reference: str = "ppmlhdfe"
 
 
 @dataclass(frozen=True)
@@ -277,18 +306,18 @@ class InferenceRequest:
     bread : {"observed", "expected"}
         The bread of the slope influence.
     inherited : ConventionValues, optional
-        An internal declaration of the fit's custom record: inherited and custom
-        whatever its values, so it never selects the legacy sequence.
-        ``None`` reads the retained initial request, whose record holds its
+        A private declaration of the fit's custom record: inherited and custom
+        whatever its values, so it never selects the legacy sequence (file 04, Section
+        2.1.4).  ``None`` reads the retained initial request, whose record holds its
         convention by name, the ``"stata"`` preset.
     multiway : {"cgm", "ddg"} or OMITTED
-        The multiway form of a cluster request (the key ``multiway``);
+        The multiway form of a cluster request (the approved key ``multiway``);
         omitted, the signed form with two or more dimensions.  Given, the request
         takes the multiway path whatever its number of dimensions.
-    psd : {"cgm", "none"} or OMITTED
-        The ``psd`` treatment for this request (the key ``psd``), valid on
+    psd : {"cgm", "none", "fixest"} or OMITTED
+        Decision D4's treatment for this request (the approved key ``psd``), valid on
         a signed multiway request only: two or more dimensions, not ``"ddg"``
-        (``specification.conflicting`` otherwise, as the parser refuses it).
+        (``specification.conflicting`` otherwise, as the approved parser refuses it).
         Omitted, the convention in force decides.
     """
 
@@ -355,7 +384,7 @@ class InferenceRequest:
         bread: Bread = "observed",
         inherited: ConventionValues | None = None,
     ) -> InferenceRequest:
-        """Bind the parser's record to dimensions already bound to the rows.
+        """Bind the approved parser's record to dimensions already bound to the rows.
 
         ``clusters`` names the request's dimensions in its order, repetitions kept;
         another sequence of names is refused.  The parser owns the spellings; this
@@ -450,11 +479,12 @@ class RetainedInference:
         The multiway record (form, dimensions, components, factors, the raw port
         estimate) when the multiway kernel answered; ``None`` otherwise.  Exactly one
         of ``covariance`` and ``multiway`` is set for a computed request.
-    psd : {"cgm", "none"} or None
-        The ``psd`` treatment resolved for a signed multiway request (the request's
-        explicit ``psd``, else the convention's); ``None`` where it does not apply.
+    psd : {"cgm", "none", "fixest"} or None
+        The D4 treatment resolved for a signed multiway request (the request's
+        explicit ``psd``, else the convention's); ``None`` where D4 does not apply.
     adjustment : PsdAdjustment or None
-        The record of the ``psd`` operation when applied (``psd == "cgm"``): the raw
+        The record of the D4 operation when it was applied (``psd`` ``"cgm"`` or
+        ``"fixest"``, the latter ``fixest``'s rule on the reported matrix): the raw
         reported matrix, the frame matrix, the eigenvalues replaced, the final matrices
         and their diagnostics.  ``reported_covariance`` is then its ``adjusted`` matrix
         and ``standard_errors`` are read from that matrix's diagonal;
@@ -466,8 +496,8 @@ class RetainedInference:
         Actual cancelled inference calls through assembly; absent on existing routes.
         The fit envelope carries the complete lifecycle ledger.
     frame : FrameRecord or None
-        The frame and sequence of the ``psd`` operation when it was applied: the
-        scales, their provenance and the internal constant's record; ``None`` otherwise.
+        The frame and sequence of the D4 operation when it was applied: the scales,
+        their provenance and the private constant's record; ``None`` otherwise.
     """
 
     request: InferenceRequest
@@ -503,12 +533,12 @@ class RetainedInference:
 
     @property
     def degenerate(self) -> bool:
-        """Whether a reported standard error is exactly zero."""
+        """Whether a reported standard error is exactly zero (decision D49)."""
         return bool((self.standard_errors == 0.0).any())
 
     @property
     def adjusted(self) -> bool:
-        """Whether the ``psd`` adjustment was active on the reported matrix."""
+        """Whether the D4 adjustment was active on this request's reported matrix."""
         return self.adjustment is not None and self.adjustment.active
 
     def require_reported_covariance(self) -> FloatArray:
@@ -531,15 +561,38 @@ def _sampling_units(envelope: RetainedAbsorbedEnvelope) -> SamplingUnits:
 def _active_cluster_codes(
     request: InferenceRequest, units: SamplingUnits
 ) -> tuple[tuple[str, IntegerArray], ...]:
-    """The codes of each bound dimension on the active rows, checked as accepted."""
-    return tuple((c.name, _active_codes(c, units)) for c in request.clusters)
+    """The codes of each bound dimension on the active rows, checked as accepted.
+
+    A dimension with fewer than two clusters on the active rows is refused by name,
+    with the refusal of the fit (``specification.invalid_value``).
+    """
+    found = []
+    for cluster in request.clusters:
+        if cluster.codes.shape == (units.nobs,):
+            active = cluster.codes[units.identifiers]
+            if not active.size or not bool((active != active[0]).any()):
+                raise SpecificationError(
+                    "specification.invalid_value",
+                    {
+                        "argument": "cluster",
+                        "value": cluster.name,
+                        "valid": "at least two clusters on the estimation sample",
+                    },
+                )
+        found.append((cluster.name, _active_codes(cluster, units)))
+    return tuple(found)
 
 
 def _blocks(
     envelope: RetainedAbsorbedEnvelope, active: IntegerArray
 ) -> tuple[tuple[str, IntegerArray], ...]:
-    """The retained blocks' codes on the active rows, in their order."""
-    grouping = envelope.sample.grouping
+    """The retained blocks' codes on the active rows, in their order.
+
+    Read from the sample's internal final view: only the codes are read, and the
+    row selection copies them.  The public ``grouping`` would materialize every
+    level label afresh (about 1.5 s on 500,000 rows with 250,000 pair levels).
+    """
+    grouping = envelope.sample._final_grouping
     if grouping is None:
         raise ValueError("the retained sample holds no fixed-effect grouping")
     return tuple((block.name, block.codes[active]) for block in grouping.blocks)
@@ -599,7 +652,7 @@ def _cluster_cache_matches(
 def _applied_cache_matches(
     request: InferenceRequest, applied: AppliedConvention, det: InferenceDetails
 ) -> bool:
-    """The same values, ``psd`` sequence and exact request-specific counts."""
+    """The same values, D4 sequence and exact request-specific counts."""
     if applied.convention.values != det.applied.convention.values:
         return False
     psd = _resolved_psd(request, applied)
@@ -655,7 +708,8 @@ def _cache_matches(
 
 def _influence_rows(envelope: RetainedAbsorbedEnvelope, bread: Bread) -> FloatArray:
     """The slope influence of every final row under ``bread`` (after the guard)."""
-    if bread == "observed":
+    if bread == "observed" or _linear_absorbed(envelope):
+        # The linear equation has one curvature: both breads are the same matrix.
         found = envelope.observed_influence
         if found is None:
             raise ValueError(
@@ -764,12 +818,13 @@ def _nofe_cache_matches(
 ) -> CovarianceRecord | None:
     """The default record when a no-FE request is the fit-time one, else ``None``.
 
-    The default initial-cache rule: a robust or one-way request under the ``"stata"``
-    values.  An expanded fit-time record (one that holds its typed answer) is never read
-    through it: it answers its own request by its typed request and convention, before
-    this adapter is reached.
+    The initial-cache rule of the first milestone: a robust or one-way request under
+    the ``"stata"`` values.  An expanded fit-time record (one that holds its typed
+    answer) is never read through it: it answers its own request by its typed request
+    and convention, before this adapter is reached.
     """
-    default = retained.default
+    # The public covariance dispatcher answers saturation before this adapter.
+    default = cast("CovarianceRecord | None", retained.default)
     if (
         default is None
         or default.answer is not None
@@ -832,11 +887,35 @@ def _checked(
         raise TypeError("envelope must be a RetainedAbsorbedEnvelope or RetainedFit")
     if type(request) is not InferenceRequest:
         raise TypeError("request must be an InferenceRequest")
-    if envelope.selected_point is None or envelope.certificate is None:
+    if envelope.selected_point is None or (
+        envelope.certificate is None and not _linear_absorbed(envelope)
+    ):
         raise ValueError("no selected point was certified for this candidate")
     if envelope.empty:
         raise ValueError("the model has no slope parameters (K = 0)")
     return envelope, request
+
+
+def _linear_absorbed(envelope: RetainedAbsorbedEnvelope) -> bool:
+    """Whether the envelope is an accepted fixed-effect log-OLS fit by absorption.
+
+    Owner's ruling 52: that fit holds no certificate; its counts are those of
+    :mod:`powermean.inference.absorbed_linear`.
+    """
+    return bool(
+        envelope.route == "linear"
+        and envelope.certificate is None
+        and envelope.accepted
+    )
+
+
+def _psd_reference(envelope: RetainedAbsorbedEnvelope) -> str:
+    """The command the note ``covariance.psd_adjusted`` names for this fit.
+
+    ``reghdfe`` for fixed-effect log-OLS, whose Stata counterpart it is; ``ppmlhdfe``
+    for the other absorbed fits.
+    """
+    return "reghdfe" if envelope.route == "linear" else "ppmlhdfe"
 
 
 def _counts(
@@ -850,22 +929,9 @@ def _counts(
     """Convention, counts and factors of the request, from retained records alone."""
     units = _sampling_units(envelope)
     active = units.identifiers
-    certificate = envelope.certificate
-    assert certificate is not None
-    geometry = certificate.geometry
-    if geometry is None:
-        raise ValueError("the certificate retains no geometry for this candidate")
     codes = _active_cluster_codes(request, units)
     blocks = _blocks(envelope, active)
-    absorbed = absorbed_count(blocks, [c for _, c in codes])
     groups = [int(np.unique(c).size) for _, c in codes]
-    counts = convention_counts(
-        _statistical_count(envelope, active),
-        geometry.n_slopes,
-        geometry.dimension,
-        absorbed,
-        groups,
-    )
     inherited: ConventionValues | ResolvedConvention | None = request.inherited
     if inherited is None and envelope.initial_scale is not None:
         if envelope.initial_scale.details is not None:
@@ -873,24 +939,87 @@ def _counts(
         else:
             inherited = resolve_convention(envelope.initial_scale.request.convention)
     resolved = resolve_convention(request.ssc, inherited)
+    if _linear_absorbed(envelope):
+        # Fixed-effect log-OLS by absorption: fixest's default count (ruling 80), or
+        # the exact ranks of the indicators where the convention asks (ruling 5).
+        n_slopes = int(envelope.sample.n_slopes)
+        every = np.arange(active.size, dtype=np.intp)
+        clusters = [c for _, c in codes]
+        if exact_requested(resolved):
+            coordinates = exact_coordinates(
+                [values for _, values in blocks],
+                every,
+                int(active.size),
+                envelope._coordinates_memo(),
+            )
+            dimension = n_slopes + coordinates.rank
+            absorbed = exact_count(blocks, clusters, every, coordinates)
+        else:
+            dimension = n_slopes + fixest_rank(blocks, every)
+            absorbed = fixest_count(blocks, clusters, every)
+    else:
+        certificate = envelope.certificate
+        assert certificate is not None
+        geometry = certificate.geometry
+        if geometry is None:
+            raise ValueError("the certificate retains no geometry for this candidate")
+        n_slopes, dimension = geometry.n_slopes, geometry.dimension
+        absorbed = exact_absorbed(
+            absorbed_count(blocks, [c for _, c in codes]),
+            lambda: blocks,
+            dimension - n_slopes if active.size == units.nobs else None,
+        )
+    counts = convention_counts(
+        _statistical_count(envelope, active),
+        n_slopes,
+        dimension,
+        absorbed,
+        groups,
+    )
     applied = apply_convention(resolved, counts, kind=request.kind)
     return applied, absorbed, units, codes
+
+
+# The treatments that adjust an indefinite signed multiway estimate: D4's native rule
+# and ``fixest``'s (owner's ruling 84).
+ADJUSTING: tuple[PsdTreatment, ...] = ("cgm", "fixest")
+
+
+def psd_note(
+    adjustment: PsdAdjustment, reference: str = "ppmlhdfe"
+) -> dict[str, object]:
+    """The fields of the note ``covariance.psd_adjusted``: the rule that was applied.
+
+    ``reference`` names the Stata command of the route for the default rule
+    (``reghdfe`` for fixed-effect log-OLS, ``ppmlhdfe`` otherwise); the ``"fixest"``
+    rule names fixest.
+    """
+    if adjustment.sequence == "fixest":
+        return {
+            "count": adjustment.count,
+            "repair": f"eigenvalue(s) below {FIXEST_TOL:g} were set to {FIXEST_TOL:g}",
+            "reference": "fixest",
+        }
+    return {
+        "count": adjustment.count,
+        "repair": "negative eigenvalue(s) were set to zero",
+        "reference": reference,
+    }
 
 
 def _resolved_psd(
     request: InferenceRequest, applied: AppliedConvention
 ) -> PsdTreatment | None:
-    """The ``psd`` treatment of a signed multiway request: explicit or conventional."""
+    """D4's treatment for a signed multiway request: explicit, else the convention's."""
     if not request.signed:
         return None
     if given(request.psd):
-        found: PsdTreatment = "cgm" if request.psd == "cgm" else "none"
-        return found
+        return cast("PsdTreatment", request.psd)
     return applied.psd
 
 
 def _warn(identifier: str, fields: dict[str, object]) -> None:
-    """Issue one covariance note to the caller."""
+    """Issue one approved covariance note (decision D65) to the caller."""
     warnings.warn(CovarianceWarning(identifier, fields), stacklevel=4)
 
 
@@ -899,17 +1028,17 @@ def _raw_multiway_estimate(
 ) -> tuple[CovarianceEstimate, list[warnings.WarningMessage]]:
     """The port's raw estimate, with its diagnostic warnings held for routing.
 
-    The frozen port warns about its RAW estimate ("No pseudoinverse, zero fallback, or
-    PSD correction was applied") as it forms it, before the separate ``psd`` step of
+    The frozen port warns about its RAW estimate ("No pseudoinverse, zero fallback,
+    or PSD correction was applied") as it forms it, before the separate D4 step of
     this module decides what the result reports.  The warnings of that one call are
     recorded here instead of being issued at once, and any warning of another class
     raised inside the call is reissued immediately; :func:`_route_port_warnings`
-    reissues the port's own diagnostics unchanged once the reported matrix is known to
-    be the raw estimate, and withholds them when the ``psd`` adjustment was active, in
-    which case they do not describe the reported matrix and the notes
-    (``covariance.psd_adjusted``, ``covariance.indefinite``) do.  The port's diagnostics
-    themselves stay in the record (``estimate.diagnostics``).  No filter outside this
-    call is changed and nothing is suppressed globally.
+    reissues the port's own diagnostics unchanged once the reported matrix is known
+    to be the raw estimate, and withholds them when the D4 adjustment was active, in
+    which case they do not describe the reported matrix and the approved notes
+    (``covariance.psd_adjusted``, ``covariance.indefinite``) do.  The port's
+    diagnostics themselves stay in the record (``estimate.diagnostics``).  No
+    filter outside this call is changed and nothing is suppressed globally.
     """
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always", PortWarning)
@@ -926,19 +1055,29 @@ def _raw_multiway_estimate(
 def _route_port_warnings(
     held: list[warnings.WarningMessage], adjustment: PsdAdjustment | None
 ) -> None:
-    """Reissue the port's raw diagnostics unless the ``psd`` adjustment was active."""
+    """Reissue the port's raw diagnostics unless the D4 adjustment was active."""
     if adjustment is not None and adjustment.active:
-        return  # the reported matrix is adjusted: the notes describe it
+        return  # the reported matrix is adjusted: the approved notes describe it
     for item in held:
         warnings.warn(item.message, stacklevel=3)
+
+
+def _identity_scales(size: int, reporting: Reporting) -> FrameScales:
+    """The frame of fixest's rule: every scale one, none computed (deviation zero)."""
+    return FrameScales(
+        scales=owned_array(np.ones(size)),
+        deviations=owned_array(np.zeros(size)),
+        floored=np.zeros(size, dtype=np.bool_),
+        count=int(reporting.active.size),
+    )
 
 
 def _frame_scales(reporting: Reporting) -> FrameScales:
     """The frame scales of the reported coefficients: the columns', the intercept's one.
 
-    The native standard deviations of the unscaled reported columns on the scale sample
-    (``column_scales``); the reported intercept, when one is reported, takes the scale
-    exactly one and is not computed.
+    The native standard deviations of the unscaled reported columns on the scale
+    sample (``column_scales``); the reported intercept, when one is reported, takes
+    the scale exactly one and is not computed (file 04, Section 2.1.2).
     """
     columns, index = reporting.columns, reporting.intercept
     size = columns.shape[1]
@@ -962,7 +1101,7 @@ def _constant_row(
     rows: FloatArray,
     codes: tuple[tuple[str, IntegerArray], ...],
 ) -> tuple[FloatArray, ConstantRow, tuple[str, ...]]:
-    """The internal constant's raw reported row beside the slopes.
+    """The private constant's raw reported row beside the slopes (Section 2.1.3).
 
     The constant's influence row on the active rows is appended to the slopes'
     retained rows; the raw port forms the augmented signed estimate with the same
@@ -999,7 +1138,7 @@ def _adjusted(
     sequence: Sequence,
     constant: FloatArray | None,
 ) -> PsdAdjustment:
-    """The ``psd`` operation on the reported matrix, which must be representable.
+    """The D4 operation on the reported matrix, which must be representable.
 
     Its notes are issued where ``reporting`` asks for them (``Reporting.notes``).
     """
@@ -1019,7 +1158,7 @@ def _adjusted(
     if not reporting.notes:
         return adjustment
     if adjustment.active:
-        _warn("covariance.psd_adjusted", {"count": adjustment.count})
+        _warn("covariance.psd_adjusted", psd_note(adjustment, reporting.reference))
     if adjustment.final_indefinite:
         _warn(
             "covariance.indefinite",
@@ -1039,11 +1178,20 @@ def _frame_step(
     *,
     rows: FloatArray,
     codes: tuple[tuple[str, IntegerArray], ...],
+    psd: PsdTreatment = "cgm",
 ) -> tuple[PsdAdjustment, FrameRecord]:
-    """The frame, the sequence, the private constant where it belongs, the operation."""
+    """The frame, the sequence, the private constant where it belongs, the operation.
+
+    ``psd="fixest"`` is ``fixest``'s rule on the reported matrix: the identity frame
+    (every scale one, no scale computed), no private constant.
+    """
     applied = common[1]
-    sequence = applied.sequence
-    scales = _frame_scales(reporting)
+    sequence: Sequence = "fixest" if psd == "fixest" else applied.sequence
+    scales = (
+        _identity_scales(0 if reported is None else reported.shape[0], reporting)
+        if sequence == "fixest"
+        else _frame_scales(reporting)
+    )
     constant: FloatArray | None = None
     record: ConstantRow | None = None
     diagnostics: tuple[str, ...] = ()
@@ -1084,11 +1232,11 @@ def _computed_inference(
 ) -> RetainedInference:
     """Compute the uncached covariance and map it once to the reported scale.
 
-    One dimension without an explicit form takes the one-way composition; the multiway
-    path (module docstring) takes the port's raw multiway estimate and the convention's
-    factors once, then the separate ``psd`` step, in the frame and the sequence of the
-    convention in force, on the reported matrix of a signed request whose resolved
-    treatment is ``"cgm"``.
+    One dimension without an explicit form takes the accepted M1.16 composition; the
+    multiway path (module docstring) takes the port's raw multiway estimate and the
+    convention's factors once, then the separate D4 step, in the frame and the sequence
+    of the convention in force, on the reported matrix of a signed request whose
+    resolved treatment is ``"cgm"``.
     """
     request, applied = common[0], common[1]
     order, intercept = reporting.order, reporting.intercept
@@ -1120,10 +1268,10 @@ def _computed_inference(
     psd = _resolved_psd(request, applied)
     adjustment: PsdAdjustment | None = None
     frame: FrameRecord | None = None
-    if psd == "cgm":
+    if psd in ADJUSTING:
         try:
             adjustment, frame = _frame_step(
-                common, reporting, reported, error, rows=rows, codes=codes
+                common, reporting, reported, error, rows=rows, codes=codes, psd=psd
             )
         except FloatingPointError:
             _route_port_warnings(held, None)  # nothing was adjusted: raw diagnostics
@@ -1159,9 +1307,10 @@ def retained_nofe_inference(
     evaluation = retained.certificate.evaluation
     assert evaluation is not None
     inherited: ConventionValues | ResolvedConvention | None = request.inherited
-    if inherited is None and retained.default is not None:
+    default = cast("CovarianceRecord | None", retained.default)
+    if inherited is None and default is not None:
         # the retained initial request's convention, by its recorded name: a preset
-        inherited = resolve_convention(retained.default.convention)
+        inherited = resolve_convention(default.convention)
     applied, codes, count, frequency = _nofe_counts(
         retained.sample, evaluation.units, evaluation.weights, request, inherited
     )
@@ -1219,14 +1368,14 @@ def candidate_nofe_inference(
         the sample's final rows; its convention is its explicit ``ssc``, else the
         default ``"stata"``: nothing is inherited at the fit.
     notes : bool, default True
-        Whether the ``psd`` notes are issued; ``False`` for the reported scale of a
+        Whether decision D4's notes are issued; ``False`` for the reported scale of a
         solve, which assesses many candidates (module docstring).
 
     Returns
     -------
     RetainedInference
         The convention, the counts, the covariance, its reported matrix and standard
-        errors, and the multiway and ``psd`` records, by the composition of
+        errors, and the multiway and D4 records, by the composition of
         :func:`retained_nofe_inference`; no cache answers it.
 
     Raises
@@ -1273,7 +1422,7 @@ def nofe_convention(
 
     The active codes, counts and factors that :func:`candidate_nofe_inference` forms,
     at the sample's units and the raw weights of its active rows before any candidate
-    exists, so that their refusals cost no solve; nothing is inherited
+    exists, so that their refusals cost no solve (rule B12(a)); nothing is inherited
     at the fit.
     """
     if type(request) is not InferenceRequest:
@@ -1290,6 +1439,15 @@ def _constant_builder(envelope: RetainedAbsorbedEnvelope) -> ConstantBuilder | N
     working weight); ``None`` where the envelope retains no geometry.
     """
     certificate = envelope.certificate
+    if _linear_absorbed(envelope):
+        # Fixed-effect log-OLS by absorption: the same row from the within
+        # regression (both breads are the same matrix).
+        design, scores = envelope.sample.design, envelope.scores()
+        rows = envelope.observed_influence
+        if design is None or scores is None or rows is None:
+            return None
+        matrix, weights = design.matrix, envelope.sample.weight_values
+        return lambda _bread: within_constant(matrix, weights, scores, rows)
     inputs = envelope.expected_inputs()
     if certificate is None or certificate.geometry is None or inputs is None:
         return None
@@ -1317,7 +1475,7 @@ def retained_inference(
     Parameters
     ----------
     envelope : RetainedAbsorbedEnvelope or RetainedFit
-        The retained state of an absorbed or no-FE fit.
+        The accepted retained state of an absorbed or no-FE fit.
     request : InferenceRequest
         The request, its cluster dimensions already bound to the sample's final rows.
 
@@ -1345,7 +1503,7 @@ def retained_inference(
     -----
     CovarianceWarning
         The port's diagnostics of a raw estimate; ``covariance.psd_adjusted`` when
-        the ``psd`` adjustment is active; ``covariance.indefinite`` when the final
+        decision D4's adjustment is active; ``covariance.indefinite`` when the final
         adjusted matrix is not positive semidefinite.
     """
     if type(request) is InferenceRequest and request.adjustment == "wz":
@@ -1390,7 +1548,10 @@ def retained_inference(
             )
         if det.adjustment is not None:
             if det.adjustment.active:
-                _warn("covariance.psd_adjusted", {"count": det.adjustment.count})
+                _warn(
+                    "covariance.psd_adjusted",
+                    psd_note(det.adjustment, _psd_reference(envelope)),
+                )
             if det.adjustment.final_indefinite:
                 _warn(
                     "covariance.indefinite",
@@ -1456,9 +1617,9 @@ def retained_inference(
     design = envelope.sample.design
     if design is None:
         raise ValueError("the retained sample holds no scaled design")
-    # An absorbed fit reports no intercept: a constant column is absorbed by the effects
-    # (powermean.data.collinearity), so the block rule has none; the legacy sequence
-    # takes the internal reporting constant instead.
+    # An absorbed fit reports no intercept: a constant column is absorbed by the
+    # effects (powermean.data.collinearity, contract C), so the block rule has none;
+    # the legacy sequence takes the private reporting constant instead.
     reporting = Reporting(
         order,
         None,
@@ -1466,6 +1627,7 @@ def retained_inference(
         envelope.sample.fingerprint,
         active,
         _constant_builder(envelope),
+        reference=_psd_reference(envelope),
     )
     return _computed_inference(
         common,
@@ -1479,10 +1641,28 @@ def retained_inference(
     )
 
 
+def absorbed_saturated(envelope: RetainedAbsorbedEnvelope) -> bool:
+    """Whether a retained joint envelope's certificate is that of a saturated fit.
+
+    The compact certificate payload where the envelope holds one, so that no rich
+    certificate graph is formed for the question (:mod:`powermean.results.saturated`).
+    """
+    compact = RetainedAbsorbedEnvelope._certificate_data(envelope)
+    return saturated_certificate(
+        compact if compact is not None else envelope.certificate
+    )
+
+
 def initial_inference_from_envelope(
     envelope: RetainedAbsorbedEnvelope,
-) -> RetainedInference:
-    """Build ``RetainedInference`` directly from ``envelope.initial_scale``."""
+) -> RetainedInference | None:
+    """Build ``RetainedInference`` directly from ``envelope.initial_scale``.
+
+    ``None`` for a saturated fit, whose certificate formed no scale: its covariance
+    is missing (:mod:`powermean.results.saturated`), formed by its result.
+    """
+    if absorbed_saturated(envelope):
+        return None
     init = envelope.initial_scale
     point = envelope.selected_point
     if init is None or point is None:
@@ -1509,7 +1689,10 @@ def initial_inference_from_envelope(
         return retained_inference(envelope, inf_req)
     if det.adjustment is not None:
         if det.adjustment.active:
-            _warn("covariance.psd_adjusted", {"count": det.adjustment.count})
+            _warn(
+                "covariance.psd_adjusted",
+                psd_note(det.adjustment, _psd_reference(envelope)),
+            )
         if det.adjustment.final_indefinite:
             _warn(
                 "covariance.indefinite",
@@ -1563,6 +1746,7 @@ __all__ = [
     "InferenceRequest",
     "Reporting",
     "RetainedInference",
+    "absorbed_saturated",
     "candidate_nofe_inference",
     "initial_inference_from_envelope",
     "nofe_convention",

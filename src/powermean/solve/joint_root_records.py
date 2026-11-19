@@ -1,8 +1,9 @@
 """The records of a joint root solve outside ``tau in [1, 2]``: start, stages, result.
 
-The starting values and the continuation path are recorded, with the resolved solver,
-options and start, and the trace; the start that produced the reported solution is
-stored.  The solve itself is :mod:`powermean.solve.joint_root`.  These records hold
+``design/02_computation.md``, Sections 5.3, 6 (starting values and the continuation
+path, recorded) and 9 (provenance: the resolved solver, options and start, and the
+trace); ``DESIGN.md``, Section 6.3 ("the start that produced the reported solution is
+stored").  The solve itself is :mod:`powermean.solve.joint_root`.  These records hold
 what ran and what it cost; none certifies anything: the conclusion's certificate
 decides, and a candidate is never a certified solution.
 
@@ -27,9 +28,13 @@ are stored as owned bytes and handed out as fresh read-only views.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal
+
+import numpy as np
 
 if TYPE_CHECKING:
     from powermean.fe._cancel_storage import FloatStorage
@@ -128,6 +133,53 @@ class JointRootStage:
 
 
 @dataclass(frozen=True, eq=False)
+class RootConditionEstimate:
+    """The successful LAPACK estimate on the exact observed bread of a root solve.
+
+    A full certificate already retains its immutable bread. A continuation summary
+    discards the evaluation, so retain only a digest for that intermediate matrix.
+    """
+
+    estimate: float
+    minimum: float
+    bread: FloatArray | bytes
+
+    @classmethod
+    def capture(
+        cls, certificate: Certificate, *, intermediate: bool = False
+    ) -> RootConditionEstimate | None:
+        """Capture only a successful factorization, at its original threshold."""
+        evaluation = certificate.evaluation
+        if not certificate.conditioned or evaluation is None:
+            return None
+        bread = evaluation.bread
+        return cls(
+            certificate.rcond,
+            certificate.controls.rcond_min,
+            hashlib.sha256(bread).digest() if intermediate else bread.view(),
+        )
+
+    def matches(self, retained: float, fresh: Certificate) -> bool:
+        """Authenticate the stored estimate and replay the strict gate on its bread."""
+        if (
+            retained != self.estimate
+            or self.minimum != fresh.controls.rcond_min
+            or not fresh.conditioned
+            or not fresh.rcond > self.minimum
+        ):
+            return False
+        if fresh.rcond == retained:
+            return True
+        evaluation = fresh.evaluation
+        if evaluation is None:
+            return False
+        bread = evaluation.bread
+        if isinstance(self.bread, bytes):
+            return self.bread == hashlib.sha256(bread).digest()
+        return bool(np.array_equal(self.bread.view(np.uint64), bread.view(np.uint64)))
+
+
+@dataclass(frozen=True, eq=False)
 class JointRootCandidate:
     """The candidate of one joint root solve and its trace; not a certified solution.
 
@@ -171,6 +223,11 @@ class JointRootCandidate:
     reason: NativeReason
     work: AdmissionWork
     timing: Timing
+    # Only solve_joint_root records these before handoff. A reconstructed candidate
+    # has no producer evidence and must reproduce every scalar on fresh evaluation.
+    _condition_estimates: Mapping[str | StageSummary, RootConditionEstimate] = field(
+        init=False, repr=False, default_factory=lambda: MappingProxyType({})
+    )
 
     @property
     def coefficients(self) -> FloatArray:

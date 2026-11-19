@@ -1,11 +1,14 @@
 """The private reporting constant of an absorbed fit: its functional and influence row.
 
-Internal module: the consumer of the retained nuisance geometry
-(:mod:`powermean.solve.absorbed_certificate_geometry`,
-:mod:`powermean.fe.certificate_basis`) that the legacy sequence of
-:mod:`powermean.inference.psd` needs for a fit whose reported coefficients hold no
-intercept.  Nothing here fits, reselects a sample or reevaluates a formula; no
-coefficient, standard error, name or option is added for the constant.
+``design/04_inference_and_effects.md``, Section 2.1.3 (the author's third-round D4
+answer of 17 October 2026); ``design/02_computation.md``, Section 7; the M1.14 and
+M1.15 nuisance geometry (:mod:`powermean.solve.absorbed_certificate_geometry`,
+:mod:`powermean.fe.certificate_basis`); ``brief/G_NATIVE_SEQUENCE_FACTS.txt`` (read,
+never copied); decisions D4, D51, D54 and D65.  Task M1.17, private: the consumer of
+the retained geometry that the legacy sequence of :mod:`powermean.inference.psd`
+needs for a fit whose reported coefficients hold no intercept.  Nothing here fits,
+reselects a sample or reevaluates a formula; no coefficient, standard error, name or
+option is added for the constant (D65).
 
 Both reference programs recover a reporting constant for an absorbed fit from weighted
 means: the constant is the weighted mean, over the estimation sample, of the total
@@ -35,7 +38,7 @@ influence row is the same functional of the nuisance block,
 
 one transposed solve against the retained full joint Hessian ``H`` (the observed one of
 the certificate, or the expected information assembled on the same basis for
-``bread="expected"``) by the sparse actions of the certificate (the
+``bread="expected"``) by the accepted sparse actions of the certificate (the
 equilibration ``s``, the scaled ordinary ``A = S^-1 H S^-1``, its transient LU factor
 and one ``T`` solve, ``v = S^-1 A^-T (S^-1 r)``, as ``slope_map`` forms ``W``).  The
 slopes' own influence rows are the retained ones; this row sits beside them so that the
@@ -60,11 +63,8 @@ from powermean.solve.absorbed_certificate_factor import (
     FactorRecord,
     factorized,
 )
-from powermean.solve.absorbed_certificate_geometry import (
-    SparseMatrix,
-    equilibration,
-    scaled_ordinary,
-)
+from powermean.solve.absorbed_certificate_geometry import equilibration, scaled_ordinary
+from powermean.solve.sparse_matrix import SparseMatrix
 
 
 @dataclass(frozen=True, eq=False)
@@ -81,15 +81,19 @@ class ConstantRow:
         ``v = H^-T [0; L]``, one column over the slopes and ``J``.
     influence : array
         ``c_i = b_i (B_i v)`` for every row of the grouping, in its order.
-    factor : FactorRecord
+    factor : FactorRecord or None
         The record of the transient ordinary factor of ``H`` (no live factor is kept).
+        ``None`` for fixed-effect log-OLS by absorption, whose row is formed from
+        the within regression without a factor of ``H``
+        (:func:`powermean.inference.absorbed_linear.within_constant`); ``functional``
+        and ``map`` are then empty.
     """
 
     functional: FloatArray
     total: float
     map: FloatArray
     influence: FloatArray
-    factor: FactorRecord
+    factor: FactorRecord | None
 
 
 def constant_functional(basis: CertificateBasis, weights: FloatArray) -> FloatArray:

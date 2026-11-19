@@ -1,23 +1,26 @@
 """Scalar NB2 level equations: analytic brackets, original-index evaluations, one step.
 
-For NB2 each level solves a scalar monotone equation by a safeguarded Newton
-iteration vectorized over levels, one safeguarded Newton step per block visit, at
-``profile_tol`` 2e-11.  This module holds the scalar primitives of one block visit
-only.  The state,
+``design/01_statistical_core.md``, Section 4.2 (for NB2 each level solves a scalar
+monotone equation by a safeguarded Newton iteration vectorized over levels) and
+Section 4.1; ``design/02_computation.md``, Section 5.2 (a safeguarded Newton step
+per block visit) and Section 5.7 (``profile_tol`` 2e-11, unchanged); the adopted
+contract ``plan/evidence/M1.6_contract.txt`` (equation and derivative, the minimal
+safeguard, the resolved scalar budget) and its review ``M1.6_scope_review.txt``;
+decision D51.  Task M1.6: the scalar primitives of one block visit only.  The state,
 the ordered sweeps, the budget, the work and the statuses are
 :mod:`powermean.fe.profile_nb2`; the shared checked problem, the ordered
 reconstruction and the fresh equations are :mod:`powermean.fe.profile_arithmetic`,
 reused and not copied.
 
-Equation of one level ``g`` of block ``k``, with the other blocks held
+Equation of one level ``g`` of block ``k`` (contract), with the other blocks held
 fixed, ``v_i = b_i + sum_{j != k} alpha_j[c_j(i)]``, ``q_i = v_i + alpha``,
 ``m_i = exp(q_i)`` and ``kappa > 0``:
 
     F_g(alpha) = sum_{i in g} a_i (Z_i - m_i) / (1 + kappa m_i)
     C_g(alpha) = -F_g'(alpha) = sum_{i in g} a_i m_i (1 + kappa Z_i) / (1 + kappa m_i)^2
 
-``F_g`` is the raw-weight sum of the unchanged NB2 score ``r_i`` of
-:func:`~powermean.model.rows.evaluate_rows`, through the guarded
+``F_g`` is the raw-weight sum of the unchanged M0 NB2 score ``r_i`` of
+:func:`~powermean.model.rows.evaluate_rows`, through the accepted guarded
 :func:`~powermean.fe.profile_arithmetic.active_scores`, the product and quotient
 guards and the row-order level sums, so that ``e_g = F_g / d_g`` is the fresh-check
 equation of that block, term for term (:func:`level_equations`).  ``C_g`` sums the
@@ -28,14 +31,14 @@ indices ``C_g > 0`` in exact arithmetic, and with positive weighted outcome ``F_
 crosses zero exactly once; a represented ``C_g`` that is not positive (a genuine
 final underflow of the kernel) selects the midpoint below and is never divided by.
 
-Bracket.  With ``zbar_g = sum a Z / sum a > 0`` and the extrema of ``v``
+Bracket (contract).  With ``zbar_g = sum a Z / sum a > 0`` and the extrema of ``v``
 over the rows of positive weight of the level, the root lies in
 
     [L_g, U_g] = [log zbar_g - max v, log zbar_g - min v],
 
 since ``sum(a)(zbar - m_max)/(1 + kappa m_max) <= F <= sum(a)(zbar - m_min)/(1 + kappa
 m_min)`` by the monotonicity of ``1/(1 + kappa m)`` and of ``m/(1 + kappa m)``.
-``log zbar_g`` is formed from the weighted log sums (the maximum-shift
+``log zbar_g`` is formed from the accepted weighted log sums (the M1.5 maximum-shift
 reduction, its vanishing normalized tails allowed), never from a sum ``a Z`` that can
 overflow; the extrema use the active rows only; ``v`` is the ORIGINAL ordered
 reconstruction with the block's coefficients replaced by zeros
@@ -48,7 +51,7 @@ checked freshly, ``F(L) >= 0`` and ``F(U) <= 0``, and a wrong rounded sign refus
 tolerance; a degenerate bracket's sole point must meet the unchanged equation
 tolerance or refuses for lack of interior progress (:func:`endpoint_check`).
 
-Retention (the bracket is retained only while the scalar problem is unchanged).
+Retention (contract: retain the bracket only while the scalar problem is unchanged).
 Within one call the base, outcomes, weights and ``kappa`` are fixed by the problem, so
 the scalar function of a level of block ``k`` is fixed by the ORDERED OTHER-BLOCK
 INPUTS of its rows, ``alpha_j[c_j(i)]`` for every ``j != k`` in block order
@@ -60,7 +63,7 @@ the full indexes ``(0, 4)`` and ``(2, 2)`` and scores of opposite signs.  A stor
 bracket therefore carries these inputs and a level keeps it only while they are
 bitwise unchanged on every one of its active rows (:func:`retained_levels`).
 
-One safeguarded update per unfinished level.  A finished level
+One safeguarded update per unfinished level (contract).  A finished level
 (``|e_g| <= profile_tol``) needs none.  An evaluated point inside the bracket
 tightens it by its fresh score, positive ``F`` raising ``L`` and negative lowering
 ``U``, never widening (:func:`tightened`).  A coefficient inside or at an endpoint of
@@ -317,7 +320,7 @@ def level_equations(
 
 
 def level_curvatures(problem: ProfileProblem, q: FloatArray, block: int) -> FloatArray:
-    """``C_g = sum a_i c_i`` with the OBSERVED curvature of the unchanged row kernel.
+    """``C_g = sum a_i c_i`` with the OBSERVED curvature of the unchanged M0 kernel.
 
     ``c_i = m (1 + kappa Z) / (1 + kappa m)^2``, the exact negative derivative of the
     score, ``m / (1 + kappa m)^2`` at a zero outcome; the products refuse an overflow

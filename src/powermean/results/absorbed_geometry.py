@@ -1,9 +1,11 @@
 """Detached snapshots of FE rows, geometry, and expected-information assembly.
 
-This module detaches ``FreshRows`` and ``FEGeometry`` into passive finite typed records
-with owned arrays on ingress and every exposure, and owns the single lazy
-expected-information assembly implementation (:class:`ExpectedInformationInputs`).
-Basis and sparse matrix records live in
+``design/02_computation.md``, Section 7; ``design/03_fixed_effects.md``, Sections 2 and
+4; ``plan/evidence/M1.15_contract.txt``, items 4, 8 and 9;
+decisions D49, D51, D54 and D55.  This module detaches ``FreshRows`` and ``FEGeometry``
+into passive finite typed records with owned arrays on ingress and every exposure, and
+owns the single lazy expected-information assembly implementation
+(:class:`ExpectedInformationInputs`).  Basis and sparse matrix records live in
 :mod:`powermean.results.absorbed_geometry_records`.
 """
 
@@ -34,14 +36,12 @@ from powermean.results.retained_inputs import (
     SampleKey,
     owned_order_scale,
 )
-from powermean.solve.absorbed_certificate_geometry import (
-    FEGeometry,
-    SparseMatrix,
-)
+from powermean.solve.absorbed_certificate_geometry import FEGeometry
 from powermean.solve.absorbed_certificate_geometry import (
     hessian as assemble_hessian,
 )
 from powermean.solve.absorbed_certificate_point import FreshRows
+from powermean.solve.sparse_matrix import SparseMatrix
 
 Family = PowerVariance | NB2Variance
 

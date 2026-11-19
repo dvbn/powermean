@@ -1,21 +1,26 @@
 """The internal profiled Newton solver of the joint system with absorbed effects.
 
-The explicitly selected internal organization ``absorbed='profiled'`` for the power
-family with ``tau`` in ``[1, 2]`` and NB2.  No public route, default organization,
+``design/02_computation.md``, Sections 4, 5.1, 5.2, 5.7 and 6; ``DESIGN.md``, Sections
+5.3 and 6.2; decisions D10, D24, D40, D47, D48, D50, D51 and D68 to D72; the ledger row
+M1.11 and its iteration-trigger note; the M1.11 contract with its conditional outline,
+mechanics B, sample bridge, partial trace, correction C reconciliation and D addendum.
+Task M1.11: the explicitly selected private organization ``absorbed='profiled'`` for the
+power family with ``tau`` in ``[1, 2]`` and NB2.  No public route, default organization,
 certificate, covariance or other organization.
 
-:func:`solve` takes the accepted immutable final sample, the working
+:func:`solve` takes the accepted immutable final sample of task M1.10, the working
 variance of its request, the resolved options, the explicit absorbed options, a required
 trigger with its admission of an outcome and an optional independent full-point
 assessor, and returns a candidate with its trace (:class:`ProfiledCandidate`), never a
 certified fit.
 
-The internal NumericFit entry can select the retained
+The private normal NumericFit entry can select the human-authorized retained
 nonlinear backend. Its execution tag and history route say so explicitly: trials
 and the first cold opening solve one conditional FE block, with the remaining FE
 coordinates updated by Newton, not profiled to completion. Warm retry openings
-and fresh final work remain all-FE. Public/direct and ineligible calls retain the
-original organization below.
+and fresh final work remain all-FE. After an eligible cold solver failure, the
+same backend may use its single retry with a cold all-FE opening. Public/direct
+and ineligible calls retain the original organization below.
 
 Slopes.  The damped Newton iteration of :mod:`powermean.solve.newton_convex` with the
 provider of ``newton_provider`` (both drive the same profiled linear loss), from zero
@@ -25,8 +30,9 @@ evaluations and one of accepted steps for the whole solve, and the whole-point s
 its failure is the operative reason ``final_failure``.  The retry is the existing rule
 (:func:`powermean.solve.newton_retry.run_attempts`), decided on an operative native
 stop with the caller's assessor of whole points: ``retry=1`` without one is refused
-before any work.  The second attempt starts from the first's whole point with what
-remains of the budgets.
+before any work.  A native stop accepted at the secondary level only is retried too.
+The second attempt starts from the first's whole point with what remains of the
+budgets.
 
 Effects only.  Without an active slope there is no provider, start, Newton step or
 retry: the effects are profiled from the cold state, ZC is evaluated, and the fresh
@@ -39,30 +45,31 @@ The caller's trigger is then called once, and its trace read, by
 still provides): the trace is bound to this sample, its origin and this request, its
 first fresh diagnostic is admitted again on the solver's own problem, and the
 coordinator's outcome is kept only when the caller's admission, the coordinator's own,
-admits it.  The solver never resumes, re-solves, certifies, adopts a new
+admits it (correction A).  The solver never resumes, re-solves, certifies, adopts a new
 sample or deletes a row: its stopped point and its sample are unchanged.
 
 Evaluations.  The profiled linear loss charges each evaluation to the solve's one budget
-before its profile, rows and absorption
-(:class:`~powermean.solve.profiled_linear_loss.Admissions`); a retry receives what
+before its profile, rows and absorption (correction A,
+:class:`~powermean.solve.profiled_linear_loss.Admissions`); a retry receives what
 remains.
 """
 
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Literal, NamedTuple, Protocol
+from typing import Literal, NamedTuple, Protocol
 
 import numpy as np
 
-from powermean.data.sample_fe_state import FESample
+from powermean.data.sample_fe_state import FESample, same_bits
 from powermean.fe.profile import ProfileState
 from powermean.model.variance import FloatArray, NB2Variance, PowerVariance
 from powermean.solve import support, support_gamma
 from powermean.solve.assessment import Assessment, CertificateControls
 from powermean.solve.assessment import certificate_controls as controls_of
-from powermean.solve.absorbed import AbsorbedOptions
+from powermean.solve.m1_options import AbsorbedOptions
 from powermean.solve.newton_convex import (
     IndicationError,
     InnerLimitError,
@@ -73,7 +80,7 @@ from powermean.solve.newton_convex import (
     run_index_attempt,
     run_profiled_attempt,
 )
-from powermean.solve.newton_retry import improved, verdict
+from powermean.solve.newton_retry import improved, kept, short_of_strict, verdict
 from powermean.solve.newton_trace import NativeReason, Timing
 from powermean.solve.options import Provider, SolverOptions
 from powermean.solve.point_loss import PointLoss
@@ -100,12 +107,13 @@ from powermean.solve.profiled_trigger import (
     TriggerStatus,
     triggered,
 )
+from powermean.solve.reduced_nonlinear import ConditionalPoint
 from powermean.solve.reduced_nonlinear_loss import ReducedEvaluator
 from powermean.solve.starts import Start
 from powermean.systems.profiled import PointProfile, ProfiledProblem
 
-# The names of this module, and those of the trigger boundary defined in
-# solve/profiled_trigger.py, whose import routes from here are kept.
+# The names of this module and of the trigger boundary that correction A moved from it
+# to solve/profiled_trigger.py: their import routes from here are kept.
 __all__ = [
     "RECESSIONS",
     "EventView",
@@ -126,9 +134,6 @@ __all__ = [
     "stopped_point",
 ]
 
-if TYPE_CHECKING:
-    from powermean.solve.reduced_nonlinear import ConditionalPoint
-
 Family = PowerVariance | NB2Variance
 ProfiledReason = Literal[
     NativeReason, "inner_limit", "alarm", "final_failure", "profile_only"
@@ -144,6 +149,13 @@ class FullAssessor(Protocol):
     ) -> Assessment:
         """The assessment of ``point`` under the controls of the certificate."""
         ...
+
+
+class _ZeroRowPolish(NamedTuple):
+    """Owner checks for polishing a freshly disproved zero-row indication."""
+
+    same_sample: Callable[[FESample, FESample], bool]
+    strict: Callable[[FullPoint, CertificateControls], bool]
 
 
 @dataclass(frozen=True, eq=False)
@@ -234,6 +246,17 @@ class ProfiledCandidate:
         """The whole point of the retained attempt (``ValueError`` without one)."""
         retained = self.attempts[self.retained]
         return FullPoint(self.sample, self.variance, stopped_point(retained))
+
+    @property
+    def polished_alarm(self) -> Alarm | None:
+        """The original zero-row warning of a selected point polished after it."""
+        attempt, record = self.attempts[self.retained], self.trigger
+        if attempt.final is None or record is None:
+            return None
+        asked = record.request
+        if asked.alarm.where == "accepted" and asked.point.point is attempt.point:
+            return asked.alarm
+        return None
 
 
 # ---------------------------------------------------------------------- the solve
@@ -383,9 +406,10 @@ def _attempt(
     *,
     origin: PointProfile | ConditionalPoint | None,
     max_iter: int,
+    all_effects_opening: bool = False,
 ) -> ProfiledAttempt:
     """One attempt from ``theta`` and the effects of ``origin`` (cold without one)."""
-    index = 0 if origin is None else 1
+    index = 1 if origin is not None or all_effects_opening else 0
     warm = None if origin is None else origin.state
     space = context.problem.__dict__.get("_reduced_nonlinear")
     if space is not None:
@@ -393,8 +417,13 @@ def _attempt(
             context, newton.point, space, attempt=index, warm=warm
         )
         iteration = run_index_attempt(
-            newton.provider, newton.point, newton.problem, theta,
-            context.options, evaluation=reduced, max_iter=max_iter,
+            newton.provider,
+            newton.point,
+            newton.problem,
+            theta,
+            context.options,
+            evaluation=reduced,
+            max_iter=max_iter,
             budget=context.budget,
         )
         return _finished(reduced, iteration, origin)
@@ -428,25 +457,66 @@ def _opened(attempt: ProfiledAttempt) -> PointProfile | ConditionalPoint:
     return attempt.opening
 
 
+def _retry_all_effects(
+    context: _Context,
+    newton: _Newton,
+    start: Start,
+    first: ProfiledAttempt,
+    assess: _Assessments,
+) -> _Attempts:
+    """Restart once on the same sample, retaining the original refusal if needed."""
+    left = context.options.max_iter - first.iterations
+    if (
+        first.reason
+        not in ("numerical_breakdown", "line_search_failure", "inner_limit")
+        or type(first.opening) is not ConditionalPoint
+        or first.alarm is not None
+        or left <= 0
+        or context.budget.used >= context.budget.limit
+    ):
+        return _Attempts((first,), 0, None, False)
+    second = _attempt(
+        context,
+        newton,
+        start.coefficients,
+        origin=None,
+        max_iter=left,
+        all_effects_opening=True,
+    )
+    if second.reason != "native_stop" or second.final is None:
+        return _Attempts((first, second), 0, None, False)
+    checked = assess(stopped_point(second))
+    return _Attempts(
+        (first, replace(second, assessment=checked)), int(checked.accepted), None, False
+    )
+
+
 def _attempts(
     context: _Context, newton: _Newton, start: Start, assess: _Assessments | None
 ) -> _Attempts:
     """The first attempt and, if the existing rule allows it, the second.
 
     The statements of :func:`powermean.solve.newton_retry.run_attempts`, read on the
-    operative reason and on whole points.
+    operative reason and on whole points, with one addition: a first point accepted at
+    the secondary level only is retried like one not accepted, and the second point is
+    then kept only when it is accepted with a smaller common error
+    (:func:`~powermean.solve.newton_retry.kept`).
     """
     options, budget = context.options, context.budget
     first = _attempt(
         context, newton, start.coefficients, origin=None, max_iter=options.max_iter
     )
-    if assess is None or options.retry == 0 or first.reason != "native_stop":
+    if assess is None or options.retry == 0:
         return _Attempts((first,), 0, None, False)
+    if first.reason != "native_stop":
+        return _retry_all_effects(context, newton, start, first, assess)
     origin = stopped_point(first)
     assessed = assess(origin)
     first = replace(first, assessment=assessed)
     budgets_remain = first.iterations < options.max_iter and budget.used < budget.limit
-    if assessed.accepted or not assessed.finite_error or not budgets_remain:
+    polish = short_of_strict(assessed, options.tol)
+    settled = assessed.accepted and not polish
+    if settled or not assessed.finite_error or not budgets_remain:
         return _Attempts((first,), 0, None, False)
     initial = assess(_opened(first))
     if not improved(assessed, initial):
@@ -455,7 +525,7 @@ def _attempts(
     second = _attempt(context, newton, origin.theta, origin=origin, max_iter=left)
     reassessed = assess(stopped_point(second))
     second = replace(second, assessment=reassessed)
-    no_progress, keep_first = verdict(assessed, reassessed)
+    no_progress, keep_first = (kept if polish else verdict)(assessed, reassessed)
     return _Attempts((first, second), 0 if keep_first else 1, initial, no_progress)
 
 
@@ -502,6 +572,70 @@ def _request(
     )
 
 
+def _admitted_zero_rows(record: TriggerRecord, policy: _ZeroRowPolish) -> bool:
+    """A fresh support result and its completed walk on the identical sample."""
+    asked, outcome = record.request, record.outcome
+    alarm = asked.alarm
+    return (
+        alarm.where == "accepted"
+        and alarm.converged
+        and alarm.zero_rows is not None
+        and alarm.chord is None
+        and asked.support == support.TIGHTER
+        and record.status == "false_alarm"
+        and not record.admission
+        and not record.removed.size
+        and outcome is not None
+        and outcome.status == "complete"
+        and outcome.sample is not None
+        and policy.same_sample(asked.sample, outcome.sample)
+    )
+
+
+def _polished_attempt(
+    context: _Context,
+    attempt: ProfiledAttempt,
+    record: TriggerRecord,
+    policy: _ZeroRowPolish,
+) -> ProfiledAttempt:
+    """Use ordinary final work at the stopped slopes and keep it only if strict."""
+    alarm, start, iteration = record.request.alarm, attempt.point, attempt.iteration
+    if (
+        attempt.final is not None
+        or start is None
+        or record.request.point.point is not start
+        or record.request.sample is not context.sample
+        or iteration is None
+        or iteration.stop != "indication"
+        or alarm.iteration != iteration.iterations
+        or not _admitted_zero_rows(record, policy)
+    ):
+        return attempt
+    assert alarm.zero_rows is not None
+    log = WorkLog()
+    evaluator = _evaluator(replace(context, log=log), alarm.attempt, None)
+    evaluator.steps = alarm.iteration
+    final = final_work(evaluator, start, attempt.loss)
+    point, final_alarm = final.point, final.alarm
+    if not final.complete or point is None or not same_bits(point.theta, start.theta):
+        return attempt
+    if final_alarm is not None and (
+        final_alarm.chord is not None
+        or final_alarm.zero_rows is None
+        or not np.array_equal(
+            final_alarm.zero_rows.positions, alarm.zero_rows.positions
+        )
+    ):
+        return attempt
+    whole = FullPoint(context.sample, context.variance, point)
+    if not policy.strict(whole, controls_of(context.options)):
+        return attempt
+    context.log.profiles.extend(log.profiles)
+    context.log.absorptions.extend(log.absorptions)
+    reason: ProfiledReason = "native_stop" if final_alarm is None else "alarm"
+    return replace(attempt, reason=reason, final=final, alarm=final_alarm)
+
+
 def solve(
     sample: FESample,
     variance: Family,
@@ -518,7 +652,7 @@ def solve(
     Parameters
     ----------
     sample : FESample
-        The accepted immutable final sample, with fixed-effect blocks.
+        The accepted immutable final sample of task M1.10, with fixed-effect blocks.
     variance : PowerVariance or NB2Variance
         The working variance of the sample's request: ``tau`` in ``[1, 2]``, or NB2.
     options : SolverOptions
@@ -528,8 +662,8 @@ def solve(
     absorbed : AbsorbedOptions
         The explicit absorbed options; ``absorbed`` must be ``'profiled'``.
     trigger : Trigger
-        The caller's trigger, bound to the actual completed outcome of the sample
-        stage; called at most once, after an alarm.
+        The caller's trigger, bound to the actual completed M1.10 outcome; called at
+        most once, after an alarm.
     admit : Admission
         The caller's admission of the trigger call's outcome, the coordinator's own
         (``powermean.interface.sample.admitted_outcome``); only an outcome it admits is
@@ -553,7 +687,9 @@ def solve(
         A precondition does not hold; nothing is run.
     """
     _check(sample, options, absorbed, trigger, admit, assess=assess)
-    call = _ProfiledCall(sample, variance, options, absorbed, trigger, admit, assess, start)
+    call = _ProfiledCall(
+        sample, variance, options, absorbed, trigger, admit, assess, start
+    )
     return _run_profiled(call, _problem(sample, variance))
 
 
@@ -569,19 +705,30 @@ class _ProfiledCall:
     admit: Admission
     assess: FullAssessor | None
     start: Start | None
+    zero_row_polish: _ZeroRowPolish | None = None
 
 
 def _solve_numeric(call: _ProfiledCall, problem: ProfiledProblem) -> ProfiledCandidate:
     """Owned entry; the chosen nonlinear backend is explicitly recorded."""
-    _check(call.sample, call.options, call.absorbed, call.trigger, call.admit,
-           assess=call.assess)
+    _check(
+        call.sample,
+        call.options,
+        call.absorbed,
+        call.trigger,
+        call.admit,
+        assess=call.assess,
+    )
     return _run_profiled(call, problem)
 
 
 def _run_profiled(call: _ProfiledCall, problem: ProfiledProblem) -> ProfiledCandidate:
     """Shared starts, provider, budgets, retry and final-work lifecycle."""
-    sample, variance, options, absorbed = (call.sample, call.variance,
-                                          call.options, call.absorbed)
+    sample, variance, options, absorbed = (
+        call.sample,
+        call.variance,
+        call.options,
+        call.absorbed,
+    )
     trigger, admit, assess, start = call.trigger, call.admit, call.assess, call.start
     if start is not None and (
         type(start) is not Start or start.coefficients.shape != (problem.n_slopes,)
@@ -614,8 +761,15 @@ def _run_profiled(call: _ProfiledCall, problem: ProfiledProblem) -> ProfiledCand
         outcome = _attempts(context, newton, start, assessments)
     last = outcome.attempts[-1]
     record = None
-    if last.alarm is not None:
+    # A declined cold restart cannot initiate a new sample/admission cycle.
+    if last.alarm is not None and (
+        len(outcome.attempts) == 1 or outcome.attempts[0].reason == "native_stop"
+    ):
         record = triggered(trigger, admit, _request(context, last, last.alarm))
+        policy = call.zero_row_polish
+        if policy is not None and outcome.retained == len(outcome.attempts) - 1:
+            polished = _polished_attempt(context, last, record, policy)
+            outcome = outcome._replace(attempts=(*outcome.attempts[:-1], polished))
     timing = Timing(0.0, 0.0)
     if assessments is not None:
         timing = Timing(assessments.wall, assessments.cpu)
@@ -636,6 +790,9 @@ def _run_profiled(call: _ProfiledCall, problem: ProfiledProblem) -> ProfiledCand
         work=context.log.frozen(),
         trigger=record,
         timing=Timing(time.perf_counter() - wall, time.process_time() - cpu),
-        execution=("profiled" if problem.__dict__.get("_reduced_nonlinear") is None
-                   else "reduced_nonlinear"),
+        execution=(
+            "profiled"
+            if problem.__dict__.get("_reduced_nonlinear") is None
+            else "reduced_nonlinear"
+        ),
     )

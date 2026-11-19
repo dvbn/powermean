@@ -1,20 +1,25 @@
 """The independent assessment that the retry of the convex Newton solver consumes.
 
-A native stop of the Newton iteration is the solver's own test and never a
-verification: a solver proposes, the certificate decides.  The one decision of the
-solver that needs more is its retry: it starts a second attempt only when an
-independent audit says that the native stop missed its gate.  This module states
-what the solver receives from such an assessment and nothing else; it computes
-none.  The certificate supplies the assessor.
+``design/02_computation.md``, Section 5.1 (retry) and Section 7 (certificate); the
+retry of S1 ``engine.solve``.  A native stop of the Newton iteration is the solver's own
+test and never a verification (rule 3 of Section 1: a solver proposes, the certificate
+decides).  The one decision of the solver that needs more is its retry: S1 starts a
+second attempt only when an independent audit says that the native stop missed its
+gate.  This module states what the solver receives from such an assessment and nothing
+else; it computes none.  The certificate of task M0.11 supplies the assessor.
 
-An :class:`Assessment` of a point holds what the retry reads of its audit:
+An :class:`Assessment` of a point holds what the retry of S1 reads of its audit:
 
     accepted   the point passes the independent gate, which ends the attempts
     score      compared with 0.99 times the score of the start
     error      the common error, compared between the two attempts
 
-The package's certificate measures the scaled score and its other criteria.  The
-assessor receives the system being
+S1 audited with its own formulas (``audit_plain``: the unscaled mean gradient and the
+root mean square of the index step); its gate, which ended the attempts, was the
+larger of the two at most ``1e-6``, and ``1e-8`` marked strict accuracy.  The
+package's certificate measures the scaled score and its other criteria (Section 7),
+and which of its quantities and levels fill these three fields is decided with it,
+at task M0.11; S1's audit is not ported here.  The assessor receives the system being
 solved, the coefficients and the four controls of the certificate
 (:class:`CertificateControls`), which the iteration never reads: ``tol``,
 ``tol_secondary``, ``coef_tol`` and ``rcond_min``.  An exception of the assessor is
@@ -40,7 +45,7 @@ from powermean.systems.joint import JointSystem
 
 @dataclass(frozen=True)
 class CertificateControls:
-    """The four options of the certificate, for the assessor.
+    """The four options of the certificate (file 02, Section 5.7), for the assessor.
 
     ``tol`` and ``tol_secondary`` bound the scaled score and the index correction,
     ``coef_tol`` the coefficient correction in standard errors, and ``rcond_min`` the
@@ -85,7 +90,7 @@ def _number(value: object, name: str) -> float:
 
 @dataclass(frozen=True)
 class Assessment:
-    """An independent assessment of one point, as the retry reads it.
+    """An independent assessment of one point, as the retry of S1 reads it.
 
     Parameters
     ----------

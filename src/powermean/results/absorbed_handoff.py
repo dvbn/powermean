@@ -1,10 +1,14 @@
 """Lower absorbed FE envelope composition, initial scale cache, and covariance service.
 
-This module defines :class:`CaptureMaps` for per-handoff identity wiring and anchor
-clearing, composes lower-layer audit admission, detached
-sample/point/history/certificate snapshots, the pre-discard initial covariance and
-direct-SE cache, and guarded post-fit covariance recomputation via
-:func:`powermean.inference.absorbed.fe_covariance`.
+``design/02_computation.md``, Section 7; ``design/04_inference_and_effects.md``,
+Sections 1 to 3; ``design/11_api.md``; ``plan/evidence/M1.15_contract.txt``, items 4,
+8, 9 and 10; ``plan/evidence/M1.15_interfaces.txt``, Sections 2 and 3;
+``plan/evidence/M1.15_revision_B.txt`` (L1, L2, L3, L5, F6, F7);
+``brief/layout_C_ownership.txt``; decisions D49, D51, D54 and D55.  This module defines
+:class:`CaptureMaps` for per-handoff identity wiring and anchor clearing, composes
+lower-layer audit admission, detached sample/point/history/certificate snapshots, the
+pre-discard initial covariance and direct-SE cache, and guarded post-fit covariance
+recomputation via :func:`powermean.inference.absorbed.fe_covariance`.
 """
 
 from __future__ import annotations
@@ -20,17 +24,17 @@ from powermean.inference.absorbed import fe_covariance
 from powermean.inference.provider import direct_standard_errors
 from powermean.model.order import IndexArray
 from powermean.model.variance import FloatArray, _finite_result
-from powermean.results.absorbed_binding import (
-    AdmittedAbsorbedGraph,
-    admit_absorbed_graph,
-)
-from powermean.results.absorbed_groupings import GroupingIdentityMap
-from powermean.results.absorbed_geometry_records import _OperationalBasisSnapshot
 from powermean.results.absorbed_attempts import (
     _owned_absorbed_schur,
     _owned_alarm,
     _owned_iteration,
 )
+from powermean.results.absorbed_binding import (
+    AdmittedAbsorbedGraph,
+    admit_absorbed_graph,
+)
+from powermean.results.absorbed_geometry_records import _OperationalBasisSnapshot
+from powermean.results.absorbed_groupings import GroupingIdentityMap
 from powermean.results.absorbed_history import (
     PointIdentityMap,
     RetainedHistorySnapshot,
@@ -39,15 +43,15 @@ from powermean.results.absorbed_history import (
     snapshot_candidate_history,
     snapshot_point_record,
 )
-from powermean.results.absorbed_points import PointMapper
 from powermean.results.absorbed_owned import (
     RetainedCertificateSnapshot,
     RetainedGeometrySnapshot,
+    _capture_certificate,
     _GeometryData,
     _OperationalCertificate,
-    _capture_certificate,
 )
 from powermean.results.absorbed_partitions import PartitionIdentityMap
+from powermean.results.absorbed_points import PointMapper
 from powermean.results.absorbed_retained import (
     RetainedAbsorbedEnvelope,
     RetainedInitialScaleCache,
@@ -148,7 +152,8 @@ def _compute_influence_from_snapshot(
         k = geom.design.shape[1]
         basis = (
             cert.basis.numerical_basis()
-            if isinstance(cert.basis, _OperationalBasisSnapshot) else cert.basis.basis
+            if isinstance(cert.basis, _OperationalBasisSnapshot)
+            else cert.basis.basis
         )
         assert cert.rows is not None
         nuisance = lift(basis, embed(basis, slope_map[k:]))
@@ -311,7 +316,8 @@ def compose_absorbed_envelope(
     cert = admitted.audit.certificate
     capture_history = (
         _capture_profiled_history
-        if type(candidate) is ProfiledCandidate and cert is not None
+        if type(candidate) is ProfiledCandidate
+        and cert is not None
         and _operational_data(cert.basis) is not None
         else snapshot_candidate_history
     )
@@ -386,32 +392,52 @@ def compose_absorbed_envelope(
 
 
 def _profiled_attempt_data(
-    attempt: ProfiledAttempt, get_point: PointMapper,
-    sample: RetainedSampleSnapshot, grouping_map: GroupingIdentityMap | None,
+    attempt: ProfiledAttempt,
+    get_point: PointMapper,
+    sample: RetainedSampleSnapshot,
+    grouping_map: GroupingIdentityMap | None,
 ) -> _ProfiledAttemptData:
     """Capture explicit profiled attempt values without its presentation graph."""
     final = attempt.final
     detached = None
     if final is not None:
         equations = final.equations
-        values = (None if equations is None else (
-            float(equations.loss), owned_array(equations.gradient),
-            owned_array(equations.curvature), owned_array(equations.information),
-        ))
+        values = (
+            None
+            if equations is None
+            else (
+                float(equations.loss),
+                owned_array(equations.gradient),
+                owned_array(equations.curvature),
+                owned_array(equations.information),
+            )
+        )
         absorbed = _owned_absorbed_schur(
-            final.absorbed, grouping_snapshot=sample._final_grouping,
+            final.absorbed,
+            grouping_snapshot=sample._final_grouping,
             grouping_map=grouping_map,
         )
         point = None if final.point is None else get_point(final.point)
         detached = _ProfiledFinalData(
-            point, values, absorbed, _owned_alarm(final.alarm), str(final.reason),
+            point,
+            values,
+            absorbed,
+            _owned_alarm(final.alarm),
+            str(final.reason),
         )
     opening = None if attempt.opening is None else get_point(attempt.opening)
     point = None if attempt.point is None else get_point(attempt.point)
     loss = None if attempt.loss is None else float(attempt.loss)
     return _ProfiledAttemptData(
-        _owned_iteration(attempt.iteration), attempt.reason, str(attempt.message),
-        opening, point, loss, detached, _owned_alarm(attempt.alarm), attempt.assessment,
+        _owned_iteration(attempt.iteration),
+        attempt.reason,
+        str(attempt.message),
+        opening,
+        point,
+        loss,
+        detached,
+        _owned_alarm(attempt.alarm),
+        attempt.assessment,
     )
 
 
@@ -432,7 +458,9 @@ def _capture_profiled_history(
     candidate = history.candidate
     assert type(candidate) is ProfiledCandidate
     inner, start = _candidate_inner_and_start(
-        candidate, history.route, grouping_snapshot=sample_snapshot._final_grouping,
+        candidate,
+        history.route,
+        grouping_snapshot=sample_snapshot._final_grouping,
         grouping_map=grouping_map,
     )
     assert start is None or isinstance(start, Start)
@@ -440,33 +468,60 @@ def _capture_profiled_history(
     if history.point is not None:
         point = (
             snapshot_point_record(
-                history.point, sample_snapshot=sample_snapshot,
-                variance=history.variance, inner=inner, sample_map=sample_map,
+                history.point,
+                sample_snapshot=sample_snapshot,
+                variance=history.variance,
+                inner=inner,
+                sample_map=sample_map,
                 grouping_map=grouping_map,
-            ) if point_map is None else point_map.get(
-                history.point, sample_snapshot=sample_snapshot,
-                variance=history.variance, inner=inner,
+            )
+            if point_map is None
+            else point_map.get(
+                history.point,
+                sample_snapshot=sample_snapshot,
+                variance=history.variance,
+                inner=inner,
             )
         )
     get_point = _point_mapper(
-        sample_snapshot, history.variance, inner, history.point, point,
-        point_map=point_map, sample_map=sample_map, grouping_map=grouping_map,
+        sample_snapshot,
+        history.variance,
+        inner,
+        history.point,
+        point,
+        point_map=point_map,
+        sample_map=sample_map,
+        grouping_map=grouping_map,
     )
     attempts = tuple(
         _profiled_attempt_data(a, get_point, sample_snapshot, grouping_map)
         for a in cast("tuple[ProfiledAttempt, ...]", history.attempts)
     )
     return _OperationalHistory(
-        history.route, sample_snapshot, history.variance, history.retained, attempts,
-        str(history.reason), str(history.message),
+        history.route,
+        sample_snapshot,
+        history.variance,
+        history.retained,
+        attempts,
+        str(history.reason),
+        str(history.message),
         None if history.native is None else str(history.native),
-        tuple(str(p) for p in history.partials), tuple(str(u) for u in history.unreached),
-        _owned_alarm(history.alarm), trigger_snapshot,
-        cast("SolveWork", history.work), history.timing,
-        point, start, candidate.provider, candidate.provider_version,
-        candidate.initial_assessment, candidate.no_measurable_progress,
-        candidate.assessments, candidate.assessment_timing,
-        candidate.options, candidate.absorbed,
+        tuple(str(p) for p in history.partials),
+        tuple(str(u) for u in history.unreached),
+        _owned_alarm(history.alarm),
+        trigger_snapshot,
+        cast("SolveWork", history.work),
+        history.timing,
+        point,
+        start,
+        candidate.provider,
+        candidate.provider_version,
+        candidate.initial_assessment,
+        candidate.no_measurable_progress,
+        candidate.assessments,
+        candidate.assessment_timing,
+        candidate.options,
+        candidate.absorbed,
     )
 
 

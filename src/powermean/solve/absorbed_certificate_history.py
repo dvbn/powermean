@@ -1,6 +1,9 @@
 """Admitted snapshots of absorbed candidates: reasons, selected points, partial history.
 
-A solver proposes, the certificate decides.  Internal module.  No certificate verdict
+``design/02_computation.md``, Sections 1 (a solver proposes, the certificate decides),
+5.2 and 7; the M1.14 readiness revision A, Section 1, the WLS binding and
+implementation revision A (``plan/evidence/M1.14_readiness.txt``,
+``M1.14_WLS_binding.txt``); decision D51.  Task M1.14, private.  No certificate verdict
 is formed here, and no optimizer is replayed.
 
 Admission (:func:`profiled_history`, :func:`index_history`, :func:`linear_history`)
@@ -40,7 +43,7 @@ and reason those of its own audit; stages on variances outside ``[1, 2]``, the
 direct one on the target, each with one or two attempts and a valid retained one, the
 native reason that of the target stage's retained attempt, a merit wherever a stage
 ran; a selected point and its certificate together or neither, none without a stage;
-an operative reason in :data:`ROOT_REASONS`.  The snapshot's attempts are the
+an operative reason of the accepted vocabulary.  The snapshot's attempts are the
 stages, ``retained`` the target stage; no final work, alarm or trigger belongs to the
 root stages (the initializer's are in its own audit).
 """
@@ -81,7 +84,7 @@ from powermean.solve.cancelled_records import (
 from powermean.solve.certificate import outside_convex
 from powermean.solve.linear_absorbed_point import LinearPoint
 from powermean.solve.linear_absorbed_state import AbsorbedLinearCandidate, LinearWork
-from powermean.solve.absorbed import AbsorbedOptions
+from powermean.solve.m1_options import AbsorbedOptions
 from powermean.solve.newton_absorbed import IndexAttempt, IndexCandidate, IndexFinal
 from powermean.solve.newton_profiled import ProfiledAttempt, ProfiledCandidate
 from powermean.solve.newton_trace import Timing
@@ -217,17 +220,24 @@ def _controls(candidate: ProfiledCandidate | IndexCandidate) -> None:
     grouping = candidate.sample.grouping
     for call in work.profiles:
         if call.scope == "conditional":
-            require(type(candidate) is ProfiledCandidate
-                    and candidate.execution == "reduced_nonlinear")
-            require(type(call.block) is int and grouping is not None
-                    and 0 <= call.block < len(grouping.blocks))
+            require(
+                type(candidate) is ProfiledCandidate
+                and candidate.execution == "reduced_nonlinear"
+            )
+            require(
+                type(call.block) is int
+                and grouping is not None
+                and 0 <= call.block < len(grouping.blocks)
+            )
         else:
             require(call.scope == "all_fe" and call.block is None)
     require(all(_counted(c) for c in calls))
 
 
 def _common(
-    candidate: ProfiledCandidate | IndexCandidate, organization: str
+    candidate: ProfiledCandidate | IndexCandidate,
+    organization: str,
+    problem: ProfiledProblem | None,
 ) -> ProfiledProblem:
     """The types, controls and retained index of a nonlinear candidate; its problem."""
     sample, absorbed = candidate.sample, candidate.absorbed
@@ -238,7 +248,7 @@ def _common(
     attempts, retained = candidate.attempts, candidate.retained
     require(isinstance(attempts, tuple) and 1 <= len(attempts) <= 2)
     require(type(retained) is int and 0 <= retained < len(attempts))
-    return problem_of(sample, candidate.variance)
+    return problem_of(sample, candidate.variance) if problem is None else problem
 
 
 def _unfinished(candidate: ProfiledCandidate | IndexCandidate, index: int) -> None:
@@ -263,18 +273,21 @@ def _profiled_attempt(
         _unfinished(candidate, index)
         return None
     expected = _expected(
-        attempt.final, problem.n_slopes,
+        attempt.final,
+        problem.n_slopes,
         profiled=candidate.execution == "profiled",
     )
     require(attempt.reason == expected and attempt.alarm is attempt.final.alarm)
     return profiled_final(problem, candidate, index, attempt)
 
 
-def profiled_history(candidate: object) -> CandidateHistory:
+def profiled_history(
+    candidate: object, *, _problem: ProfiledProblem | None = None
+) -> CandidateHistory:
     """The admitted history of a :class:`ProfiledCandidate` (module docstring)."""
     if type(candidate) is not ProfiledCandidate:
         raise TypeError("candidate must be a ProfiledCandidate")
-    problem = _common(candidate, "profiled")
+    problem = _common(candidate, "profiled", _problem)
     _controls(candidate)
     count = range(len(candidate.attempts))
     finals = tuple(_profiled_attempt(problem, candidate, i) for i in count)
@@ -333,11 +346,13 @@ def _index_attempt(
     return index_final(problem, candidate, index, attempt)
 
 
-def index_history(candidate: object) -> CandidateHistory:
+def index_history(
+    candidate: object, *, _problem: ProfiledProblem | None = None
+) -> CandidateHistory:
     """The admitted history of an :class:`IndexCandidate` (module docstring)."""
     if type(candidate) is not IndexCandidate:
         raise TypeError("candidate must be an IndexCandidate")
-    problem = _common(candidate, "index")
+    problem = _common(candidate, "index", _problem)
     _controls(candidate)
     count = range(len(candidate.attempts))
     finals = tuple(_index_attempt(problem, candidate, i) for i in count)

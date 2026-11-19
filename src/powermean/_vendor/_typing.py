@@ -1,10 +1,10 @@
 """Types of the carried Newton files: arrays, sparse matrices and pointwise losses.
 
 The two scikit-learn files of :mod:`powermean._vendor` carry no annotations in their
-source; the annotations added to them use the names of this module.
+source; the annotations added to them (decision D48) use the names of this module.
 
 - ``FloatArray``: an array of doubles, the precision in which the package calls the
-  carried files.  Their arithmetic
+  carried files (``design/11_engineering.md``, Section 5, rule 9).  Their arithmetic
   is that of the source for any floating dtype; the annotations state how the package
   uses it.
 - :class:`SparseMatrix`: a sparse matrix or sparse array of SciPy, described by the

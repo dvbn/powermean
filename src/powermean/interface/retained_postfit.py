@@ -1,5 +1,10 @@
 """Interface-layer post-fit covariance request normalization and absorbed result facade.
 
+``design/02_computation.md``, Section 7; ``design/04_inference_and_effects.md``,
+Sections 1 to 3; ``design/11_api.md``; ``plan/evidence/M1_contract.txt``, Sections 3.4,
+3.5 and 6(f); ``plan/evidence/M1.15_contract.txt``, items 4, 8, 9 and 10;
+``plan/evidence/M1.15_revision_B.txt`` (L1, L2, L5, F2, F6, F7);
+``brief/layout_C_ownership.txt`` (P20, P21); decisions D49, D51, D54, D55 and D65.
 This module coordinates absorbed fit retention and re-exports post-fit covariance
 normalization and result facade classes from
 :mod:`powermean.interface.retained_covariance` and

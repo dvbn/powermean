@@ -20,7 +20,7 @@ from powermean.model.variance import (
 from powermean.solve.assessment import Assessment, CertificateControls
 from powermean.solve.cancelled_operator import AttemptBounds, workspace_plan
 from powermean.solve.certificate import GateName, Level
-from powermean.solve.absorbed import (
+from powermean.solve.m1_options import (
     ABSORBED_DOMAINS,
     POSITIVE_INTEGER,
     POSITIVE_REAL,
@@ -107,6 +107,9 @@ class CancelledMeasures:
     coefficients: CoefficientCheck | None = None
     require_positive_definite: bool = True
     score_metric: ScoreMetricKind = "none"
+    # A saturated fit (rows = identified slopes + cancelled groups): no coefficient
+    # gate.
+    saturated: bool = False
 
 
 @dataclass(frozen=True, eq=False)
@@ -162,9 +165,14 @@ class CancelledCertificate:
 
     @property
     def degenerate(self) -> bool:
-        """Whether the coefficient check flags a zero standard error."""
+        """Whether the D49 coefficient check flags a zero standard error."""
         check = self.measures.coefficients
         return check is not None and check.degenerate
+
+    @property
+    def saturated(self) -> bool:
+        """Whether the fit is saturated (:func:`powermean.solve.reported.saturated`)."""
+        return self.measures.saturated
 
     def assessment(self) -> Assessment:
         """The existing retry arithmetic, using fresh original-system quantities."""
@@ -191,7 +199,7 @@ class CancelledCertificate:
 
 @dataclass(frozen=True)
 class RootOptions:
-    """Internal controls of the general root-Newton solver."""
+    """Private controls of the general root-Newton solver (02, Section 5.7)."""
 
     root_armijo: float = 1e-4
     root_max_backtracks: int = 60
@@ -201,13 +209,13 @@ class RootOptions:
     continuation_step: float = 0.5
 
     def __post_init__(self) -> None:
-        """Validate every root-Newton control against :data:`ROOT_DOMAINS`."""
+        """Validate every root-Newton control against Section 5.7 domains."""
         for option in fields(self):
             value = getattr(self, option.name)
             stored = resolved(ROOT_DOMAINS, option.name, value)
             object.__setattr__(self, option.name, stored)
 
-    def to_dict(self) -> dict[str, object]:
+    def to_dict(self) -> dict[str, float | int | str]:
         """Return resolved options by name in field order as a new dictionary."""
         return {option.name: getattr(self, option.name) for option in fields(self)}
 
@@ -253,9 +261,16 @@ class RootExecutionBounds:
 
 @dataclass(frozen=True)
 class RootInitializerRecord:
-    """Provenance of the starting point used to seed the root-Newton solver."""
+    """Provenance of the starting point used to seed the root-Newton solver.
 
-    kind: Literal["gamma_tau2", "user_start"]
+    ``zero_start``: the Gamma initializer certified no root on the sample (with zero
+    outcomes its criterion often has none where the target equation has one), and
+    the root stage starts from zero, the initializer's own start, in the Gram merit
+    metric where the Gamma one was requested; the record keeps the Gamma attempt's
+    status, certificate, attempts and counts.
+    """
+
+    kind: Literal["gamma_tau2", "user_start", "zero_start"]
     certified: bool
     status: Status | None
     _point: FloatStorage

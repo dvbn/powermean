@@ -2,7 +2,8 @@
 
 ``jacobian`` always means ``dm_n/dbeta'``, not its negative.  No numerical
 preconditioner is used as a substitute for this derivative.  A map is minus the
-inverse of the actual Jacobian, transposes kept where it is nonsymmetric.
+inverse of the actual Jacobian, transposes kept where it is nonsymmetric
+(``design/04_inference_and_effects.md``, Section 1).
 
     moment map      -J^-1             a just-identified root of m_n(beta) = 0
     GMM map         -(J'WJ)^-1 J'W    a frozen-weight GMM system; a primitive of
@@ -10,21 +11,24 @@ inverse of the actual Jacobian, transposes kept where it is nonsymmetric.
     projected map   -(CJ)^-1 C        a projected equation C m_n(beta) = 0
     influence       psi_i A'          score rows mapped to coefficient rows
 
-Normalization.  For a moment that is an average, ``m_n = P_n psi_i``, the
+Normalization.  In the source the moment is an average, ``m_n = P_n psi_i``, and the
 expansion ``beta_hat - beta_0 = P_n[-J^-1 psi_i]`` gives the average-normalized
 influences that :mod:`powermean.inference.vcov` expects.  The functions themselves
 only invert and multiply: given the Jacobian ``-C`` of the sum ``S = sum_i s_i`` of the
 joint system (:mod:`powermean.systems.joint`), :func:`moment_influence_map` returns the
 sum map ``C^-1``, and ``u_i = C^-1 s_i`` sums to the first-order change of ``gamma``.
-:mod:`powermean.inference.convention` states how ``u_i`` reaches the average
+:mod:`powermean.inference.convention` states how ``u_i`` reaches the source's average
 normalization; nothing here divides by a number of rows.
 
-Refusals: a matrix that is complex, not finite, empty or not
+Refusals, as in the source: a matrix that is complex, not finite, empty or not
 two-dimensional, of the wrong shape or not of full column rank raises ``ValueError``
 or ``numpy.linalg.LinAlgError``, without a pseudoinverse; a map that is not
 representable in float64 raises ``ValueError``.  Results are owned read-only arrays.
 
-The helpers come from :mod:`powermean.inference.numeric`.
+Port of ``inference/influence.py`` of pyiols (source S6 of ``design/06_reuse_map.md``):
+the functions, their names, checks, messages and arithmetic are those of the source;
+the helpers come from :mod:`powermean.inference.numeric` (``PROVENANCE.md``, Section
+10).
 """
 
 from __future__ import annotations
@@ -33,6 +37,7 @@ import numpy as np
 from numpy.typing import ArrayLike
 
 from powermean.inference.numeric import finite_array, immutable_array
+from powermean.model.matrix import MomentJacobianRankError
 from powermean.model.variance import FloatArray
 
 
@@ -46,10 +51,14 @@ def _matrix(value: ArrayLike, name: str) -> FloatArray:
     return array
 
 
-def _full_column_rank(matrix: FloatArray, name: str) -> None:
+def _full_column_rank(
+    matrix: FloatArray,
+    name: str,
+    error: type[np.linalg.LinAlgError] = np.linalg.LinAlgError,
+) -> None:
     """Refuse a matrix whose numerical rank is below its number of columns."""
     if np.linalg.matrix_rank(matrix) < matrix.shape[1]:
-        raise np.linalg.LinAlgError(f"{name} must have full column rank")
+        raise error(f"{name} must have full column rank")
 
 
 def moment_influence_map(jacobian: ArrayLike) -> FloatArray:
@@ -72,7 +81,7 @@ def moment_influence_map(jacobian: ArrayLike) -> FloatArray:
     jac = _matrix(jacobian, "jacobian")
     if jac.shape[0] != jac.shape[1]:
         raise ValueError("just-identified inference requires a square jacobian")
-    _full_column_rank(jac, "jacobian")
+    _full_column_rank(jac, "jacobian", MomentJacobianRankError)
     result = -np.linalg.solve(jac, np.eye(jac.shape[0]))
     return immutable_array(finite_array(result, "moment influence map"))
 

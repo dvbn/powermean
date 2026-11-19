@@ -14,7 +14,7 @@ import operator
 from collections.abc import Mapping
 from itertools import repeat
 from types import MappingProxyType
-from typing import Any, cast
+from typing import Any, TypeGuard, cast
 
 import numpy as np
 
@@ -39,11 +39,16 @@ def _immutable_items(items: tuple[object, ...]) -> bool:
     )
 
 
-def _immutable_array(array: np.ndarray) -> bool:
+def _immutable_array(array: object) -> TypeGuard[np.ndarray]:
     """Only a plain one-dimensional primitive view rooted in immutable bytes."""
-    if (type(array) is not np.ndarray or array.ndim != 1
-            or array.dtype.kind not in "biufcUS" or array.dtype.fields is not None
-            or array.dtype.metadata is not None or array.flags.writeable):
+    if (
+        type(array) is not np.ndarray
+        or array.ndim != 1
+        or array.dtype.kind not in "biufcUS"
+        or array.dtype.fields is not None
+        or array.dtype.metadata is not None
+        or array.flags.writeable
+    ):
         return False
     root: object = array
     while type(root) is np.ndarray:
@@ -55,8 +60,12 @@ def _immutable_array(array: np.ndarray) -> bool:
 
 def _array_header(array: np.ndarray) -> tuple[object, ...]:
     """The immutable relevant header description, including strides and offset."""
-    return (array.shape, array.strides, array.dtype,
-            array.__array_interface__["data"][0])
+    return (
+        array.shape,
+        array.strides,
+        array.dtype,
+        array.__array_interface__["data"][0],
+    )
 
 
 class ComponentRun:
@@ -68,7 +77,7 @@ class ComponentRun:
     types; numeric storage has a separate header on the same immutable bytes.
     """
 
-    __slots__ = ("_dtype", "_header", "_owner", "_stored", "_presented", "_column")
+    __slots__ = ("_column", "_dtype", "_header", "_owner", "_presented", "_stored")
 
     _owner: tuple[object, ...] | np.ndarray
     _stored: tuple[object, ...] | np.ndarray
@@ -100,14 +109,26 @@ class ComponentRun:
         for name in self.__slots__:
             value = object.__getattribute__(self, name)
             if name == "_presented":
-                object.__setattr__(result, name, MappingProxyType({
-                    row: (memo.get(id(item), item) if id(type(item)) in _IMMUTABLE_IDS
-                          else copy.deepcopy(item, memo))
-                    for row, item in value.items()
-                }))
+                object.__setattr__(
+                    result,
+                    name,
+                    MappingProxyType(
+                        {
+                            row: (
+                                memo.get(id(item), item)
+                                if id(type(item)) in _IMMUTABLE_IDS
+                                else copy.deepcopy(item, memo)
+                            )
+                            for row, item in value.items()
+                        }
+                    ),
+                )
                 continue
-            if (id(value) not in memo and type(value) is np.ndarray
-                    and _immutable_array(value)):
+            if (
+                id(value) not in memo
+                and type(value) is np.ndarray
+                and _immutable_array(value)
+            ):
                 memo[id(value)] = value.view()
             object.__setattr__(result, name, copy.deepcopy(value, memo))
         return result
@@ -116,8 +137,11 @@ class ComponentRun:
     def values(self) -> tuple[object, ...] | np.ndarray:
         """Actual immutable storage; private numeric consumers do not export it."""
         stored = self._stored
-        return (stored.view() if type(stored) is np.ndarray else
-                cast("tuple[object, ...]", stored))
+        return (
+            stored.view()
+            if type(stored) is np.ndarray
+            else cast("tuple[object, ...]", stored)
+        )
 
     @property
     def dtype(self) -> np.dtype[Any]:
@@ -141,24 +165,36 @@ class ComponentRun:
         ):
             return False
         if type(current) is tuple:
-            return (values is current and self.dtype == np.dtype(object)
-                    and self._header is None)
+            return (
+                values is current
+                and self.dtype == np.dtype(object)
+                and self._header is None
+            )
         header = self._header
-        return (type(current) is np.ndarray and type(values) is np.ndarray
-                and _array_header(current) == header
-                and _array_header(values) == header
-                and (current.dtype == self.dtype or (
-                    self.dtype == np.dtype(object) and current.dtype.kind in "iu"
-                ))
-                and _immutable_array(current) and _immutable_array(values))
+        return (
+            type(current) is np.ndarray
+            and type(values) is np.ndarray
+            and _array_header(current) == header
+            and _array_header(values) == header
+            and (
+                current.dtype == self.dtype
+                or (self.dtype == np.dtype(object) and current.dtype.kind in "iu")
+            )
+            and _immutable_array(current)
+            and _immutable_array(values)
+        )
 
     def matches(self, column: Column) -> bool:
         """Bind current storage/header, not a remembered verdict on mutable state."""
-        return (type(column) is Column and self.bound()
-                and column._stored is self._owner
-                and (column.dtype == self.dtype or (
-                    self.dtype == np.dtype(object) and column.dtype.kind in "iu"
-                )))
+        return (
+            type(column) is Column
+            and self.bound()
+            and column._stored is self._owner
+            and (
+                column.dtype == self.dtype
+                or (self.dtype == np.dtype(object) and column.dtype.kind in "iu")
+            )
+        )
 
     def labels(self, rows: np.ndarray) -> list[object]:
         """Present these ACTUAL original rows, not equal-level representatives.
@@ -171,15 +207,17 @@ class ComponentRun:
         indices = rows.tolist()
         if presentation is not None:
             return [presentation[0]._stored[row] for row in indices]
-        values = cast("np.ndarray", self._stored)[rows].tolist()
+        values: list[object] = cast("np.ndarray", self._stored)[rows].tolist()
         prior = self._presented
         if not prior:
             # This first presentation has no prior identities to reconcile. The
             # same first-row objects serve source blocks and later rich exports.
             if indices:
-                object.__setattr__(self, "_presented", MappingProxyType(
-                    dict(zip(indices, values, strict=True))
-                ))
+                object.__setattr__(
+                    self,
+                    "_presented",
+                    MappingProxyType(dict(zip(indices, values, strict=True))),
+                )
             return values
         added = {}
         result = []
@@ -189,8 +227,7 @@ class ComponentRun:
             if row not in prior:
                 added[row] = actual
         if added:
-            object.__setattr__(self, "_presented",
-                               MappingProxyType({**prior, **added}))
+            object.__setattr__(self, "_presented", MappingProxyType({**prior, **added}))
         return result
 
     def object_column(self) -> Column:
@@ -220,7 +257,7 @@ class ComponentRun:
             return values
         if self.dtype == np.dtype(object):
             return cast("tuple[object, ...]", self.object_column()._stored)
-        return tuple(values.tolist())
+        return tuple(cast("np.ndarray", values).tolist())
 
     def discard_presentation(self) -> None:
         """Abandon optional first-build representatives before old construction."""
@@ -237,15 +274,21 @@ def _run(column: Column) -> ComponentRun | None:
         if not _immutable_items(stored):
             return None
         values: tuple[object, ...] | np.ndarray = stored
+        header = None
     elif type(stored) is np.ndarray and _immutable_array(stored):
         values = stored.view()
+        header = _array_header(stored)
     else:
         return None
-    header = None if type(stored) is tuple else _array_header(stored)
     result = object.__new__(ComponentRun)
-    for name, value in (("_owner", stored), ("_stored", values),
-                        ("_dtype", column.dtype), ("_header", header),
-                        ("_presented", MappingProxyType({})), ("_column", None)):
+    for name, value in (
+        ("_owner", stored),
+        ("_stored", values),
+        ("_dtype", column.dtype),
+        ("_header", header),
+        ("_presented", MappingProxyType({})),
+        ("_column", None),
+    ):
         object.__setattr__(result, name, value)
     return result
 
@@ -274,12 +317,16 @@ def native_columns(
 
 
 def object_columns(
-    columns: Mapping[str, Column], runs: Mapping[str, ComponentRun],
+    columns: Mapping[str, Column],
+    runs: Mapping[str, ComponentRun],
 ) -> dict[str, Column]:
     """Exact logical fields; replaced/foreign storage keeps current checked reads."""
     return {
-        name: (runs[name].object_column() if runs[name].matches(column)
-               else Column(np.asarray(column.values, dtype=object)))
+        name: (
+            runs[name].object_column()
+            if runs[name].matches(column)
+            else Column(np.asarray(column.values, dtype=object))
+        )
         for name, column in columns.items()
     }
 
@@ -305,43 +352,59 @@ def runs_for(columns: Mapping[str, Column]) -> dict[str, ComponentRun] | None:
 
 
 def matching_runs(
-    runs: Mapping[str, ComponentRun] | None, columns: Mapping[str, Column],
-) -> bool:
+    runs: Mapping[str, ComponentRun] | None,
+    columns: Mapping[str, Column],
+) -> TypeGuard[dict[str, ComponentRun]]:
     """Require the actual same full-column owners and unchanged current headers."""
-    return (original_producers() and type(runs) is dict
-            and type(columns) in (dict, MappingProxyType)
-            and all(type(name) is str for name in runs)
-            and all(type(name) is str for name in columns)
-            and runs.keys() == columns.keys()
-            and all(type(run) is ComponentRun and run.matches(columns[name])
-                    for name, run in runs.items()))
+    return (
+        original_producers()
+        and type(runs) is dict
+        and type(columns) in (dict, MappingProxyType)
+        and all(type(name) is str for name in runs)
+        and all(type(name) is str for name in columns)
+        and runs.keys() == columns.keys()
+        and all(
+            type(run) is ComponentRun and run.matches(columns[name])
+            for name, run in runs.items()
+        )
+    )
 
 
 def original_producers() -> bool:
     """Changed private producers retain the original checked construction route."""
-    return (all(globals()[name] is value for name, value in _PRODUCERS)
-            and ComponentRun.__new__ is _RUN_NEW
-            and ComponentRun.__setattr__ is _RUN_SET
-            and vars(ComponentRun).get("values") is _RUN_VALUES
-            and vars(ComponentRun).get("dtype") is _RUN_DTYPE
-            and vars(ComponentRun).get("size") is _RUN_SIZE
-            and ComponentRun.bound is _RUN_BOUND
-            and ComponentRun.matches is _RUN_MATCHES
-            and ComponentRun.labels is _RUN_LABELS
-            and ComponentRun.object_column is _RUN_OBJECT_COLUMN
-            and ComponentRun.objects is _RUN_OBJECTS
-            and ComponentRun.discard_presentation is _RUN_DISCARD
-            and Column is _COLUMN_KIND
-            and vars(Column).get("dtype") is _COLUMN_DTYPE
-            and all(vars(Column).get(name) is original
-                    for name, original in _COLUMN_METHODS))
+    return (
+        all(globals()[name] is value for name, value in _PRODUCERS)
+        and ComponentRun.__new__ is _RUN_NEW
+        and ComponentRun.__setattr__ is _RUN_SET
+        and vars(ComponentRun).get("values") is _RUN_VALUES
+        and vars(ComponentRun).get("dtype") is _RUN_DTYPE
+        and vars(ComponentRun).get("size") is _RUN_SIZE
+        and ComponentRun.bound is _RUN_BOUND
+        and ComponentRun.matches is _RUN_MATCHES
+        and ComponentRun.labels is _RUN_LABELS
+        and ComponentRun.object_column is _RUN_OBJECT_COLUMN
+        and ComponentRun.objects is _RUN_OBJECTS
+        and ComponentRun.discard_presentation is _RUN_DISCARD
+        and Column is _COLUMN_KIND
+        and vars(Column).get("dtype") is _COLUMN_DTYPE
+        and all(
+            vars(Column).get(name) is original for name, original in _COLUMN_METHODS
+        )
+    )
 
 
 _PRODUCERS = tuple(
     (name, globals()[name])
     for name in (
-        "ComponentRun", "_immutable_items", "_immutable_array", "_array_header",
-        "_run", "run_for", "runs_for", "matching_runs", "native_columns",
+        "ComponentRun",
+        "_immutable_items",
+        "_immutable_array",
+        "_array_header",
+        "_run",
+        "run_for",
+        "runs_for",
+        "matching_runs",
+        "native_columns",
         "object_columns",
     )
 )
@@ -360,7 +423,16 @@ _RUN_OBJECTS = ComponentRun.objects
 _RUN_DISCARD = ComponentRun.discard_presentation
 _COLUMN_KIND = Column
 
-_COLUMN_METHODS = tuple((name, vars(Column).get(name)) for name in (
-    "__new__", "__init__", "__getattribute__", "__getattr__",
-    "stored", "values", "size", "take",
-))
+_COLUMN_METHODS = tuple(
+    (name, vars(Column).get(name))
+    for name in (
+        "__new__",
+        "__init__",
+        "__getattribute__",
+        "__getattr__",
+        "stored",
+        "values",
+        "size",
+        "take",
+    )
+)

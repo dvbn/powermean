@@ -1,7 +1,10 @@
 """The candidate of the absorbed linear path: its ending, its admission and its work.
 
-Internal module; nothing here certifies a point or forms inference.  The notation is
-that of
+``design/01_statistical_core.md``, Section 3.3; ``design/02_computation.md``, Sections
+1, 5.2, 5.5 and 7; ``design/03_fixed_effects.md``, Section 2; the adopted contract
+``plan/evidence/M1.13_contract.txt`` and its final-interface binding; its correction A
+(``plan/evidence/M1.13_revision_A.txt``); decision D51.  Task M1.13, private; nothing
+here certifies a point or forms inference (task M1.14).  The notation is that of
 :mod:`powermean.solve.linear_absorbed_numeric`.
 
 Endings.  A solve ends at one of :data:`STAGES` with a status that :data:`ENDINGS`
@@ -12,12 +15,13 @@ Admission.  :class:`AbsorbedLinearCandidate`, at every construction, direct or b
 ``dataclasses.replace``, re-derives ``t`` and binds, in the order of the solve, the
 preparation to the sample's grouping and raw weights; the joint absorption result to
 its call (:func:`~powermean.solve.linear_absorbed_point._bound_absorption`: its state,
-controls, work and reason, its residual bit for bit and its diagnostics against the
-fresh check of that residual, re-run converged or not); the attempts and slopes; the
+controls, work, reason, shape and reported diagnostics); the attempts and slopes; the
 seed of the joint state and the slopes; the final absorption result to the fixed-slope
 call, in the same way; and the point, its normalization and equations to this sample,
 these slopes and the final effects, by identity or bit for bit.  It replays no LAPACK
-decomposition and no absorber iteration, and states no certificate.
+decomposition and no absorber iteration, does not recompute an absorber's residual or
+fresh check (the absorber's own acceptance; LEANLOG2, the owner's engineering policy,
+rule 10(a)), and states no certificate.
 """
 
 from __future__ import annotations
@@ -38,10 +42,8 @@ from powermean.solve.linear_absorbed_numeric import (
     KINDS,
     Decomposition,
     _own,
-    fixed_slope_residual,
     full_rank,
     joint_columns,
-    joint_values,
     raw_weights,
     seeds,
     signed_response,
@@ -116,9 +118,10 @@ class LinearWork:
     calls begun; ``sweeps``, ``visits``, ``operators``, ``diagnostic_passes``: the work
     of the results returned; ``decompositions``: LAPACK attempts begun.
     ``verification``: what the candidate's admission re-derives at every construction,
-    the solve's own included, listed apart from the solve's work: for every absorption
-    result present, its residual relation and its fresh check, which the admission
-    re-runs whether or not the result converged.
+    listed apart from the solve's work: ``t``, the slopes once solved and the seed once
+    formed.  An absorption result's residual and fresh check are the absorber's own and
+    are not re-derived (LEANLOG2; before, ``"joint relation"``, ``"joint check"``,
+    ``"fixed-slope residual"``, ``"final relation"`` and ``"final check"`` were listed).
     """
 
     stages: tuple[Stage, ...]
@@ -172,7 +175,7 @@ class AbsorbedLinearCandidate:
         object.__setattr__(self, "decompositions", tuple(self.decompositions))
         _ending(self)
         t = signed_response(sample)
-        _own(self, t=t, theta=_admitted(self, t))
+        _own(self, t=t, theta=_admitted(self))
 
     @property
     def n_slopes(self) -> int:
@@ -226,7 +229,7 @@ def _presence(stage: Stage, status: Status) -> dict[str, bool]:
     }
 
 
-def _admitted(found: AbsorbedLinearCandidate, t: FloatArray) -> FloatArray | None:
+def _admitted(found: AbsorbedLinearCandidate) -> FloatArray | None:
     """Bind every record present to the sample and controls; the slopes, if solved."""
     expected = _presence(found.stage, found.status)
     if any((getattr(found, name) is not None) != on for name, on in expected.items()):
@@ -240,13 +243,13 @@ def _admitted(found: AbsorbedLinearCandidate, t: FloatArray) -> FloatArray | Non
         prepared.weights, raw_weights(sample)
     ):
         raise ValueError(BOUND)
-    call = (joint_values(sample, t), joint_columns(found.n_slopes), prepared)
+    call = (joint_columns(found.n_slopes), prepared)
     _bound_absorption(
         found.controls, joint, call, converged=_reached(found.stage, "joint")
     )
     theta = _decomposed(found)
     if theta is not None:
-        _bound_seed(found, t, theta, prepared)
+        _bound_seed(found, theta, prepared)
     return theta
 
 
@@ -283,7 +286,6 @@ def _decomposed(found: AbsorbedLinearCandidate) -> FloatArray | None:
 
 def _bound_seed(
     found: AbsorbedLinearCandidate,
-    t: FloatArray,
     theta: FloatArray,
     prepared: PreparedWeights,
 ) -> None:
@@ -295,16 +297,15 @@ def _bound_seed(
         raise ValueError(BOUND)
     try:
         expected = seeds(joint.state.coefficients, theta)
-        u = None if final is None else fixed_slope_residual(found.sample, t, theta)
     except FloatingPointError as error:
         raise ValueError(BOUND) from error
     if seed.columns != FINAL_COLUMNS or not all(
         same_bits(a, b) for a, b in zip(seed.coefficients, expected, strict=True)
     ):
         raise ValueError(BOUND)
-    if final is None or u is None:
+    if final is None:
         return
-    call = (immutable_array(u[:, None]), FINAL_COLUMNS, prepared)
+    call = (FINAL_COLUMNS, prepared)
     _bound_absorption(
         found.controls, final, call, converged=_reached(found.stage, "final")
     )
@@ -338,22 +339,13 @@ def _bound_evaluations(
         raise ValueError(BOUND)
 
 
-def _relation(role: str) -> list[str]:
-    """The residual relation of an absorption result and its fresh check, re-run."""
-    return [f"{role} relation", f"{role} check"]
-
-
 def _verification(found: AbsorbedLinearCandidate) -> tuple[str, ...]:
     """What the admission re-derives for this candidate, in its order."""
     names = ["t"]
-    if found.joint is not None:
-        names += _relation("joint")
     if found.n_slopes and found.theta is not None:
         names.append("slopes")
     if found.seed is not None:
         names.append("seed")
-    if found.final is not None:
-        names += ["fixed-slope residual", *_relation("final")]
     return tuple(names)
 
 

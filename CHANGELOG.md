@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.0
+
+- Fit power-mean regressions with multiple fixed-effect blocks or cancel
+  one block. Report conditional proportional effects and clustered inference.
+- Apply short-group, cell, or Weidner–Zylkin corrections in supported designs.
+- Use the compiled no-fixed-effects IOLS solver and the fixed-effect basis accelerator.
+- Follow the installed examples for gravity, nonlinear difference-in-differences,
+  fixed effects, and reporting.
+- Install native wheels on Linux, macOS, and Windows for x86-64 and ARM64,
+  with CPython 3.12, 3.13, and 3.14. The macOS wheels target macOS 15 or later.
+
 ## 0.1.0a1
 
 First no-fixed-effects alpha for source and CI testing. This is not a stable

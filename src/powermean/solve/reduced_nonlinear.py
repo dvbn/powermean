@@ -20,7 +20,9 @@ from dataclasses import dataclass
 import numpy as np
 
 from powermean.data.numeric_fit import NumericFit
+from powermean.fe import profile as profile_loop
 from powermean.fe.absorb_numeric import (
+    Coefficients,
     checked_difference,
     checked_product,
     checked_sum,
@@ -29,17 +31,22 @@ from powermean.fe.absorb_numeric import (
 )
 from powermean.fe.certificate_basis import CertificateBasis, embed, lift
 from powermean.fe.certificate_coordinates import (
-    _direct_retained_coordinates, coordinates, retained_coordinates,
+    _direct_retained_coordinates,
+    coordinates,
+    retained_coordinates,
 )
 from powermean.fe.groups import Grouping
 from powermean.fe.profile import BUDGET, ProfileResult, ProfileState, profile
 from powermean.fe.profile_arithmetic import (
     ProfileProblem,
     _build_profile_problem,
+    _profile_reductions,
+    _same_q,
     fresh_equations,
 )
 from powermean.fe.profile_nb2 import ScalarWork, profile_nb2
 from powermean.fe.reductions import immutable_array
+from powermean.fe.retained_live import _direct_retained_action
 from powermean.model.order import IndexArray
 from powermean.model.variance import FloatArray, PowerVariance
 from powermean.solve import profiled_loss
@@ -55,7 +62,7 @@ class ConditionalSolve:
     values: FloatArray
     theta: FloatArray
     base: FloatArray
-    alpha: FloatArray
+    effects: Coefficients
     prepared: ProfileProblem
     result: ProfileResult
     scalar: ScalarWork | None
@@ -98,14 +105,18 @@ class ConditionalSpace:
 
     @classmethod
     def for_problem(
-        cls, problem: ProfiledProblem, basis: CertificateBasis,
+        cls,
+        problem: ProfiledProblem,
+        basis: CertificateBasis,
     ) -> ConditionalSpace | None:
         """Unknown operation/callback seams keep the unchanged requested route."""
-        if (type(problem) is not ProfiledProblem
-                or type(problem.__dict__.get("_numeric_owner")) is not NumericFit
-                or not problem.n_slopes
-                or basis.grouping is not problem.grouping
-                or cls._selected(basis) is None):
+        if (
+            type(problem) is not ProfiledProblem
+            or type(problem.__dict__.get("_numeric_owner")) is not NumericFit
+            or not problem.n_slopes
+            or basis.grouping is not problem.grouping
+            or cls._selected(basis) is None
+        ):
             return None
         callbacks = (
             (profiled_loss.profile_point, profiled_loss._REDUCED_PROFILE),
@@ -118,10 +129,11 @@ class ConditionalSpace:
             # The cold conditional opening bypasses these original hooks. A
             # changed hook keeps the requested all-FE route, not a silent bypass.
             (vars(profiled_loss.ProfiledEvaluator).get("start"), _OPENING_START),
-            (vars(profiled_loss.ProfiledEvaluator).get("_completed"),
-             _OPENING_COMPLETED),
-            (vars(profiled_loss.ProfiledEvaluator).get("_profiled"),
-             _OPENING_PROFILED),
+            (
+                vars(profiled_loss.ProfiledEvaluator).get("_completed"),
+                _OPENING_COMPLETED,
+            ),
+            (vars(profiled_loss.ProfiledEvaluator).get("_profiled"), _OPENING_PROFILED),
         )
         if any(current is not accepted for current, accepted in callbacks):
             return None
@@ -153,8 +165,12 @@ class ConditionalSpace:
         initial: ProfileProblem = problem.__dict__["_initial"]
         prepared = prepare_weights(grouping, problem.weights)
         self.initial = _build_profile_problem(
-            prepared, initial.z, initial.base, problem.variance,
-            initial.log_weights, initial.log_outcomes,
+            prepared,
+            initial.z,
+            initial.base,
+            problem.variance,
+            initial.log_weights,
+            initial.log_outcomes,
         )
         # Exactly the same admitted z/family: join the existing one-slot row
         # lifetime, not a second per-trial evaluation/cache. Group sums/brackets
@@ -166,10 +182,18 @@ class ConditionalSpace:
         """Largest wholly kept original block; deterministic declared tie order."""
         selected, count = None, 0
         for index, place in enumerate(basis.positions):
-            if (place.size > count and (place >= 0).all()
-                    and np.array_equal(place, np.arange(
-                        int(place[0]), int(place[0]) + place.size, dtype=np.intp,
-                    ))):
+            if (
+                place.size > count
+                and (place >= 0).all()
+                and np.array_equal(
+                    place,
+                    np.arange(
+                        int(place[0]),
+                        int(place[0]) + place.size,
+                        dtype=np.intp,
+                    ),
+                )
+            ):
                 selected, count = index, place.size
         return selected
 
@@ -183,7 +207,7 @@ class ConditionalSpace:
         if theta.shape != (self.problem.n_slopes,) or not np.isfinite(theta).all():
             raise ValueError("start must hold one finite value per slope")
         full = np.zeros(self.problem.n_slopes + self.basis.n_kept)
-        full[:theta.size] = theta
+        full[: theta.size] = theta
         return immutable_array(full[self.remaining])
 
     def unpack(self, values: FloatArray) -> tuple[FloatArray, FloatArray]:
@@ -192,10 +216,14 @@ class ConditionalSpace:
             raise FloatingPointError("the reduced coordinates are not finite")
         full = np.zeros(self.problem.n_slopes + self.basis.n_kept)
         full[self.remaining] = values
-        return full[:self.problem.n_slopes], full[self.problem.n_slopes:]
+        return full[: self.problem.n_slopes], full[self.problem.n_slopes :]
 
     def solve(
-        self, values: FloatArray, *, tolerance: float, max_sweeps: int,
+        self,
+        values: FloatArray,
+        *,
+        tolerance: float,
+        max_sweeps: int,
         warm: ProfileState | None = None,
     ) -> ConditionalSolve:
         """Return the actual conditional outcome before reconstructing full q."""
@@ -208,9 +236,7 @@ class ConditionalSpace:
         prepared = self.initial._with_base(conditional_base)
         start = None
         if warm is not None:
-            start = ProfileState(
-                prepared.grouping, (warm.coefficients[self.block],)
-            )
+            start = ProfileState(prepared.grouping, (warm.coefficients[self.block],))
         if type(self.problem.variance) is PowerVariance:
             result = profile(
                 prepared, tolerance=tolerance, max_sweeps=max_sweeps, state=start
@@ -222,21 +248,30 @@ class ConditionalSpace:
             )
             result, scalar = found.profile, found.scalar
         return ConditionalSolve(
-            immutable_array(values), immutable_array(theta), base,
-            immutable_array(alpha), prepared, result, scalar,
+            immutable_array(values),
+            immutable_array(theta),
+            base,
+            effects,
+            prepared,
+            result,
+            scalar,
         )
 
     def reconstruct(self, solved: ConditionalSolve) -> ConditionalPoint:
         """Rebuild/check full original-order q only after a completed scalar root."""
-        if (solved.prepared.grouping is not self.initial.grouping
-                or solved.prepared.z is not self.initial.z
-                or solved.prepared.prepared is not self.initial.prepared):
+        if (
+            solved.prepared.grouping is not self.initial.grouping
+            or solved.prepared.z is not self.initial.z
+            or solved.prepared.prepared is not self.initial.prepared
+        ):
             raise ValueError("the conditional solve belongs to another operation")
         solved.require()
         result, prepared = solved.result, solved.prepared
-        alpha = np.array(solved.alpha, copy=True)
-        alpha[self.eliminated] = result.state.coefficients[0]
-        effects = embed(self.basis, alpha)
+        effects = (
+            *solved.effects[: self.block],
+            result.state.coefficients[0],
+            *solved.effects[self.block + 1 :],
+        )
         index = solved.base
         for block, coefficients in zip(
             self.problem.grouping.blocks, effects, strict=True
@@ -244,8 +279,27 @@ class ConditionalSpace:
             index = checked_sum(
                 index, coefficients[block.codes], "reduced reconstructed index"
             )
-        checked = fresh_equations(prepared, index)
-        if checked.maximum > result.tolerance:
+        # The completed one-block check is also the canonical-index check
+        # when reconstruction yields the same binary index. Otherwise the
+        # changed rounding can affect both representability and the residual.
+        same_check = (
+            type(prepared.variance) is PowerVariance
+            and prepared.variance.tau == 1.0
+            and profile is _CONDITIONAL_PROFILE
+            and vars(profile_loop).get("fresh_equations") is fresh_equations
+            and fresh_equations is _CONDITIONAL_EQUATIONS
+            and profile_loop._evaluate is _CONDITIONAL_EVALUATE
+            and profile_loop._Counters is _CONDITIONAL_COUNTERS
+            and profile_loop._local_reductions is _CONDITIONAL_LOCAL_REDUCTIONS
+            and profile_loop._result is _CONDITIONAL_RESULT
+            and vars(profile_loop).get("_profile_reductions") is _profile_reductions
+            and result.maximum is not None
+            and _same_q(result.index, index)
+        )
+        maximum = (
+            result.maximum if same_check else fresh_equations(prepared, index).maximum
+        )
+        if maximum is None or maximum > result.tolerance:
             raise FloatingPointError(
                 "the conditional root fails its fresh canonical-index bound"
             )
@@ -255,27 +309,40 @@ class ConditionalSpace:
         object.__setattr__(state, "grouping", self.problem.grouping)
         object.__setattr__(state, "coefficients", effects)
         return ConditionalPoint(
-            solved.theta, solved.base, index, state, solved.values,
-            self.block, solved.scalar
+            solved.theta,
+            solved.base,
+            index,
+            state,
+            solved.values,
+            self.block,
+            solved.scalar,
         )
 
     def point(
-        self, values: FloatArray, *, tolerance: float, max_sweeps: int,
+        self,
+        values: FloatArray,
+        *,
+        tolerance: float,
+        max_sweeps: int,
         warm: ProfileState | None = None,
     ) -> ConditionalPoint:
         """Compose a conditional root and its exact original-order reconstruction."""
-        return self.reconstruct(self.solve(
-            values, tolerance=tolerance, max_sweeps=max_sweeps, warm=warm
-        ))
+        return self.reconstruct(
+            self.solve(values, tolerance=tolerance, max_sweeps=max_sweeps, warm=warm)
+        )
 
     def coordinates(self, theta: FloatArray, state: ProfileState) -> FloatArray:
         """Use the accepted exact witness map, not a new gauge/reference rule."""
         try:
-            eligible = (type(self) is ConditionalSpace
+            eligible = (
+                type(self) is ConditionalSpace
                 and ConditionalSpace.__getattribute__ is _OPENING_SPACE_ACCESS
-                and getattr(ConditionalSpace, "__getattr__", None) is _OPENING_SPACE_GETATTR
-                and all(vars(ConditionalSpace).get(name) is None
-                        for name in ("basis", "block", "remaining", "problem"))
+                and getattr(ConditionalSpace, "__getattr__", None)
+                is _OPENING_SPACE_GETATTR
+                and all(
+                    vars(ConditionalSpace).get(name) is None
+                    for name in ("basis", "block", "remaining", "problem")
+                )
                 and ProfileState is _OPENING_STATE_CLASS
                 and type(state) is _OPENING_STATE_CLASS
                 and ProfileState.__getattribute__ is _OPENING_STATE_ACCESS
@@ -294,16 +361,27 @@ class ConditionalSpace:
                 and bool(vars(self.basis)["positions"])
                 and type(vars(self.basis).get("selected")) is np.ndarray
                 and type(vars(self.basis)["positions"][0]) is np.ndarray
-                and type(theta) is np.ndarray and theta.ndim == 1
+                and type(theta) is np.ndarray
+                and theta.ndim == 1
                 and theta.dtype == np.float64
-                and type(self.remaining) is np.ndarray and self.remaining.ndim == 1
+                and type(self.remaining) is np.ndarray
+                and self.remaining.ndim == 1
                 and self.remaining.dtype == np.intp
                 and self.block == 0
-                and np.array_equal(self.remaining, np.concatenate((
-                    np.arange(theta.size, dtype=np.intp),
-                    np.arange(theta.size + self.basis.positions[0].size,
-                              theta.size + self.basis.n_kept, dtype=np.intp),
-                ))))
+                and np.array_equal(
+                    self.remaining,
+                    np.concatenate(
+                        (
+                            np.arange(theta.size, dtype=np.intp),
+                            np.arange(
+                                theta.size + self.basis.positions[0].size,
+                                theta.size + self.basis.n_kept,
+                                dtype=np.intp,
+                            ),
+                        )
+                    ),
+                )
+            )
         except MemoryError:
             eligible = False
         if not eligible:
@@ -311,17 +389,17 @@ class ConditionalSpace:
             return immutable_array(np.concatenate((theta, alpha))[self.remaining])
         effects = state.coefficients
         try:
-            # Already normally loaded by the numeric interface; no producer or
-            # eligibility is replayed, only its literal weak live reader.
-            from powermean.interface import numeric_execution as handoff
-            namespace = vars(handoff)
-            read = namespace.get("_direct_retained_action")
+            # The canonical lower live reader of this exact bound pair. No
+            # producer or eligibility is replayed; nothing above this layer is
+            # imported or looked up, and no instance attachment is called.
             problem = vars(self).get("problem")
-            proof = (read(self.basis, problem)
-                     if type(problem) is ProfiledProblem
-                     and read is namespace.get("_DIRECT_RETAINED_ACTION")
-                     and _direct_retained_coordinates is _OPENING_DIRECT_RETAINED
-                     else None)
+            proof = (
+                _direct_retained_action(self.basis, problem)
+                if type(problem) is ProfiledProblem
+                and _direct_retained_action is _OPENING_DIRECT_ACTION
+                and _direct_retained_coordinates is _OPENING_DIRECT_RETAINED
+                else None
+            )
         except MemoryError:
             proof = None
         if proof is not None:
@@ -356,11 +434,15 @@ class ConditionalSpace:
         sums = group_sums(product, block.codes, block.n_levels)
         with np.errstate(all="ignore"):
             correction = sums / totals
-        return checked_difference(
-            base, correction[block.codes], "conditional tangent"
-        )
+        return checked_difference(base, correction[block.codes], "conditional tangent")
 
 
+_CONDITIONAL_PROFILE = profile
+_CONDITIONAL_EQUATIONS = fresh_equations
+_CONDITIONAL_EVALUATE = profile_loop._evaluate
+_CONDITIONAL_COUNTERS = profile_loop._Counters
+_CONDITIONAL_LOCAL_REDUCTIONS = profile_loop._local_reductions
+_CONDITIONAL_RESULT = profile_loop._result
 _OPENING_COORDINATES = coordinates
 _OPENING_START = vars(profiled_loss.ProfiledEvaluator)["start"]
 _OPENING_COMPLETED = vars(profiled_loss.ProfiledEvaluator)["_completed"]
@@ -368,6 +450,7 @@ _OPENING_PROFILED = vars(profiled_loss.ProfiledEvaluator)["_profiled"]
 _OPENING_SPACE_COORDINATES = vars(ConditionalSpace)["coordinates"]
 _OPENING_RETAINED = retained_coordinates
 _OPENING_DIRECT_RETAINED = _direct_retained_coordinates
+_OPENING_DIRECT_ACTION = _direct_retained_action
 _OPENING_SPACE_ACCESS = ConditionalSpace.__getattribute__
 _OPENING_SPACE_GETATTR = getattr(ConditionalSpace, "__getattr__", None)
 _OPENING_ARRAY_EQUAL = np.array_equal
@@ -379,4 +462,3 @@ _OPENING_STATE_CLASS = ProfileState
 _OPENING_STATE_ACCESS = ProfileState.__getattribute__
 _OPENING_STATE_GETATTR = getattr(ProfileState, "__getattr__", None)
 _OPENING_STATE_FIELD = vars(ProfileState).get("coefficients")
-

@@ -1,28 +1,33 @@
-"""Internal NB2 profiling of the fixed-effect blocks: factory, state, sweeps, work.
+"""Private NB2 profiling of the fixed-effect blocks: factory, state, sweeps, work.
 
-The inner NB2 profile only, a scalar equation per level.  No outer slope Newton, line
-search or tightening schedule, no NB2 parameter estimation, no sample
+``design/02_computation.md``, Sections 5.2 and 5.7; ``design/01_statistical_core.md``,
+Section 4.2; ``design/06_reuse_map.md``, ``fe/profile`` (the extension of S1's
+power-only ``ProfileLinearLoss`` to NB2, a scalar equation per level: S1 holds no NB2
+loop, cap or parity to inherit); the adopted contract
+``plan/evidence/M1.6_contract.txt`` with its review ``M1.6_scope_review.txt``;
+decision D51.  Task M1.6: the inner NB2 profile only.  No outer slope Newton, line
+search or tightening schedule (task M1.11), no NB2 parameter estimation, no sample
 deletion, separation, rank, existence decision, default, certificate or public path;
 a completed profile is not a full-joint certificate and no convergence rate is
 claimed.  The scalar primitives are :mod:`powermean.fe.profile_nb2_scalar`; the
 shared checked problem, reconstruction and fresh equations are
 :mod:`powermean.fe.profile_arithmetic`; the state, controls, counters and result
-mechanics of the power profile :mod:`powermean.fe.profile` are reused as
+mechanics of the accepted power profile :mod:`powermean.fe.profile` are reused as
 they are.  The controls are ``profile_tol`` 2e-11 and ``profile_max_sweeps`` 20000 of
-:class:`powermean.solve.absorbed.AbsorbedOptions`, unchanged, taken as explicit
+:class:`powermean.solve.m1_options.AbsorbedOptions`, unchanged, taken as explicit
 arguments and never chosen here.
 
 Family.  :func:`prepare_profile_nb2` is the NB2 factory of the shared record, by the
 exact :class:`~powermean.model.variance.NB2Variance` type; the power factory and the
 power loop refuse it, and :func:`profile_nb2` refuses a power problem.  At exactly
-``kappa = 0`` the NB2 equation is the ``tau = 1`` power equation: the call
-constructs a real checked ``PowerVariance(1)`` problem on the same
-prepared weights, outcomes, base and logs, and runs the power profile with
+``kappa = 0`` the NB2 equation is the ``tau = 1`` power equation (file 01, Section
+4.2): the call constructs a real checked ``PowerVariance(1)`` problem on the same
+prepared weights, outcomes, base and logs, and runs the accepted power profile with
 the same state and controls, an identity of the same family equation and not an
 optimizer fallback; its scalar work is zero.  A positive ``kappa``, however small or
 large, is never replaced by Poisson or Gamma.
 
-Loop.  The index is reconstructed from the
+Loop (contract, the resolved scalar budget).  The index is reconstructed from the
 start and the fresh equations of every original block are evaluated there; an
 initially passing check returns with zero sweeps.  Otherwise each sweep visits the
 blocks in declared order, and a visit gives every UNFINISHED level of its block ONE
@@ -40,7 +45,7 @@ before exhaustion is declared; the sole accuracy predicate is ``max |e_g|`` at m
 the tolerance, equality passing.  No hidden inner loop, scalar cap, retry or relaxed
 tolerance exists.
 
-Work.  :class:`~powermean.fe.profile.Work` keeps its block-level meanings
+Work.  :class:`~powermean.fe.profile.Work` keeps its accepted block-level meanings
 (``blocks_completed`` after a visit's update, reconstruction and trial evaluation are
 finite).  :class:`ScalarWork` counts logical level evaluations, rebuilt brackets and
 applied updates, apart, each when it completes: ``current`` (the levels evaluated at
@@ -51,7 +56,7 @@ check), ``proposed`` (one per updated level, once its trial evaluation completed
 and the applied update kinds ``newton``, ``midpoint``, ``endpoint_moves`` and
 ``closed_form``, counted only with the trial's completion.  These are not row or
 kernel operation counts: every current, endpoint or trial evaluation reconstructs
-the full index and evaluates the row kernel on every active row, not only the
+the full index and evaluates the M0 kernel on every active row, not only the
 level's rows, and the curvature is a separate kernel evaluation at the current
 index, not counted.  ``endpoint == 2 rebuilt`` and ``proposed`` equal to the sum of
 the kinds are identities of completed visits only: on a refusal inside a visit the
@@ -63,7 +68,7 @@ calls.
 Outcomes.  As the power profile: malformed controls, a wrong family or a state bound
 to another grouping raise ``ValueError``; a starting index that is not representable
 raises ``FloatingPointError``; the result carries ``converged``, ``budget`` or
-``range``.  The ``range`` status also reports the scalar refusals
+``range``.  The ``range`` status also reports the scalar refusals of the contract
 with their reason: a bracket endpoint whose fresh rounded sign is wrong, a degenerate
 bracket whose sole point fails the equation (no interior progress) and no
 representable interior proposal or midpoint (stagnation), none of which is a new

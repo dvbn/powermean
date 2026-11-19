@@ -3,8 +3,8 @@
 
 """Newton solver for Generalized Linear Models.
 
-Carried from scikit-learn under the notice ``SKLEARN_COPYING`` of this folder.  The
-arithmetic, the
+Carried from the solver campaign under the scikit-learn notice ``SKLEARN_COPYING`` of
+this folder; ``PROVENANCE.md``, Section 6, lists every edit.  The arithmetic, the
 names and the structure are those of the source, without its L-BFGS fallback: a
 failed Newton step or line search stops the iteration without convergence, and no
 other solver is run.

@@ -1,10 +1,11 @@
 """The retained record of an absorbed joint root solve outside ``tau in [1, 2]``.
 
-The solver, its options, the start that produced the reported solution, the path and the
-work are recorded.  The selected-root route of :mod:`powermean.solve.absorbed_root`
-keeps, beside the snapshots that every absorbed route keeps (its history, with its
-stages as attempts, and the certificate of its selected point), what this module
-detaches:
+``design/02_computation.md``, Sections 5.3, 6 and 9 (the solver, its options, the
+start that produced the reported solution, the path and the work, recorded);
+``DESIGN.md``, Section 6.3; decisions D51 and D57.  The selected-root route of
+:mod:`powermean.solve.absorbed_root` keeps, beside the snapshots that every absorbed
+route keeps (its history, with its stages as attempts, and the certificate of its
+selected point), what this module detaches:
 
 - the operation of the root stages and the organization requested at the fit, which
   its convex initializer ran: recorded apart, neither labelled as the other;
@@ -12,7 +13,7 @@ detaches:
 - the initializer: its kind, convex variance, certified flag, status and reason, the
   start's index gap, the budgets charged, the start in the full coordinates, and the
   convex fit's OWN history and certificate snapshots (the inner checks and work that
-  actually ran, at their unchanged bounds), detached by the snapshot
+  actually ran, at their unchanged bounds), detached by the accepted snapshot
   routines with the same identity maps; the convex certificate's slope map and rows
   are kept as discarded, so that no inference is ever formed at the initializer;
 - the fixed merit metric (its matrix, scale, factor record and pivots) or the reason

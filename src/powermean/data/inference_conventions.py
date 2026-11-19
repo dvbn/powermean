@@ -11,9 +11,9 @@ in :mod:`powermean.data.inference_requests`.
 :class:`RetainedColumns`    the names declared by ``retain=[...]``
 ==========================  ======================================================
 
-The treatment of an indefinite signed multiway estimate, ``"cgm"`` or ``"none"``, is the
-field ``psd`` of a convention and the key ``"psd"`` of a signed multiway request; its
-values are declared here once.
+The treatment of an indefinite signed multiway estimate, ``"cgm"``, ``"fixest"`` or
+``"none"``, is the field ``psd`` of a convention and the key ``"psd"`` of a signed
+multiway request; its values are declared here once.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ from powermean.data.request_values import (
     settings,
 )
 
-PsdTreatment = Literal["cgm", "none"]
+PsdTreatment = Literal["cgm", "none", "fixest"]
 RobustFactor = Literal["none", "N/(N-1)", "N/(N-K*)"]
 ClusterFactor = Literal["none", "G/(G-1)", "(N-1)/(N-K*)*G/(G-1)"]
 ClusterCount = Literal["min", "each"]
@@ -40,6 +40,9 @@ Reference = Literal["normal", "t"]
 
 PSD_TREATMENTS: tuple[str, ...] = get_args(PsdTreatment)
 # The closed values of each field of a custom convention.
+ABSORBED_COUNTS: tuple[str, ...] = ("fixest", "exact")
+"""The counts of ``ConventionValues.absorbed_count`` (log-OLS, ruling 80)."""
+
 CONVENTION_VALUES: Mapping[str, tuple[str, ...]] = MappingProxyType(
     {
         "robust": get_args(RobustFactor),
@@ -70,8 +73,15 @@ class ConventionValues:
         its own ``G``.
     reference : {"normal", "t"}
         The reference distribution.
-    psd : {"cgm", "none"}
+    psd : {"cgm", "none", "fixest"}
         The treatment of an indefinite signed multiway estimate.
+    absorbed_count : {"fixest", "exact"}, default "fixest"
+        Fixed-effect log-OLS only (owner's ruling 80): the count of the absorbed
+        effects in ``K`` (HC1) and ``K*``: ``"fixest"``, the default count of
+        ``fixest`` 0.13 (``ssc(K.fixef = "nested", K.exact = FALSE)``) and of
+        ``pyfixest``, the levels of every counted block less one per block after the
+        first, an upper bound on the rank; ``"exact"``, the rank of the indicators
+        (ruling 5).  The other fixed-effect routes refuse ``"exact"``.
 
     Raises
     ------
@@ -85,18 +95,27 @@ class ConventionValues:
     reference: Reference
     psd: PsdTreatment
 
+    absorbed_count: str = "fixest"
+
     def __post_init__(self) -> None:
         """Check each field against its closed values, in the order of the fields."""
         for field, choices in CONVENTION_VALUES.items():
             value = choice(field, getattr(self, field), choices)
             object.__setattr__(self, field, value)
+        object.__setattr__(
+            self,
+            "absorbed_count",
+            choice("absorbed_count", self.absorbed_count, ABSORBED_COUNTS),
+        )
 
     def to_dict(self) -> dict[str, object]:
-        """The type and the five fields."""
-        return serialized(
-            "ConventionValues",
-            {field: getattr(self, field) for field in CONVENTION_VALUES},
-        )
+        """The type and the five fields; ``absorbed_count`` where it is ``"exact"``."""
+        found: dict[str, object] = {
+            field: getattr(self, field) for field in CONVENTION_VALUES
+        }
+        if self.absorbed_count != "fixest":
+            found["absorbed_count"] = self.absorbed_count
+        return serialized("ConventionValues", found)
 
     @classmethod
     def from_dict(cls, record: Mapping[str, object]) -> ConventionValues:
@@ -111,6 +130,7 @@ def ssc(
     cluster_count: ClusterCount,
     reference: Reference,
     psd: PsdTreatment,
+    absorbed_count: str = "fixest",
 ) -> ConventionValues:
     """Declare a custom convention with all five fields required.
 
@@ -124,8 +144,12 @@ def ssc(
         One factor with ``G_min``, or each multiway component's own ``G``.
     reference : {"normal", "t"}
         The reference distribution, with the convention's reference count.
-    psd : {"cgm", "none"}
+    psd : {"cgm", "none", "fixest"}
         The treatment of an indefinite signed multiway covariance.
+    absorbed_count : {"fixest", "exact"}, default "fixest"
+        Fixed-effect log-OLS only: ``fixest``'s default count of the absorbed effects
+        (levels less one per further block, an upper bound on the rank) or the exact
+        rank of their indicators (owner's ruling 80).
 
     Returns
     -------
@@ -137,7 +161,9 @@ def ssc(
     SpecificationError
         A field outside its closed values (``specification.invalid_value``).
     """
-    return ConventionValues(robust, cluster, cluster_count, reference, psd)
+    return ConventionValues(
+        robust, cluster, cluster_count, reference, psd, absorbed_count
+    )
 
 
 @dataclass(frozen=True)

@@ -1,6 +1,6 @@
 """Fresh cancelled/mixed group moments and nonsymmetric Jacobian actions.
 
-The cancelled score of BBP (``eq:fe-growing-cancel-score``).
+File 01 Section 5.2 (D12), ``eq:fe-growing-cancel-score``; file 03 Sections 3.1--3.4.
 For already transformed z and centered transformed offset c, q=B theta+c, with
 B=M_C[X,F_R] and ordinary unweighted M_C:
 
@@ -8,16 +8,17 @@ B=M_C[X,F_R] and ordinary unweighted M_C:
     k=(e-1)t+(2-e)(T_g/W_g)w, H=-dS/dtheta'.
 
 H v=B'[k Bv-pi sum_g(k Bv)]; H' v=B'[k(Bv-sum_g(pi Bv))].
-These actions are distinct. Inference must solve with the true transpose,
-not a working-regression curvature. This module evaluates raw cancelled moments; it
+These actions are distinct. Future inference must solve with the true transpose,
+not a working-regression curvature. This module evaluates raw D12 moments; it
 defines no convex criterion or frequency-weight/zero-weight statistical policy.
+``assembled_jacobian`` forms the same H in supplied coordinates from the rows.
 """
 
 from __future__ import annotations
 
 import importlib
 from dataclasses import dataclass
-from typing import NamedTuple, Protocol, cast
+from typing import Literal, NamedTuple, Protocol, cast
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
@@ -30,12 +31,23 @@ from powermean.fe._cancel_storage import (
     finite_product,
     finite_vector,
 )
-from powermean.fe.cancel import CancelStructure, segment_sum, to_original, to_sorted
+from powermean.fe.cancel import (
+    CancelStructure,
+    center_sorted,
+    pair_positions,
+    segment_sum,
+    to_original,
+    to_sorted,
+)
 from powermean.fe.retained import CenteredDesign
 from powermean.model.variance import FloatArray, Variance
 from powermean.systems._cancel_rows import group_residuals, row_components
 
 BoolArray = NDArray[np.bool_]
+
+# ``assembled_jacobian`` is taken only while its bound on every intermediate value
+# of the assembly and of the column products is at most this, so neither overflows.
+ASSEMBLY_MAGNITUDE = 1e300
 
 
 class CsrArray(Protocol):
@@ -177,12 +189,12 @@ class CancelledState(BuilderRecord):
 
     @property
     def w(self) -> FloatArray:
-        """Sorted information weights."""
+        """Sorted D12 information weights."""
         return self._w.view()
 
     @property
     def t(self) -> FloatArray:
-        """Sorted weighted relative outcomes, exactly zero where z is zero."""
+        """Sorted D12 weighted relative outcomes, exactly zero where z is zero."""
         return self._t.view()
 
     @property
@@ -261,7 +273,7 @@ class CancelledState(BuilderRecord):
             )
 
     def row_term_dot(self, values: ArrayLike) -> FloatArray:
-        """rho_i (B_i-Bbar_g)' v at input rows."""
+        """rho_i (B_i-Bbar_g)' v at input rows (03 Section 3.4)."""
         structure = self.design.structure
         with np.errstate(over="raise", invalid="raise"):
             image = self._image(values)
@@ -340,8 +352,181 @@ class CancelledState(BuilderRecord):
         )
 
 
+def _retained_block(
+    design: CenteredDesign, k: FloatArray, pi: FloatArray | None, out: FloatArray
+) -> None:
+    """Write ``F_R' M_C D M_C F_R`` into ``out``, with ``D = diag(k) - pi k_g'``.
+
+    Within a group of ``c`` rows, ``M_C D M_C`` has the entries
+    ``k_i [i = j] - (k_i + k_j - mean k) / c - (pi_i - mean pi)(k_j - mean k)``.
+    Each is added at the levels of rows ``i`` and ``j`` for every pair of retained
+    blocks; no row-by-level array is formed.
+    """
+    structure = design.structure
+    counts = structure.counts
+    left, right = pair_positions(structure)
+    group = structure.sorted_codes[left]
+    k_mean = (segment_sum(structure, k) / counts)[group]
+    weight = (k_mean - k[left] - k[right]) / counts[group]
+    if pi is not None:
+        pi_mean = (segment_sum(structure, pi) / counts)[group]
+        weight -= (pi[left] - pi_mean) * (k[right] - k_mean)
+    weight += np.where(left == right, k[left], 0.0)
+    codes, sizes = structure.retained_sorted_codes, structure.block_sizes
+    starts = [start - design.n_slopes for start in design.block_starts]
+    for row_codes, row, rows in zip(codes, starts, sizes, strict=True):
+        scaled = row_codes[left]
+        for col_codes, col, cols in zip(codes, starts, sizes, strict=True):
+            cells = np.bincount(
+                scaled * cols + col_codes[right], weights=weight, minlength=rows * cols
+            )
+            out[row : row + rows, col : col + cols] = cells.reshape(rows, cols)
+
+
+def _slope_blocks(
+    design: CenteredDesign, k: FloatArray, pi: FloatArray | None, out: FloatArray
+) -> None:
+    """Write ``X'DX``, ``F_R' M_C D X`` and ``X'D M_C F_R`` into ``out``.
+
+    ``X`` is the stored centered slopes; ``D u = k u - pi sum_g(k u)`` and
+    ``D' u = k (u - sum_g(pi u))`` as in ``jac_vec`` and ``jac_t_vec``.
+    """
+    structure, x, slopes = design.structure, design.centered_slopes, design.n_slopes
+    forward = k[:, None] * x
+    adjoint = forward
+    if pi is not None:
+        codes = structure.sorted_codes
+        adjoint = k[:, None] * (x - segment_sum(structure, pi[:, None] * x)[codes])
+        forward = forward - pi[:, None] * segment_sum(structure, forward)[codes]
+    out[:slopes, :slopes] = x.T @ forward
+    if not structure.block_sizes:
+        return
+    forward = center_sorted(structure, forward)
+    adjoint = forward if pi is None else center_sorted(structure, adjoint)
+    for codes, start, size in zip(
+        structure.retained_sorted_codes,
+        design.block_starts,
+        structure.block_sizes,
+        strict=True,
+    ):
+        for column in range(slopes):
+            out[start : start + size, column] = np.bincount(
+                codes, weights=forward[:, column], minlength=size
+            )
+            out[column, start : start + size] = np.bincount(
+                codes, weights=adjoint[:, column], minlength=size
+            )
+
+
+def _assembly_applies(
+    design: CenteredDesign, k: FloatArray, pi: FloatArray | None, basis: FloatArray
+) -> Literal["pairs", "grouped"] | None:
+    """Which row assembly may replace the column products for these inputs, if any.
+
+    Structure: ``"pairs"`` while the ordered pairs of rows of one cancelled group
+    number at most ``p**2``, the entries of the full matrix, which bounds that
+    assembly's workspace. Otherwise ``"grouped"`` when the grouped reducer is
+    available and there is a retained block whose group-by-level cells number
+    ``m <= n + p**2`` with ``m`` times the retained levels at most ``64 n p``.
+
+    Magnitude: ``8 (n + p)^2 p^2 t^2 x^2 max|k| (1 + max|pi|)``, with ``t`` and ``x``
+    the largest absolute entries of the basis and of the centered slopes, or one if
+    larger, bounds every intermediate value of either assembly and of the ``d``
+    column products. While it is at most ``ASSEMBLY_MAGNITUDE`` no evaluation can
+    overflow, so the products would return a finite matrix. A non-finite input fails
+    this test.
+    """
+    structure = design.structure
+    counts = structure.counts
+    p = design.n_columns
+    route: Literal["pairs", "grouped"] = "pairs"
+    if float(np.dot(counts, counts.astype(np.float64))) > float(p) * p:
+        row_mod = importlib.import_module("powermean.systems._cancel_rows")
+        grouped_work = getattr(row_mod, "GROUPED_WORK", None)
+        n, levels = float(structure.n_rows), float(sum(structure.block_sizes))
+        cells = float(structure.n_groups) * levels
+        if not (
+            isinstance(grouped_work, int)
+            and levels
+            and cells <= n + float(p) * p
+            and cells * levels <= grouped_work * n * p
+        ):
+            return None
+        route = "grouped"
+    span = float(structure.n_rows + p) * p
+    t = float(np.max(np.abs(basis), initial=1.0))
+    x = float(np.max(np.abs(design.centered_slopes), initial=1.0))
+    weight = float(np.max(np.abs(k), initial=0.0))
+    share = 0.0 if pi is None else float(np.max(np.abs(pi), initial=0.0))
+    bound = 8.0 * span * span * t * t * x * x * weight * (1.0 + share)
+    return route if bound <= ASSEMBLY_MAGNITUDE else None
+
+
+def assembled_jacobian(
+    design: CenteredDesign,
+    k: FloatArray,
+    pi: FloatArray | None,
+    basis: FloatArray,
+    columns: IndexArray | None = None,
+) -> FloatArray | None:
+    """``T'B'[diag(k) - pi sum_g(k .)]B T`` assembled from the rows, or None.
+
+    Parameters
+    ----------
+    design : CenteredDesign
+        The full-column implicit design ``B``.
+    k, pi : ndarray, ndarray or None
+        Sorted row weights of the negative Jacobian; ``pi=None`` omits the group
+        term, which leaves the symmetric ``B'diag(k)B``.
+    basis : ndarray
+        The p-by-d coordinate map ``T``.
+    columns : ndarray, optional
+        The columns that ``basis`` selects, from its owner, which built it from
+        them: ``T'HT`` is then their principal submatrix. Without them the two
+        dense products with ``basis`` are formed.
+
+    Returns
+    -------
+    ndarray or None
+        The d-by-d matrix whose column ``j`` equals, in exact arithmetic, the
+        product ``T'H(T e_j)`` of ``CancelledState.jac_vec``; the sums are taken
+        in another order, so the entries agree to rounding, not bit for bit. None
+        where ``_assembly_applies`` is false or a value is not representable:
+        the caller then forms the columns, which decide and raise as before.
+
+    Notes
+    -----
+    The full p-by-p matrix is built from the rows, slopes by grouped reductions
+    and retained levels by one term per pair of rows of a group, then mapped by
+    two dense products. The workspace is one p-by-p and one p-by-d array, a few
+    n-by-K arrays and a few vectors with one entry per pair of rows of a group
+    (at most ``p**2``); no row-by-level or row-by-coordinate array is formed.
+    """
+    route = _assembly_applies(design, k, pi, basis)
+    if route is None:
+        return None
+    slopes, p = design.n_slopes, design.n_columns
+    row_mod = importlib.import_module("powermean.systems._cancel_rows")
+    block = (
+        _retained_block
+        if route == "pairs"
+        else getattr(row_mod, "_grouped_block", _retained_block)
+    )
+    try:
+        with np.errstate(over="raise", invalid="raise"):
+            full = np.empty((p, p), dtype=np.float64)
+            _slope_blocks(design, k, pi, full)
+            if design.structure.block_sizes:
+                block(design, k, pi, full[slopes:, slopes:])
+            if columns is not None:
+                return finite_product(full[np.ix_(columns, columns)])
+            return finite_product(basis.T @ (full @ basis))
+    except FloatingPointError:
+        return None
+
+
 def _log_weights(structure: CancelStructure, weights: ArrayLike | None) -> FloatArray:
-    """Positive a, sorted; zero-weight centering policy is not supplied."""
+    """D12 positive a, sorted; zero-weight centering policy is not supplied."""
     if weights is None:
         return np.zeros(structure.n_rows)
     array = finite_vector(weights, structure.n_rows, "obs_weights")
@@ -361,7 +546,7 @@ def cancelled_equations(
     centered_offset: ArrayLike | None = None,
     obs_weights: ArrayLike | None = None,
 ) -> CancelledState:
-    """Evaluate a fresh point without solving, mapping order or selecting rows.
+    """Evaluate a fresh D12 point without solving, mapping order or selecting rows.
 
     Parameters
     ----------
@@ -377,7 +562,7 @@ def cancelled_equations(
         Already transformed and unweighted-centered offset, input row order.
         Added exactly once. The caller owns its centering/order precondition.
     obs_weights : array_like, optional
-        Positive equation multipliers, default one; no replication semantics.
+        Positive D12 equation multipliers, default one; no replication semantics.
 
     Returns
     -------

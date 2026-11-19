@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Literal
+from collections.abc import Sequence
+from dataclasses import dataclass, replace
+from typing import ClassVar, Literal
 
 import numpy as np
 import numpy.typing as npt
@@ -17,8 +18,49 @@ from powermean.solve.iols.records import owned_value
 
 
 @dataclass(frozen=True)
+class IolsScaleFailure:
+    """Campaign scale refusal before backend dispatch; index among slope columns."""
+
+    slope_index: int
+    scale: float
+    scale_max: float
+    scale_floor: float
+    slope_name: str | None = None
+
+    source: ClassVar[str] = "iols_normalization"
+    status: ClassVar[Literal["solver_error"]] = "solver_error"
+    iterations: ClassVar[int] = 0
+    phase1_evaluations: ClassVar[int] = 0
+    phase2_evaluations: ClassVar[int] = 0
+
+    def with_slope_name(self, names: Sequence[str]) -> IolsScaleFailure:
+        """Attach the matching fitted term, excluding the profiled intercept."""
+        slopes = [name for name in names if name != "Intercept"]
+        return replace(self, slope_name=slopes[self.slope_index])
+
+    @property
+    def message(self) -> str:
+        """The observed centered standard deviation and the required minimum."""
+        label = "" if self.slope_name is None else f"{self.slope_name!r}, "
+        return (
+            "S_singular: transformed-design scale is below the relative floor "
+            f"({label}slope index {self.slope_index}, SD {self.scale!r}, "
+            f"maximum SD {self.scale_max!r}, floor {self.scale_floor!r}). "
+            "0 iterations, 0 phase 1 evaluations, 0 phase 2 evaluations."
+        )
+
+
+class IolsScaleFloorError(ValueError):
+    """The specific pre-iteration port refusal, with its measured scales."""
+
+    def __init__(self, failure: IolsScaleFailure) -> None:
+        super().__init__(failure.message)
+        self.failure = failure
+
+
+@dataclass(frozen=True)
 class TransformedNormalizationState:
-    """State of the centered-SD slope column scaling."""
+    """State of the campaign's centered-SD slope column scaling."""
 
     requested: bool
     enabled: bool
@@ -86,8 +128,9 @@ def build_transformed_normalization_state(
     )
     near_zero = (raw_scale > 0.0) & (raw_scale < scale_floor)
     if np.any(near_zero):
-        raise ValueError(
-            "S_singular: transformed-design scale is below the relative floor"
+        index = int(np.flatnonzero(near_zero)[0])
+        raise IolsScaleFloorError(
+            IolsScaleFailure(index, float(raw_scale[index]), max_scale, scale_floor)
         )
 
     scale: FloatArray = np.where(raw_scale == 0.0, 1.0, raw_scale)

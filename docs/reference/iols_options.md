@@ -1,0 +1,31 @@
+# IOLS solver options (`IolsOptions`)
+
+`powermean.solver_defaults("iols")` returns a fresh `powermean.solve.iols.options.IolsOptions` record with the default settings for `solver="iols"`.
+
+| Option | Type | Default | Constructor domain | Execution / resolver rule | Description |
+| --- | --- | --- | --- | --- | --- |
+| `eps` | `float` | `1e-12` | positive finite real numbers | positive finite real numbers | Stops iteration when the largest coefficient change is below the threshold; the final residual check determines whether the solution has converged. |
+| `anderson_m` | `int` | `5` | nonnegative integers | nonnegative integers | Initial depth of the Anderson mixing; a nonnegative integer, zero included, stored as given and not a statement about the source's later adaptation of the depth. |
+| `max_phase1_iterations` | `int` | `100000` | positive integers | integers >= 2 at execution (`max_phase1_iterations=1` is accepted by `IolsOptions` construction but refused by `options_to_kernel_control` with `specification.invalid_value`; no silent clamping) | Budget of pilot updates; a positive integer, 1 included. |
+| `stopcrit` | `int` | `1000000` | positive integers | integers >= 2 at execution (`stopcrit=1` is accepted by `IolsOptions` construction but refused by `options_to_kernel_control` with `specification.invalid_value`; no silent clamping) | Budget of updates per step size; a positive integer, 1 included. |
+| `max_phase2_evaluations` | `int` | `5000000` | positive integers | integers >= 1 (`max_phase2_evaluations=1` is accepted at both construction and execution mapping) | Budget of evaluations of the exact map; a positive integer, 1 included. |
+| `delta_grid` | `tuple[float, ...]` | `[0.006737946999085467, 0.0820849986238988, 1.0, 12.182493960703473, 148.4131591025766]` | nonempty lists, tuples or one-dimensional arrays of positive finite real numbers | nonempty 1D sequence of positive finite reals (stored as `tuple[float, ...]`, serialized as `list[float]`, preserving order and duplicate entries) | The shifts of the pilot, in their order and with their repetitions; a nonempty list, tuple or one-dimensional array of positive finite reals, stored as a tuple of floats; neither sorted, deduplicated nor rebuilt from endpoints. |
+| `rho_log_min` | `float` | `-7.0` | finite real numbers | unbounded finite real numbers (`lower=null`, `upper=null` in JSON metadata; independent of the opposite bound) | Logarithmic lower bound of the step grid; a finite real, independent of ``rho_log_max`` and not exponentiated here. |
+| `rho_log_max` | `float` | `14.0` | finite real numbers | unbounded finite real numbers (`lower=null`, `upper=null` in JSON metadata; independent of the opposite bound) | Logarithmic upper bound of the step grid; a finite real, independent of ``rho_log_min`` and not exponentiated here. |
+| `iols_backend` | `literal["cpp", "numpy"]` | `"cpp"` | 'cpp', 'numpy' | `'cpp'`, `'numpy'` (omitted prefers `'cpp'` and falls back to `'numpy'` only when `powermean._native.iols._kernel_cpp` is absent on disk; explicit `'cpp'` is strict; internal `'auto'` is refused) | The implementation: the compiled full loop or its NumPy twin, an explicit and recorded choice. |
+
+## Execution and implementation rules
+
+- **Constructor budgets vs. execution mapping (`options_to_kernel_control`).** `IolsOptions` validates `max_phase1_iterations`, `stopcrit`, and `max_phase2_evaluations` as positive integers (`>= 1`) at construction. When mapping to `IOLSKernelControl` for execution, `max_phase1_iterations < 2` and `stopcrit < 2` are refused with `SpecificationError("specification.invalid_value")` rather than clamped; `max_phase2_evaluations = 1` remains valid at execution.
+- **Backend omission vs. explicit selection (`backend_explicit`).** Public `iols_backend` values are `'cpp'` and `'numpy'` only; internal `'auto'` is not a valid public literal and is refused. When `iols_backend` is omitted (`IolsOptions()` or `IolsOptions.from_dict({})`), `iols_backend` equals `'cpp'`, `backend_explicit` is `False`, and `effective_backend_request` is `'auto'`, preferring `'cpp'` and falling back to `'numpy'` only when `powermean._native.iols._kernel_cpp` is absent on disk. When `iols_backend='cpp'` is supplied explicitly, `backend_explicit` is `True` and `'cpp'` selection is strict without fallback. Because `IolsOptions.to_dict()` returns a complete mapping that includes `'iols_backend'`, passing `opts.to_dict()` back to `IolsOptions.from_dict(...)` or `solver_options` supplies `'cpp'` explicitly (`backend_explicit=True`).
+- **Ordered pilot grid (`delta_grid`).** `delta_grid` accepts any nonempty list, tuple, or 1D array of positive finite real numbers and stores a `tuple[float, ...]` preserving the caller's exact order and duplicate entries without sorting, deduplicating, or reconstructing from endpoints.
+- **Unbounded finite-real logarithmic step bounds (`rho_log_min`, `rho_log_max`).** Both bounds accept any finite real number (`lower=null`, `upper=null` in exported JSON domain metadata; non-finite values and Booleans are refused) and are not ordered against each other.
+- **Certificate keys alongside IOLS options.** When `solver='iols'` and `solver_options` is passed as a mapping, the certificate keys (`coef_tol`, `rcond_min`, `tol`, `tol_secondary`) are resolved through `SolverOptions` while all IOLS-specific keys are resolved through `IolsOptions`.
+
+## When slope scaling stops the solve
+
+Before the first iteration, IOLS checks the centered standard deviation of each slope in its input units. A positive SD below the larger of `1e-12 × largest slope SD` and `1e-300` stops the solve with status `solver_error`. The default raises `ConvergenceError`. With `on_failure="return"`, `result.provenance.failure` records the first affected slope name and its index (zero-based, excluding the intercept), its SD, the maximum SD, the floor and zero iterations and evaluations. The result has no fitted point or certificate, and inference is withheld. Changing a predictor’s units can cross this floor while preserving the rank of the design.
+
+<!-- guide-navigation:start -->
+[Previous: Advanced FE options](experimental-fixed-effects.md) · [Guide index](../README.md) · [Next: IOLS installation](../iols_installation.md)
+<!-- guide-navigation:end -->

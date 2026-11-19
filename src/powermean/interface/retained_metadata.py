@@ -1,5 +1,8 @@
 """Sample-aligned dependence metadata records and temporal/spatial view builders.
 
+``design/02_computation.md``, Section 2; ``design/04_inference_and_effects.md``, Section
+2.3; ``plan/evidence/M1_contract.txt``, Sections 3.4, 3.5 and 6(f);
+``plan/evidence/M1.15_revision_B.txt`` (L1, L2, F2, F3); decisions D51, D55 and D65.
 This module owns sample-aligned column metadata (:class:`RetainedColumnMetadata`) and
 the positional dependence sidecar (:class:`BoundDependence`) with result-local input and
 sample keys and freshly owned column arrays on ingress and every exposure.  Positional
@@ -14,7 +17,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, fields
 from itertools import repeat
 from types import MappingProxyType
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import numpy as np
 import pandas as pd
@@ -35,13 +38,11 @@ from powermean.data.raw import AnyArray, Column
 from powermean.data.request_values import OMITTED, Omitted, given
 from powermean.data.weights import WeightKind
 from powermean.errors import SpecificationError
+from powermean.formula.validity import raw_invalid_count
 from powermean.inference.convention import ClusterCodes
-from powermean.interface.sample_encoding import _integer_key_codes
 from powermean.interface.retained_space import RetainedSpaceView
-from powermean.interface.retained_time import (
-    RetainedTimeView,
-    _is_missing_metadata,
-)
+from powermean.interface.retained_time import RetainedTimeView
+from powermean.interface.sample_encoding import _integer_key_codes
 from powermean.model.order import IndexArray
 from powermean.results.owned import owned_array
 from powermean.results.retained_inputs import (
@@ -79,7 +80,7 @@ def _take_owned_column(column: Column, positions: IndexArray) -> Column:
     """
     stored = column._stored
     if type(stored) is not tuple:
-        return Column(stored[positions])
+        return Column(cast("AnyArray", stored)[positions])
     # Select only final rows, even after a very restrictive sample filter. The
     # itemgetter operates on the exact immutable tuple, with no element callbacks
     # or N-original-row object-array materialization.
@@ -91,30 +92,50 @@ def _take_owned_column(column: Column, positions: IndexArray) -> Column:
 
 
 def _owned_missing_count(column: Column) -> int:
-    """The exact _is_missing_metadata rule without scalar walks for plain runs."""
+    """Count invalid rows without scalar walks for ordinary native metadata."""
     stored = column._stored
     if type(stored) is np.ndarray:
-        kind = stored.dtype.kind
-        if kind == "f" and stored.dtype.itemsize <= 8:
-            return int(np.count_nonzero(~np.isfinite(stored)))
-        if kind in "Mm":
-            return int(np.count_nonzero(np.isnat(stored)))
-        if kind != "f":
-            # In particular complex NaN is NOT missing under the existing rule.
-            return 0
-        return sum(1 for value in stored.tolist() if _is_missing_metadata(value))
+        return raw_invalid_count(stored)
     if not stored:
         return 0
-    kind = type(stored[0])
-    if (kind in (int, bool, str, bytes, complex, tuple, float, type(None))
-            and all(map(operator.is_, map(type, stored), repeat(kind)))):
-        if kind is type(None):
+    scalar_type = type(stored[0])
+    if scalar_type in (
+        int,
+        bool,
+        str,
+        bytes,
+        tuple,
+        float,
+        type(None),
+    ) and all(map(operator.is_, map(type, stored), repeat(scalar_type))):
+        if scalar_type is type(None):
             return len(stored)
-        if kind is float:
+        if scalar_type is float:
             values = np.fromiter(stored, dtype=np.float64, count=len(stored))
             return int(np.count_nonzero(~np.isfinite(values)))
         return 0
-    return sum(1 for value in stored if _is_missing_metadata(value))
+    return raw_invalid_count(np.fromiter(stored, dtype=object, count=len(stored)))
+
+
+def _sample_missing_count(
+    mask: np.ndarray, positions: IndexArray, *, full: int | None = None
+) -> int:
+    """Count the original invalid rows among these admitted unique positions."""
+    if full == 0:
+        return 0
+    if positions.size == mask.size:
+        return int(np.count_nonzero(mask)) if full is None else full
+    return int(np.count_nonzero(mask[positions]))
+
+
+def _capture_column(name: str, values: AnyArray) -> Column:
+    """Preserve general column ownership, including object-copy callbacks."""
+    col = Column(values, name=name)
+    # Column already owns this numeric buffer. Other inputs keep the generic
+    # copy path, including its object-copy callbacks and shared memo behavior.
+    if type(values) is not np.ndarray or _ordinary_numeric_storage(col) is None:
+        col = _copy_column(col)
+    return col
 
 
 @dataclass(frozen=True, init=False)
@@ -142,14 +163,8 @@ class RetainedColumnMetadata:
         values: AnyArray,
     ) -> None:
         """Store owned sample-aligned values and missingness counts."""
-        col = Column(values, name=name)
-        # Column already owns this numeric buffer. Other inputs keep the generic
-        # copy path, including its object-copy callbacks and shared memo behavior.
-        if type(values) is not np.ndarray or _ordinary_numeric_storage(col) is None:
-            col = _copy_column(col)
-        sample_missing = sum(
-            1 for val in col.values.tolist() if _is_missing_metadata(val)
-        )
+        col = _capture_column(name, values)
+        sample_missing = _owned_missing_count(col)
         object.__setattr__(self, "name", name)
         object.__setattr__(self, "roles", tuple(roles))
         object.__setattr__(self, "used_in_fit", bool(used_in_fit))
@@ -166,12 +181,13 @@ class RetainedColumnMetadata:
         existing reduction hooks. Only this exact private native view expands.
         """
         state = object.__getstate__(self)
-        if (type(self) is RetainedColumnMetadata
-                and "_retained_provenance" in vars(self)):
+        if type(self) is RetainedColumnMetadata and "_retained_provenance" in vars(
+            self
+        ):
             state = dict(vars(self))
             for field in fields(self):
                 state[field.name] = getattr(self, field.name)
-            for name in ("_retained_provenance","_retained_positions"):
+            for name in ("_retained_provenance", "_retained_positions"):
                 state.pop(name, None)
             # The requested legacy fields now ARE the owned state. Future rich
             # copies do not reconstruct another full-row projection.
@@ -182,30 +198,64 @@ class RetainedColumnMetadata:
         return state
 
     @classmethod
+    def _from_provenance(
+        cls, prov: ColumnProvenance, positions: IndexArray, column: Column
+    ) -> RetainedColumnMetadata:
+        """Bind the preparation's dtype-aware validity decision to the fitted rows."""
+        mask = prov._missing_mask
+        full = int(np.count_nonzero(mask))
+        return cls._from_owned_column(
+            name=prov.name,
+            roles=prov.roles,
+            used_in_fit=prov.used_in_fit,
+            source_dtype=prov.source_dtype,
+            pandas_kind=prov.pandas_kind,
+            full_missing_count=full,
+            sample_missing_count=_sample_missing_count(mask, positions, full=full),
+            column=column,
+        )
+
+    @classmethod
     def _from_owned_column(
-        cls, *, name: str, roles: tuple[DependenceRole, ...], used_in_fit: bool,
-        source_dtype: str, pandas_kind: str, full_missing_count: int, column: Column,
+        cls,
+        *,
+        name: str,
+        roles: tuple[DependenceRole, ...],
+        used_in_fit: bool,
+        source_dtype: str,
+        pandas_kind: str,
+        full_missing_count: int,
+        column: Column,
+        sample_missing_count: int,
     ) -> RetainedColumnMetadata:
         """Carry one private selected column; no outward export just to recopy it."""
         result = object.__new__(cls)
         for field, value in (
-            ("name", name), ("roles", roles), ("used_in_fit", used_in_fit),
-            ("source_dtype", source_dtype), ("pandas_kind", pandas_kind),
+            ("name", name),
+            ("roles", roles),
+            ("used_in_fit", used_in_fit),
+            ("source_dtype", source_dtype),
+            ("pandas_kind", pandas_kind),
             ("full_missing_count", full_missing_count),
-            ("sample_missing_count", _owned_missing_count(column)), ("_column", column),
+            ("sample_missing_count", sample_missing_count),
+            ("_column", column),
         ):
             object.__setattr__(result, field, value)
         return result
 
     @classmethod
     def _from_retained(
-        cls, provenance: ColumnProvenance, positions: IndexArray,
+        cls,
+        provenance: ColumnProvenance,
+        positions: IndexArray,
     ) -> RetainedColumnMetadata:
         """A final-row projection of immutable original values, not FE level codes."""
         result = object.__new__(cls)
         for field, value in (
-            ("name", provenance.name), ("roles", provenance.roles),
-            ("used_in_fit", False), ("source_dtype", provenance.source_dtype),
+            ("name", provenance.name),
+            ("roles", provenance.roles),
+            ("used_in_fit", False),
+            ("source_dtype", provenance.source_dtype),
             ("pandas_kind", provenance.pandas_kind),
             ("_retained_provenance", provenance),
             ("_retained_positions", positions.view()),
@@ -220,16 +270,20 @@ class RetainedColumnMetadata:
             if "_retained_provenance" in state and name not in state:
                 if name == "_column":
                     values = self._retained_provenance.take(self._retained_positions)
-                    result = Column(values)
-                    object.__setattr__(self, name, result)
-                    return result
+                    column = Column(values)
+                    object.__setattr__(self, name, column)
+                    return column
                 if name == "full_missing_count":
                     missing = self._retained_provenance._missing_mask
                     result = int(np.count_nonzero(missing))
                     object.__setattr__(self, name, result)
                     return result
                 if name == "sample_missing_count":
-                    result = _owned_missing_count(self._column)
+                    result = _sample_missing_count(
+                        self._retained_provenance._missing_mask,
+                        self._retained_positions,
+                        full=state.get("full_missing_count"),
+                    )
                     object.__setattr__(self, name, result)
                     return result
         return object.__getattribute__(self, name)
@@ -301,10 +355,16 @@ class BoundDependence:
 
     @classmethod
     def _from_owned(
-        cls, *, nobs: int, used_dependence: UsedDependence,
-        columns: Mapping[str, RetainedColumnMetadata], positions: IndexArray,
-        labels: pd.Index[Any], weight_kind: WeightKind | None,
-        frequency_counts: tuple[int, ...] | None, input_key: InputKey | None,
+        cls,
+        *,
+        nobs: int,
+        used_dependence: UsedDependence,
+        columns: Mapping[str, RetainedColumnMetadata],
+        positions: IndexArray,
+        labels: pd.Index[Any],
+        weight_kind: WeightKind | None,
+        frequency_counts: tuple[int, ...] | None,
+        input_key: InputKey | None,
         sample_key: SampleKey | None,
         initial_time: RetainedTimeView | None = None,
         initial_space: RetainedSpaceView | None = None,
@@ -312,14 +372,18 @@ class BoundDependence:
         """Compose private admitted parts, not public .values shape/copy replay."""
         result = object.__new__(cls)
         for field, value in (
-            ("nobs", int(nobs)), ("count", int(positions.size)),
+            ("nobs", int(nobs)),
+            ("count", int(positions.size)),
             ("used_dependence", used_dependence),
             ("columns", MappingProxyType(dict(columns))),
-            ("_positions", positions.view()), ("_labels", _owned_index(labels)),
-            ("weight_kind", weight_kind), ("frequency_counts", frequency_counts),
+            ("_positions", positions.view()),
+            ("_labels", _owned_index(labels)),
+            ("weight_kind", weight_kind),
+            ("frequency_counts", frequency_counts),
             ("input_key", None if input_key is None else InputKey(int(input_key))),
             ("sample_key", None if sample_key is None else SampleKey(int(sample_key))),
-            ("_initial_time_view", initial_time), ("_initial_space_view", initial_space),
+            ("_initial_time_view", initial_time),
+            ("_initial_space_view", initial_space),
         ):
             object.__setattr__(result, field, value)
         return result
@@ -399,8 +463,13 @@ class BoundDependence:
                 {"name": name, "count": meta.sample_missing_count},
             )
         values = meta.values
-        if (type(values) is np.ndarray and values.ndim == 1 and values.size
-                and values.dtype.kind in "iu" and values.size == self.count):
+        if (
+            type(values) is np.ndarray
+            and values.ndim == 1
+            and values.size
+            and values.dtype.kind in "iu"
+            and values.size == self.count
+        ):
             return ClusterCodes(name, _integer_key_codes((values,))[0])
         labels: dict[Any, int] = {}
         codes = np.empty(self.count, dtype=np.intp)
@@ -479,4 +548,3 @@ class BoundDependence:
                 pool_times=pool_times,
             )
         return view
-

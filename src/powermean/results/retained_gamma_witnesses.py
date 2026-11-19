@@ -1,4 +1,8 @@
-"""Detached snapshots of GPML recession raw checks, identities, and witnesses."""
+"""Detached snapshots of GPML recession raw checks, identities, and witnesses.
+
+``design/02_computation.md``, Sections 2 and 4; ``plan/evidence/M1.15_contract.txt``;
+``brief/layout_C_ownership.txt`` (P10).
+"""
 
 from __future__ import annotations
 

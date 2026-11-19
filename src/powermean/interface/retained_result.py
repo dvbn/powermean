@@ -1,6 +1,9 @@
 """Post-fit retained absorbed FE result facade.
 
-This module defines :class:`RetainedAbsorbedResult`.
+``design/02_computation.md``, Section 7; ``design/04_inference_and_effects.md``,
+Sections 1 to 3; ``design/11_api.md``; ``plan/evidence/M1.15_contract.txt``, items 4,
+8, 9 and 10; ``brief/layout_C_ownership.txt`` (P21); decisions D49, D51, D54, D55 and
+D65.  This module defines :class:`RetainedAbsorbedResult`.
 """
 
 from __future__ import annotations
@@ -37,12 +40,12 @@ from powermean.results.absorbed_sample import RetainedSampleSnapshot
 from powermean.results.absorbed_scale_cache import RetainedInitialScaleCache
 from powermean.results.retained_input_values import InputKey, SampleKey
 from powermean.solve.absorbed_certificate import Level
-from powermean.solve.absorbed_certificate_geometry import SparseMatrix
 from powermean.solve.absorbed_certificate_scale import (
     ComponentRecord,
     CovarianceRecord,
     EstimateRecord,
 )
+from powermean.solve.sparse_matrix import SparseMatrix
 
 __all__ = [
     "RetainedAbsorbedResult",

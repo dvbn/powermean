@@ -1,7 +1,10 @@
-"""The internal joint transformed ``tau = 2`` recession diagnostic: run, result, error.
+"""The private joint transformed ``tau = 2`` recession diagnostic: run, result, error.
 
-The ``tau = 2`` criterion is ``q + Z / m``.  Internal module: ``powermean`` exports
-nothing of it.
+``design/02_computation.md``, Section 4 (joint ``tau = 2``);
+``design/01_statistical_core.md``, Section 5.1 (the ``tau = 2`` criterion ``q + Z /
+m``); ``plan/evidence/M1.8_contract.txt`` with its adoption
+``plan/evidence/M1.8_adoption.txt``; decisions D14 and D51.  Task M1.8, private:
+``powermean`` exports nothing of it.
 
 The question.  On the current sample let ``P = {Z > 0}``, ``B = [X, F]`` and ``a`` the
 positive observation weights.  The transformed criterion is, up to constants,
@@ -11,13 +14,13 @@ h_i < 0`` (the criterion is unbounded below) and a ``zero_sum_recession`` when `
 a_i h_i = 0`` and ``h_i > 0`` for some ``i`` in ``P`` (the exponential part strictly
 decreases at no linear cost: the unattained boundary).  A flat, null or gauge direction
 (``h_P = 0``, zero total) is neither.  ``no_recession`` excludes both; it establishes
-no rank, uniqueness, verified fit or standard error.  Nothing is deleted: the
-all-zero level rule belongs to the sample construction, and no further
+no rank, uniqueness, verified fit or standard error.  Nothing is deleted: D14's
+all-zero level rule belongs to the sample construction of task M1.10, and no further
 GPML row is removed.  Cancelled, mixed, difference, IV, NB2 and ``tau != 2`` systems
 are refused.
 
-The sample is :class:`~powermean.solve.support_gamma_problem.GammaProblem`, defined in
-its own module and still provided here under its name.
+The sample is :class:`~powermean.solve.support_gamma_problem.GammaProblem`, moved to
+its own module by correction A and still provided here under its name.
 
 One invocation (:func:`analyze_recession`) under explicit
 :class:`~powermean.solve.support_lp.LPControls` (:data:`BASELINE` or :data:`TIGHTER`, or
@@ -26,15 +29,22 @@ below, no program; the nonzero guard and the range-checked data
 (:mod:`powermean.solve.support_gamma_lp`); LP1, stopping on a fresh valid negative
 witness; LP2 only after LP1's passing dual and with positive rows (without them the
 strict boundary is impossible); at most two charged calls, each one attempt, and no
-other method, retry, cache or warm state.  A call is charged before the optimizer runs,
-and a call that fails (an unusable report, or the optimizer's ``MemoryError``) is kept
-with the work before it: it stops the invocation as ``lp_failure``, never as a kind or
-``no_recession``.  The tighter invocation an iteration trigger requests
-is a new call on the current sample.
+retry, cache or warm state between calls.  Each call is answered first by the
+structured solver of :mod:`powermean.solve.support_gamma_structured` on the same
+program; its report is admitted only through the same fresh checks, and when it
+declines the HiGHS program of the call runs.  A call is charged before the optimizer
+runs, and a call that fails (an unusable report, or the optimizer's ``MemoryError``)
+is kept with the work before it: it stops the invocation as ``lp_failure``, never as a
+kind or ``no_recession``.  The tighter invocation an iteration trigger requests (tasks
+M1.11 and M1.12) is a new call on the current sample.
+
+Ordinary admission can first try a calibrated dual for each program after both
+nonzero guards. Both reports must pass on the original rows. A declined
+proposal enters the usual analysis and retains its diagnostic record.
 
 The result (:class:`GammaResult`) binds every report to its controls, admits a report
 whose ``failure`` is empty only when it is usable by the rule of the returned reports
-(:func:`~powermean.solve.support_gamma_lp.usable`), and binds every
+(:func:`~powermean.solve.support_gamma_lp.usable`, correction B), and binds every
 retained witness and dual to its sample, controls, program and report and checks it
 again (:mod:`powermean.solve.support_gamma_witness`); its reason must be the one its
 evidence determines, and its status follows.  :func:`raise_for_recession` raises the
@@ -43,8 +53,8 @@ the result as certificate, keeping its kind) only after a fresh valid replay of 
 strict witness on the current sample; an inconclusive result or a passing dual raises
 nothing here.
 
-The all-positive structural certificate.  At ``omega = 1`` with ``PowerVariance(2)``,
-when every ``Z_i`` and every
+The all-positive structural certificate (decision D79, ``design/02_computation.md``,
+Section 4).  At ``omega = 1`` with ``PowerVariance(2)``, when every ``Z_i`` and every
 weight ``a_i`` is finite and strictly positive, ``P`` is every row: a candidate ``h``
 with ``h_P >= 0`` is nonnegative everywhere, so ``sum a_i h_i >= 0`` excludes the
 negative sum, and a zero total forces every ``h_i = 0``, excluding the strict zero-sum
@@ -54,12 +64,12 @@ freshly from the problem's own fields and admits it only when those fields, as t
 now, build a new :class:`GammaProblem` through its own constructor (every rule of the
 record: real finite arrays, one distinct original position per row and the grouping's,
 positive weights of a declared kind with exact frequency counts, the slope names, the
-family and the order) that holds the same sample bit for bit, the
+family and the order) that holds the same sample bit for bit (correction D79.1), the
 grouping's blocks and the grouping built again through their own constructors first,
-so that no retained nested record stands in for its current values, and
-whose own owned numeric values, the ``Z`` and the weights the constructor
-stored as plain arrays of doubles, are finite and strictly positive (the
-reading of the current fields and the byte comparison alone establish nothing, since
+so that no retained nested record stands in for its current values (correction
+D79.2), and whose own owned numeric values, the ``Z`` and the weights the constructor
+stored as plain arrays of doubles, are finite and strictly positive (correction D79.3:
+the reading of the current fields and the byte comparison alone establish nothing, since
 a standard masked array hides a masked zero from ``(z > 0).all()`` and fills it in
 ``tobytes``; a record that reads as the domain but whose fresh values hold a zero is
 refused, neither certified nor passed on to the programs on its wrapper); the
@@ -89,14 +99,21 @@ from powermean.solve.support_gamma_lp import (
     call,
     constraint_nonzeros,
     prepare,
+    stage_objective,
     usable,
     within_limit,
 )
 from powermean.solve.support_gamma_problem import GammaProblem, _same_bits
+from powermean.solve.support_gamma_structured import (
+    calibrated_reports,
+    calibration_supported,
+    structured_call,
+)
 from powermean.solve.support_gamma_witness import (
     BINDING,
     GammaDual,
     GammaWitness,
+    calibrated_duals_pass,
     dual_check,
     primal_witness,
 )
@@ -118,6 +135,7 @@ __all__ = [
     "Status",
     "all_positive",
     "analyze_recession",
+    "ordinary_recession",
     "raise_for_recession",
 ]
 
@@ -125,11 +143,11 @@ Status = Literal[
     "negative_sum_recession", "zero_sum_recession", "no_recession", "inconclusive"
 ]
 STAGES: tuple[Stage, Stage] = ("negative", "zero_sum")
-# The reason of the all-positive structural certificate: no program was run.
+# The reason of the all-positive structural certificate (D79): no program was run.
 ALL_POSITIVE = "all_positive"
-# The refusal of a record that reads as that domain but does not admit freshly.
+# The refusal of a record that reads as that domain but does not admit freshly (D79.1).
 ADMISSION = "the all-positive sample must admit freshly as the record it is now"
-# Its detail when the freshly admitted record's own values are not the domain.
+# Its detail when the freshly admitted record's own values are not the domain (D79.3).
 OWNED = "the fresh record's own values are not finite and strictly positive"
 STATUS: dict[str, Status] = {
     "negative_sum_recession": "negative_sum_recession",
@@ -150,6 +168,21 @@ TIGHTER = LPControls(
 # -------------------------------------------------------------------- the result
 
 
+def _empty_space(problem: GammaProblem) -> bool:
+    """The original empty space, never a certificate based on a chart alone."""
+    if not problem.n_parameters:
+        return True
+    if problem.n_coordinates:
+        return False
+    try:
+        fresh = _admitted(problem)
+    except ValueError as refusal:
+        raise ValueError(
+            "empty coordinates need an admitted empty fitted-index space"
+        ) from refusal
+    return fresh.grouping is None and not np.any(fresh.design != 0)
+
+
 @dataclass(frozen=True, eq=False)
 class Solve:
     """One charged program: its report and, when usable, both fresh checks."""
@@ -160,7 +193,7 @@ class Solve:
 
     @property
     def continues(self) -> bool:
-        """Whether LP1's evidence is a passing dual without a strict witness."""
+        """Whether the evidence is a passing dual without a strict witness."""
         return (
             self.witness is not None
             and not self.witness.valid
@@ -268,7 +301,7 @@ class GammaResult:
         ``ValueError`` on a malformed record reading as the all-positive domain.
         """
         problem, solves = self.problem, self.solves
-        if not problem.n_parameters:
+        if _empty_space(problem):
             return None if solves else "empty_parameters"
         if _certified(problem):
             return None if solves else ALL_POSITIVE
@@ -281,7 +314,7 @@ class GammaResult:
         if not solves:
             return None
         reason = _reason(problem, solves)
-        stacked = nonzeros + int(np.count_nonzero(data.total))
+        stacked = nonzeros + int(np.count_nonzero(stage_objective(data, "negative")))
         return None if reason == "resource" and within_limit(stacked) else reason
 
     @property
@@ -308,7 +341,7 @@ class GammaResult:
         actually passed are each report's ``rows`` and ``nonzeros``.
         """
         problem = self.problem
-        found = (problem.n_rows, problem.positive.size, problem.n_parameters)
+        found = (problem.n_rows, problem.positive.size, problem.n_coordinates)
         return (*found, constraint_nonzeros(problem))
 
 
@@ -321,7 +354,7 @@ def _data(problem: GammaProblem) -> LPData | None:
 
 
 def _screened(problem: GammaProblem) -> bool:
-    """Whether the record's own fields now read as the all-positive domain.
+    """Whether the record's own fields, as they are now, read as the domain of D79.
 
     The cheap reading, raising nothing: ``PowerVariance(2)`` and ``omega = 1`` exactly;
     a weight record of a declared kind; arrays of one shape, one finite, strictly
@@ -363,7 +396,7 @@ def _fresh_grouping(grouping: Grouping | None) -> Grouping | None:
     nonnegative positions).  The constructors raise their own ``ValueError``; a value
     that is not a record of its type is passed on for the outer constructor to refuse.
     Nothing of the retained grouping, its blocks or their arrays is reused: the fresh
-    grouping aliases none of them.
+    grouping aliases none of them (correction D79.2).
     """
     if grouping is None or not isinstance(grouping, Grouping):
         return grouping
@@ -390,7 +423,7 @@ def _admitted(problem: GammaProblem) -> GammaProblem:
     is returned: the domain is then read on its own values (:func:`_positive`).
     """
     try:
-        fresh = GammaProblem(
+        fields = (
             problem.z,
             problem.design,
             problem.columns,
@@ -401,6 +434,11 @@ def _admitted(problem: GammaProblem) -> GammaProblem:
             problem.variance,
             problem.omega,
         )
+        fresh = (
+            GammaProblem(*fields)
+            if problem.coordinates is None
+            else GammaProblem(*fields, coordinates=problem.coordinates)
+        )
     except (ValueError, TypeError, FloatingPointError) as refusal:
         raise ValueError(f"{ADMISSION}: {refusal}") from refusal
     if not fresh.same(problem):
@@ -409,15 +447,15 @@ def _admitted(problem: GammaProblem) -> GammaProblem:
 
 
 def _positive(fresh: GammaProblem) -> bool:
-    """Whether the freshly admitted record's own values are the all-positive domain.
+    """Whether the freshly admitted record's own values are the domain of D79.
 
     The premise of the certificate, read on the arrays the constructor stored and
     nothing else: ``Z`` and the weights as plain owned arrays of doubles, every value
     finite and strictly positive.  A wrapper of the current record is no evidence: a
     standard masked array answers ``(z > 0).all()`` without its masked zero and fills
     that zero in ``tobytes``, so the preliminary reading of :func:`_screened` and the
-    byte comparison of :func:`_admitted` hold while the values do not.  The
-    two arrays alone carry the sign argument; the design, the offset, the
+    byte comparison of :func:`_admitted` hold while the values do not (correction
+    D79.3).  The two arrays alone carry the sign argument; the design, the offset, the
     positions and the grouping are the constructors' own checks on their plain values.
     """
     z, a = fresh.z, fresh.weights.values
@@ -447,16 +485,16 @@ def _certified(problem: GammaProblem) -> bool:
 
 
 def all_positive(problem: GammaProblem) -> bool:
-    """Whether the all-positive structural certificate holds on ``problem`` now.
+    """Whether the all-positive structural certificate holds on ``problem`` now (D79).
 
     Read freshly from the record's own fields, never from a prior result, an identity,
     a hash, a trusted marker or a read-only flag: the domain of :func:`_screened` (the
     family, the order, the declared kind, finite strictly positive ``Z`` and weights on
     aligned rows) on a record whose current values build a new :class:`GammaProblem`
-    through its own constructor, holding the same sample bit for bit,
-    its blocks and grouping built again first, and whose
+    through its own constructor, holding the same sample bit for bit (correction
+    D79.1), its blocks and grouping built again first (correction D79.2), and whose
     own owned values, as that fresh record stores them, are finite and strictly
-    positive.  Any zero, other order, nonfinite, misaligned or
+    positive (correction D79.3).  Any zero, other order, nonfinite, misaligned or
     malformed value (a complex or nonfinite array, a repeated or negative original
     position, a position that is not the grouping's, a frequency weight that is not an
     exact count, an undeclared kind, a wrong slope name, a block whose codes, counts or
@@ -477,8 +515,16 @@ def all_positive(problem: GammaProblem) -> bool:
 def _solve(
     problem: GammaProblem, data: LPData, stage: Stage, controls: LPControls
 ) -> Solve:
-    """One charged call of ``stage`` and, when its report is usable, both checks."""
-    report = call(problem, data, stage, controls)
+    """One charged call of ``stage`` and, when its report is usable, both checks.
+
+    The structured solver answers first
+    (:mod:`powermean.solve.support_gamma_structured`); it returns a report only when
+    the check its verdict rests on already passes, and otherwise declines, and the
+    HiGHS program runs as before.
+    """
+    report = structured_call(problem, data, stage, controls) or call(
+        problem, data, stage, controls
+    )
     point, marginals = (report.point, report.reported), report.marginals
     if report.failure or point[0] is None or point[1] is None or marginals is None:
         return Solve(report)
@@ -515,7 +561,7 @@ def analyze_recession(problem: GammaProblem, controls: LPControls) -> GammaResul
     if not isinstance(problem, GammaProblem) or not isinstance(controls, LPControls):
         raise ValueError("the analysis needs a GammaProblem and LPControls")
     found = (problem, controls)
-    if not problem.n_parameters:
+    if _empty_space(problem):
         return GammaResult(*found, (), "empty_parameters")
     if _certified(problem):
         return GammaResult(*found, (), ALL_POSITIVE)
@@ -528,10 +574,46 @@ def analyze_recession(problem: GammaProblem, controls: LPControls) -> GammaResul
     first = _solve(problem, data, "negative", controls)
     if not first.continues or not problem.positive.size:
         return GammaResult(*found, (first,), _reason(problem, (first,)))
-    if not within_limit(nonzeros + int(np.count_nonzero(data.total))):
+    stacked = nonzeros + int(np.count_nonzero(stage_objective(data, "negative")))
+    if not within_limit(stacked):
         return GammaResult(*found, (first,), "resource")
     solves = (first, _solve(problem, data, "zero_sum", controls))
     return GammaResult(*found, solves, _reason(problem, solves))
+
+
+def _checked_calibration(problem: GammaProblem, controls: LPControls) -> bool:
+    """Verify both transient programs on this freshly constructed ordinary problem."""
+    if not calibration_supported(problem):
+        return False
+    nonzeros = constraint_nonzeros(problem)
+    if not within_limit(nonzeros):
+        return False
+    try:
+        data = _data(problem)
+        if data is None or not within_limit(
+            nonzeros + int(np.count_nonzero(stage_objective(data, "negative")))
+        ):
+            return False
+        reports = calibrated_reports(problem, data, controls)
+        return reports is not None and calibrated_duals_pass(
+            problem, data, controls, reports
+        )
+    except MemoryError:
+        return False
+
+
+def ordinary_recession(
+    problem: GammaProblem, controls: LPControls
+) -> GammaResult | None:
+    """Only an ordinary fit needs the verdict without a passing diagnostic record."""
+    if (
+        type(problem) is GammaProblem
+        and type(controls) is LPControls
+        and _checked_calibration(problem, controls)
+    ):
+        return None
+    result = analyze_recession(problem, controls)
+    return None if result.status == "no_recession" else result
 
 
 def raise_for_recession(result: GammaResult, problem: GammaProblem) -> None:

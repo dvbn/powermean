@@ -1,7 +1,9 @@
 """The certificate of a candidate of the joint system without effects.
 
-A solver proposes, the certificate decides: :class:`Certificate` is the independent
-verification of a candidate against the original equations.
+``design/02_computation.md``, Sections 1 (rule 3: a solver proposes, the certificate
+decides) and 7; ``DESIGN.md``, Section 5.3 (``Certificate``, the independent
+verification of a candidate against the original equations); decisions D41, D47, D49
+and D51.
 
 Fresh evaluation.  :func:`certify` evaluates the original joint system at the
 candidate ``gamma``, once and afresh (``JointSystem.evaluate``), and reads nothing of a
@@ -11,14 +13,17 @@ unrepresentable where they are representable (:mod:`powermean.model.rows`).  Fro
 sums ``S`` and ``C`` of that evaluation it forms the quantities of
 :mod:`powermean.solve.quantities`: the curvature, the scaled score
 ``||C_sym^(-1/2) S||``, the Newton correction ``p = C^-1 S`` with LAPACK's estimate
-``rcond`` of the reciprocal condition number of the equilibrated ``C``, and the index
+``rcond`` of the reciprocal condition number of the equilibrated ``C``, the score read
+relative to the unit of the criterion, ``mean(z) ** (2 - tau)`` under a power variance
+(:func:`~powermean.solve.quantities.relative_score`, so that the gate decides the same
+whatever the unit of the outcome), and the index
 correction, the root mean square of ``X p`` over the observations of the rows of
 positive weight, each counting its frequency weight when the caller states
 ``frequency``.  The coefficient correction is the reported correction against the
 standard errors at the candidate (:mod:`powermean.solve.reported`): ``M p`` for a
 dense map, or the direct map of the accepted order scale entry by entry, by the form
 that the provider bound to the candidate.  No argument is modified.  The gates are
-read through :class:`GateMeasures`, which the fresh linear certificate
+read through :class:`GateMeasures`, which the fresh linear certificate of task M0.22
 (``powermean.solve.linear_certificate``) answers with its own evaluation, so that the
 accepted gate arithmetic is shared and no joint evaluation stands in for a linear one.
 
@@ -29,27 +34,27 @@ Gates, in this order, of which a quantity that is NaN passes none:
     conditioning    the equilibrated C factorizes with rcond > rcond_min, strictly
     score           scaled score <= tolerance
     index           index correction <= tolerance
-    coefficient     every reported coefficient correction passes the gate at coef_tol
+    coefficient     every reported coefficient passes the gate of D49 at coef_tol
 
 The strict level takes ``tolerance = tol`` and requires every gate.  The secondary
 level is tried only where the strict one fails: it takes ``tolerance =
 tol_secondary`` for the score and the index and changes nothing else, so that it too
 requires the evaluation, the curvature, the conditioning and the coefficients.  No
-ordering of the two tolerances is assumed.  The certificate is accepted when it
+ordering of the two tolerances is assumed (D47).  The certificate is accepted when it
 passes at one of them; the statuses of a solve are composed from it and from the
 solver's native reason in :mod:`powermean.solve.status`.  The effect equations and the
-inner accuracy of the certificate concern absorbed effects: a system without
+inner accuracy of Section 7 concern absorbed effects (milestone M1): a system without
 effects has neither, and no gate stands in for them.
 
 Selected roots.  The gate ``curvature`` is the requirement of a system with a convex
-criterion, decided by the working variance of the
+criterion (file 02, Section 7: "joint convex"), decided by the working variance of the
 equation itself (:func:`outside_convex`), never by a caller.  A power variance with
-``tau`` outside ``[1, 2]`` is a selected local root, certified
+``tau`` outside ``[1, 2]`` is the selected local root of file 01, Section 6, certified
 as a regular root and not as a minimum: there the gate is waived where the scaled
 score has a metric, and the score is ``||C_sym^(-1/2) S||`` where ``C_sym`` is
 positive definite, else ``||L_M^-1 S||`` with the lower factor ``L_M`` of the solve's
-fixed positive-definite merit metric, as the cancelled certificate forms it.
-Without that factor, or with a
+fixed positive-definite merit metric (file 02, Section 7, "else the fixed merit
+metric"), as the cancelled certificate forms it.  Without that factor, or with a
 convex variance, nothing changes: the gate and the NaN score stand.  Conditioning,
 index, coefficients and every other gate are the same at both kinds of root; the
 certificate records whether the gate applied and which metric the score used.
@@ -58,7 +63,7 @@ Failures.  A gate that cannot be evaluated does not pass.  Without a representab
 evaluation no quantity is formed.  Where ``C_sym`` is not positive definite the scaled
 score is undefined (NaN), while the correction can still be formed.  Where the
 factorization fails (an exact zero row or column, an exactly singular factor, or
-``rcond <= rcond_min``), no correction is formed: the index
+``rcond <= rcond_min``), no correction is formed, as in S4's ``certify``: the index
 and coefficient corrections are then missing and the provider of the reported scale
 is not called.  Nothing is repaired: no ridge, floor, pseudoinverse or expected
 curvature takes the place of ``C``.  The certificate keeps the candidate, the
@@ -66,16 +71,25 @@ evaluation, every quantity formed, the text of each error and the gates that fai
 at each level.  Without a provider of the reported scale the coefficient gate fails:
 missing standard errors are never a success.  A provider must return the record of
 the very candidate that it received; a record of another candidate is refused with
-``ValueError``.  An exception of the provider, as of the system, is not caught,
-except the ``FloatingPointError`` of an evaluation that is not representable.
+``ValueError``.  When the inference Jacobian fails its rank check, the coefficient gate
+remains unavailable. Other provider errors propagate. A ``FloatingPointError``
+evaluating the system records an unrepresentable evaluation.
 
-Assessment of the retry.  :class:`CertificateAssessor` is the
+Assessment of the retry (task M0.10).  :class:`CertificateAssessor` is the
 :class:`~powermean.solve.assessment.Assessor` of the solver: it receives the system,
 the coefficients and the controls of the certificate, and no native detail, and
 returns :func:`assessment` of the certificate: ``accepted`` when it passes at either
 level, ``score`` the scaled score, and ``error`` the larger of the scaled score and the
 index correction, NaN when either is NaN.  The rule of the retry, with its factor
-0.99, and the budgets of the solve are the solver's, unchanged.
+0.99, and the budgets of the solve are those of task M0.10, unchanged.
+
+Sources.  The fresh evaluation and the Newton correction follow S1 ``audit_plain``,
+S3 ``checks.evaluate``, S4 ``certify`` and S7 ``certify``, none of whose acceptance
+rules is that of file 02: S1 measures the unscaled mean gradient, S3 a mean-normalized
+score in frozen QR coordinates, S4 a coordinate score and fixed-metric norms of means,
+S7 a scaled coordinate score; none has the gate of the standard errors.  Only S4's
+factorization is ported (:mod:`powermean.solve.factorization`); the rest is written
+from file 02, Section 7 (``PROVENANCE.md``, Section 8).
 """
 
 from __future__ import annotations
@@ -89,8 +103,14 @@ from typing import Literal, NamedTuple, Protocol, get_args
 import numpy as np
 from numpy.typing import ArrayLike
 
+from powermean.model.matrix import MomentJacobianRankError
 from powermean.model.rows import _immutable
-from powermean.model.variance import FloatArray, PowerVariance, _finite_array
+from powermean.model.variance import (
+    FloatArray,
+    PowerVariance,
+    _finite_array,
+    score_unit,
+)
 from powermean.solve.assessment import Assessment, CertificateControls
 from powermean.solve.factorization import forward_solve
 from powermean.solve.quantities import (
@@ -98,12 +118,14 @@ from powermean.solve.quantities import (
     euclidean_norm,
     index_correction,
     newton_step,
+    relative_score,
 )
 from powermean.solve.reported import (
     CoefficientCheck,
     ReportedScale,
     ReportedScaleProvider,
     coefficient_check,
+    saturated_rows,
 )
 from powermean.systems.joint import JointEvaluation, JointSystem
 
@@ -121,9 +143,10 @@ NOT_FINITE = "the candidate is not finite"
 def outside_convex(variance: object) -> bool:
     """Whether ``variance`` is a power variance with ``tau`` outside ``[1, 2]``.
 
-    The joint criterion is convex for NB2 and for the power family on ``[1, 2]``;
-    outside it the equation's root is a selected local root, and the certificate's
-    curvature gate does not apply (module docstring).
+    The joint criterion is convex for NB2 and for the power family on ``[1, 2]``
+    (file 01, Sections 4.2 and 5.1); outside it the equation's root is the selected
+    local root of file 01, Section 6, and the certificate's curvature gate does not
+    apply (module docstring).
     """
     return isinstance(variance, PowerVariance) and not 1.0 <= variance.tau <= 2.0
 
@@ -164,7 +187,12 @@ class GateMeasures(Protocol):
 
     @property
     def coefficients(self) -> CoefficientCheck | None:
-        """The coefficient gate, with a correction and a provider."""
+        """The coefficient gate of D49, with a correction and a provider."""
+        ...
+
+    @property
+    def saturated(self) -> bool:
+        """Whether the fit is saturated: the coefficient gate does not apply."""
         ...
 
 
@@ -173,7 +201,9 @@ class Measures(NamedTuple):
 
     ``conditioned`` says that the factorization passed its test, and ``correction``
     is formed only then; ``reported`` and ``coefficients`` only with a correction and
-    a provider.  A quantity that was not formed is NaN or ``None``.
+    a provider, and never for a saturated fit (``saturated``,
+    :func:`powermean.solve.reported.saturated`).  A quantity that was not formed is NaN
+    or ``None``.
     """
 
     evaluation: JointEvaluation | None
@@ -185,6 +215,7 @@ class Measures(NamedTuple):
     index_correction: float
     reported: ReportedScale | None
     coefficients: CoefficientCheck | None
+    saturated: bool = False
 
     @property
     def evaluated(self) -> bool:
@@ -210,7 +241,8 @@ def failed_gates(measures: GateMeasures, tolerance: float) -> tuple[GateName, ..
 
     ``tolerance`` bounds the scaled score and the index correction, which pass when
     they are at most ``tolerance``: a NaN does not.  Every other gate is the same at
-    either level.
+    either level.  The coefficient gate does not apply to a saturated fit
+    (:func:`powermean.solve.reported.saturated`): it is neither failed nor passed.
     """
     coefficients = measures.coefficients
     passed: dict[GateName, bool] = {
@@ -221,7 +253,8 @@ def failed_gates(measures: GateMeasures, tolerance: float) -> tuple[GateName, ..
         "index": measures.index_correction <= tolerance,
         "coefficient": coefficients is not None and coefficients.accepted,
     }
-    return tuple(gate for gate in GATES if not passed[gate])
+    skipped = ("coefficient",) if measures.saturated else ()
+    return tuple(gate for gate in GATES if gate not in skipped and not passed[gate])
 
 
 @dataclass(frozen=True, eq=False)
@@ -252,7 +285,7 @@ class Certificate:
     reported : ReportedScale or None
         What the provider returned at the candidate, if it was called.
     coefficients : CoefficientCheck or None
-        The coefficient gate, when a correction and a provider were present.
+        The coefficient gate of D49, when a correction and a provider were present.
     errors : mapping
         The text of each error that a step raised, by its gate: ``evaluation``,
         ``curvature`` (the Cholesky factorization) or ``conditioning`` (the LU).
@@ -264,6 +297,10 @@ class Certificate:
     score_metric : {"current_symmetric_hessian", "fixed_merit", "none"}
         The metric of the scaled score: ``C_sym``, the fixed merit metric of a
         selected root's solve, or none (the score is NaN).
+    saturated : bool
+        Whether the fit is saturated, as many observations as coefficients
+        (:func:`powermean.solve.reported.saturated_rows`): the coefficient gate does not
+        apply, the provider is not called, and every covariance of the fit is missing.
     """
 
     gamma: FloatArray
@@ -283,6 +320,7 @@ class Certificate:
     secondary: tuple[GateName, ...]
     require_positive_definite: bool = True
     score_metric: ScoreMetric = "none"
+    saturated: bool = False
 
     @property
     def level(self) -> Level | None:
@@ -300,7 +338,7 @@ class Certificate:
 
     @property
     def degenerate(self) -> bool:
-        """Whether a reported standard error is zero: degenerate inference."""
+        """Whether a reported standard error is zero: degenerate inference (D49)."""
         return self.coefficients is not None and self.coefficients.degenerate
 
 
@@ -348,6 +386,7 @@ def _certificate(
         ),
         require_positive_definite=require,
         score_metric=metric,
+        saturated=measures.saturated,
     )
 
 
@@ -366,7 +405,7 @@ def _scale_of(value: object, evaluation: JointEvaluation) -> ReportedScale:
 def _coefficients(
     scale: ReportedScale, correction: FloatArray, coef_tol: float
 ) -> CoefficientCheck:
-    """The coefficient gate on the reported corrections, by the map the provider holds.
+    """The gate of D49 on the reported corrections, by the map the provider holds.
 
     The dense ``M p``, or the direct map of the accepted order scale entry by entry
     (:meth:`ReportedScale.corrections`), so that a retry assessment and the final
@@ -412,16 +451,29 @@ def _measures(
             scaled, metric = _merit_score(moment, merit), "fixed_merit"
         else:
             errors["curvature"] = curved.error
+    scaled = relative_score(
+        scaled,
+        score_unit(system.active_z, system.active_weights, system.variance),
+        unit_free_metric=metric == "fixed_merit",
+    )
     index = math.nan
     scale: ReportedScale | None = None
     check: CoefficientCheck | None = None
+    exact = saturated_rows(system.active_weights, system.dimension, frequency=frequency)
     if step.correction is None:
         errors["conditioning"] = step.error
     else:
         index = index_correction(system, step.correction, frequency=frequency)
-        if reported is not None:
-            scale = _scale_of(reported(evaluation), evaluation)
-            check = _coefficients(scale, step.correction, controls.coef_tol)
+        if reported is not None and not exact:
+            try:
+                value = reported(evaluation)
+            except MomentJacobianRankError as error:
+                # Inference tests the raw Jacobian; the equilibrated Newton
+                # correction above can exist even when the SEs do not.
+                errors["coefficient"] = str(error)
+            else:
+                scale = _scale_of(value, evaluation)
+                check = _coefficients(scale, step.correction, controls.coef_tol)
     measures = Measures(
         evaluation=evaluation,
         positive_definite=curved.positive_definite,
@@ -432,6 +484,7 @@ def _measures(
         index_correction=index,
         reported=scale,
         coefficients=check,
+        saturated=exact,
     )
     return measures, errors, metric
 
@@ -562,11 +615,11 @@ def certify(
     )
 
 
-# ------------------------------------------------------------ the retry of the solver
+# ------------------------------------------------------------ the retry of M0.10
 
 
 def assessment(certificate: Certificate) -> Assessment:
-    """What the retry of the solver reads of a certificate.
+    """What the retry of task M0.10 reads of a certificate.
 
     ``accepted`` when the certificate passes at either level, ``score`` the scaled
     score, ``error`` the larger of the scaled score and the index correction, NaN

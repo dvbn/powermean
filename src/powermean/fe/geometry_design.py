@@ -1,4 +1,4 @@
-"""Owned coordinate maps B_id = BT.
+"""Owned coordinate maps B_id = BT (design/03, Section 3.2).
 
 T selects original slope columns and a retained complement. Omitted slopes are
 set to zero. A kept coefficient is an original slope in this normalization; it
@@ -8,8 +8,9 @@ vanishes. T need not be perpendicular to ker(B).
 
 from __future__ import annotations
 
+import importlib
 from dataclasses import dataclass
-from typing import Literal
+from typing import TYPE_CHECKING, Literal, Protocol, cast
 
 import numpy as np
 from numpy.typing import ArrayLike
@@ -23,10 +24,94 @@ from powermean.fe._cancel_storage import (
     finite_vector,
 )
 from powermean.fe.cancel import CancelStructure, to_original, to_sorted
-from powermean.fe.geometry_gram import GeometryBudget, GeometryPasses
+from powermean.fe.geometry_gram import GeometryBudget, GeometryPasses, reserve_geometry
 from powermean.fe.geometry_storage import BoolArray, BoolStorage
 from powermean.fe.retained import CenteredDesign
 from powermean.model.variance import FloatArray
+
+if TYPE_CHECKING:
+    from powermean.fe.admission_incidence import QuotientRank
+    from powermean.fe.admission_records import AdmissionWork
+
+SpectrumProvenance = Literal["spectral_eigh", "certified_bounds"]
+ThresholdKind = Literal["spectral_scale", "gershgorin_upper_bound"]
+GapKind = Literal["spectral_ratio", "certified_lower_bound"]
+
+
+class _ChoSolve(Protocol):
+    def __call__(
+        self,
+        c_and_lower: tuple[FloatArray, bool],
+        b: FloatArray,
+        *,
+        check_finite: bool = True,
+    ) -> FloatArray: ...
+
+
+_cho_solve = cast(_ChoSolve, importlib.import_module("scipy.linalg").cho_solve)
+
+
+@dataclass(frozen=True, eq=False, init=False)
+class NullProjection(BuilderRecord):
+    """Immutable small-side Cholesky factor for null-orthogonal projection.
+
+    Holds ``r``-by-``m`` non-annihilated dependent witnesses ``W`` and the lower
+    Cholesky factor of ``I_r + W W'`` when ``r_side`` is true (``r <= m``) or of
+    ``I_m + W' W`` when ``r_side`` is false (``m < r``).
+    """
+
+    __slots__ = ("_chol", "_dep_indices", "_kept_indices", "_witnesses", "r_side")
+
+    _kept_indices: IndexStorage
+    _dep_indices: IndexStorage
+    _witnesses: FloatStorage
+    _chol: FloatStorage
+    r_side: bool
+
+    @property
+    def kept_indices(self) -> IndexArray:
+        """Detached view of the full kept retained column indices ``k + J``."""
+        return self._kept_indices.view()
+
+    @property
+    def dep_indices(self) -> IndexArray:
+        """Detached view of the full dependent retained column indices ``k + D``."""
+        return self._dep_indices.view()
+
+    @property
+    def witnesses(self) -> FloatArray:
+        """Detached view of the ``r``-by-``m`` float64 witness matrix ``W``."""
+        return self._witnesses.view()
+
+    @property
+    def chol(self) -> FloatArray:
+        """Detached view of the ``min(r, m)``-square lower Cholesky factor."""
+        return self._chol.view()
+
+
+@dataclass(frozen=True, eq=False, init=False)
+class SelectedProof(BuilderRecord):
+    """Immutable fit-owned certificate of selected-columns Gram/operator bounds."""
+
+    __slots__ = (
+        "delta_full",
+        "delta_ret",
+        "full_min_low",
+        "max_null_defect",
+        "max_reconstruction_defect",
+        "ret_min_low",
+        "selected_min_low",
+        "top_high",
+    )
+
+    top_high: float
+    delta_full: float
+    delta_ret: float
+    full_min_low: float
+    ret_min_low: float
+    selected_min_low: float
+    max_null_defect: float
+    max_reconstruction_defect: float
 
 
 @dataclass(frozen=True, eq=False, init=False)
@@ -37,6 +122,10 @@ class NumericalGeometry(BuilderRecord):
     slope_identified_mask has length K and marks numerical-nullspace rows
     with squared norm <= gram_rtol. It distinguishes a separately identified
     original coefficient from a normalized combination of dependent slopes.
+    The selected-columns construction also holds the exact quotient it is built
+    from and the columns that T selects. A spectral construction holds neither,
+    or, where it decided after the selected one declined, the exact quotient that
+    construction had already computed for the same structure.
     """
 
     __slots__ = (
@@ -48,10 +137,14 @@ class NumericalGeometry(BuilderRecord):
         "_identified_gram",
         "_kept_slope_indices",
         "_null_basis",
+        "_null_projection",
         "_omitted_slope_indices",
         "_original_column_map",
+        "_quotient",
         "_reduction_matrix",
         "_retained_eigenvalues",
+        "_selected_columns",
+        "_selected_proof",
         "_slope_alias_matrix",
         "_slope_identified_mask",
         "block_deficiencies",
@@ -59,6 +152,7 @@ class NumericalGeometry(BuilderRecord):
         "budget",
         "cross_block_redundancy",
         "design",
+        "gap_kind",
         "gap_min",
         "gap_ratio",
         "gram_rtol",
@@ -68,7 +162,9 @@ class NumericalGeometry(BuilderRecord):
         "retained_bytes",
         "retained_gap_ratio",
         "slope_omission_reasons",
+        "spectrum_provenance",
         "threshold",
+        "threshold_kind",
     )
 
     design: CenteredDesign
@@ -96,10 +192,17 @@ class NumericalGeometry(BuilderRecord):
     gap_ratio: float
     retained_gap_ratio: float
     nuisance_basis_kind: str
+    spectrum_provenance: SpectrumProvenance
+    threshold_kind: ThresholdKind
+    gap_kind: GapKind
     budget: GeometryBudget
     passes: GeometryPasses
     max_bytes: int
     retained_bytes: int
+    _quotient: tuple[QuotientRank, AdmissionWork] | None
+    _selected_columns: IndexStorage | None
+    _null_projection: NullProjection | None
+    _selected_proof: SelectedProof | None
 
     @property
     def gram(self) -> FloatArray:
@@ -170,6 +273,22 @@ class NumericalGeometry(BuilderRecord):
     def annihilated_levels(self) -> tuple[BoolArray, ...]:
         """Detached view of the owned annihilated levels."""
         return tuple(values.view() for values in self._annihilated_levels)
+
+    @property
+    def selected_columns(self) -> IndexArray | None:
+        """The full columns that T selects, in coordinate order; None if T is not."""
+        found = self._selected_columns
+        return None if found is None else found.view()
+
+    @property
+    def exact_quotient(self) -> tuple[QuotientRank, AdmissionWork] | None:
+        """The exact quotient of this geometry's structure, with its work; or None."""
+        return self._quotient
+
+    @property
+    def selected_proof(self) -> SelectedProof | None:
+        """Certified Gram and operator bounds for ``exact_selection``, or None."""
+        return self._selected_proof
 
     @property
     def identification_status(self) -> Literal["numerical_candidate"]:
@@ -253,14 +372,123 @@ class NumericalGeometry(BuilderRecord):
         return self.design.checked_coefficients(v_full)
 
     def expand(self, v: ArrayLike) -> FloatArray:
-        """Map identified coordinates ``v`` to full coordinates ``T v``."""
-        return self._product(self.basis_matrix, self.checked_coefficients(v))
+        """Map identified coordinates ``v`` to full coordinates ``T v``.
+
+        Where T selects columns, ``v`` is placed at them: the same values.
+        """
+        values = self.checked_coefficients(v)
+        columns = self.selected_columns
+        if columns is None:
+            return self._product(self.basis_matrix, values)
+        full = np.zeros(self.n_columns_full, dtype=np.float64)
+        full[columns] = values
+        return full
 
     def expand_transpose(self, u_full: ArrayLike) -> FloatArray:
-        """Map a full covector of length p to T' u of length d."""
-        return self._product(
-            self.basis_matrix.T, self.checked_full_coefficients(u_full)
-        )
+        """Map a full covector of length p to T' u of length d.
+
+        Where T selects columns, those entries of ``u``: the same values.
+        """
+        values = self.checked_full_coefficients(u_full)
+        columns = self.selected_columns
+        if columns is None:
+            return self._product(self.basis_matrix.T, values)
+        return values[columns]
+
+    def normalization_workspace(self) -> tuple[int, int]:
+        """Incremental ``(bytes, work_units)`` for :meth:`normalized_full`."""
+        proj = self._null_projection
+        if proj is None:
+            return 0, 0
+        w_shape = proj._witnesses.shape
+        r, m = w_shape[0], w_shape[1]
+        s_min = proj._chol.shape[0]
+        p = self.n_columns_full
+        n_bytes = 8 * (4 * p + 4 * r + 4 * m + 4 * s_min)
+        work = 128 * (p + 2 * r * m + 2 * s_min * s_min + r + m)
+        return n_bytes, work
+
+    def normalized_full(self, v: ArrayLike) -> FloatArray:
+        """``T v``, its retained part taken orthogonal to the null space.
+
+        A retained part is identified only up to the null space. The spectral bases
+        hold it orthogonal to that space, their columns spanning its complement;
+        on a selection ``T v`` is zero outside the selected columns, so the
+        fit-owned small-side Cholesky factor removes the active null component in
+        ``O(p + r m + min(r, m)^2)`` with 1D temporaries only. Unit null columns
+        correspond to annihilated levels already zero in ``T v``.
+        """
+        proj = self._null_projection
+        if self._selected_columns is None or proj is None:
+            return self.expand(v)
+        reserve_geometry(self.design, self.max_bytes)
+        values = self.checked_coefficients(v)
+        k = self.n_slopes_identified
+        v_j = values[k:]
+        w_mat, chol = proj.witnesses, proj.chol
+        # Immutable storage is C-order. Its transpose is the same upper factor
+        # in Fortran order, so POTRS needs no square layout-conversion buffer.
+        # Both this fit-owned factor and the fresh coefficient vector are finite.
+        with np.errstate(over="raise", invalid="raise"):
+            if proj.r_side:
+                u_r = np.asarray(
+                    _cho_solve((chol.T, False), v_j, check_finite=False),
+                    dtype=np.float64,
+                )
+                kept_vals = u_r
+                dep_vals = w_mat.T @ u_r
+            else:
+                rhs_m = w_mat.T @ v_j
+                rhs_m = finite_product(rhs_m)
+                u_m = np.asarray(
+                    _cho_solve((chol.T, False), rhs_m, check_finite=False),
+                    dtype=np.float64,
+                )
+                kept_vals = v_j - w_mat @ u_m
+                dep_vals = u_m
+            full = np.zeros(self.n_columns_full, dtype=np.float64)
+            if k:
+                full[self.kept_slope_indices] = values[:k]
+            full[proj.kept_indices] = kept_vals
+            full[proj.dep_indices] = dep_vals
+            return finite_product(full)
+
+    def compress(self, full: FloatArray) -> FloatArray:
+        """``T' M T`` for a p-by-p ``M``; its principal submatrix where T selects."""
+        columns = self.selected_columns
+        if columns is None:
+            basis = self.basis_matrix
+            return finite_product(basis.T @ full @ basis)
+        return finite_product(full[np.ix_(columns, columns)])
+
+    def gathered(self, matrix: FloatArray) -> tuple[FloatArray, IndexArray] | None:
+        """``T M T'`` for reading at pairs of columns, where T selects; else None.
+
+        Returns ``M`` with a zero row and column appended and the index of each
+        full column in it: a selected column's coordinate, or the appended one.
+        Entry ``(a, b)`` of :meth:`inflate` is then entry ``(index[a], index[b])``,
+        with no p-by-p array formed.
+        """
+        columns = self.selected_columns
+        if columns is None:
+            return None
+        d = self.n_identified
+        padded = np.zeros((d + 1, d + 1), dtype=np.float64)
+        padded[:d, :d] = matrix
+        index = np.full(self.n_columns_full, d, dtype=np.intp)
+        index[columns] = np.arange(d, dtype=np.intp)
+        return finite_product(padded), index
+
+    def inflate(self, matrix: FloatArray) -> FloatArray:
+        """``T M T'`` for a d-by-d ``M``; at the selected columns where T selects."""
+        columns = self.selected_columns
+        if columns is None:
+            basis = self.basis_matrix
+            return finite_product(basis @ matrix @ basis.T)
+        p = self.n_columns_full
+        full = np.zeros((p, p), dtype=np.float64)
+        full[np.ix_(columns, columns)] = matrix
+        return finite_product(full)
 
     def reduce(self, v_full: ArrayLike) -> FloatArray:
         """Map full coordinates ``v_full`` to equivalent identified coordinates."""

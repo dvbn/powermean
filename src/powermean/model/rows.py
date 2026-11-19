@@ -8,38 +8,53 @@ with ``m = exp(q)``, ``e`` the elasticity of ``V`` and ``w = m^2 / V(m)``:
     information weight     w = m^2 / V(m)
     criterion              l(q; z),   dl/dq = -r
 
-``c`` is the Hessian weight of BBP, ``eq:app-iols-exact-hessian``.  The criterion of the
-power family is ``m - z q`` at ``tau = 1``, ``q + z / m`` at ``tau = 2`` and
-``m^(2-tau)/(2-tau) + z m^(1-tau)/(tau-1)`` otherwise; that of NB2 is ``-z
-log(m/(1+kappa m)) + log(1+kappa m)/kappa``, the Poisson criterion at ``kappa = 0``.  No
-additive constant is removed from these forms.
+Design: ``design/01_statistical_core.md``, Sections 4.1 and 5.1; ``c`` is the Hessian
+weight of BBP, ``eq:app-iols-exact-hessian``.  The criterion of the power family is
+``m - z q`` at ``tau = 1``, ``q + z / m`` at ``tau = 2`` and
+``m^(2-tau)/(2-tau) + z m^(1-tau)/(tau-1)`` otherwise; that of NB2 is
+``-z log(m/(1+kappa m)) + log(1+kappa m)/kappa``, the Poisson criterion at ``kappa = 0``
+(Section 4.2).  No additive constant is removed from these forms.
 
-Numerical precautions: log products are combined before exponentiating; the curvature
-weight is a signed sum of two log terms and is never floored, since it is negative for
-some rows when ``tau`` is outside ``[1, 2]``; a share that rounds to zero in ``e`` is
-kept as a log, so that a tiny share times a large component survives; the score of a
-positive row near its root is ``w log(z/m) expm1(d)/d``; zero rows are ``r = -w``, ``c =
-(2 - e) w`` and ``l`` in closed form, so no product ``0 * exp(q)`` is formed.  A genuine
-final underflow rounds to zero; a final value that is not representable raises
-``FloatingPointError``.  Nothing is clipped, and no endpoint is substituted for a nearby
-``tau`` or ``kappa``.  Validation errors are built-in exceptions; their public
-translation is interface work.
+Port of ``rows.py`` of expreg (source S7 of ``design/06_reuse_map.md``), whose
+``evaluate_rows`` evaluates the rows of a mean order ``omega`` and returns no
+criterion.  The package works on ``(z, q)`` only (file 01, Section 3.1), so the S7
+arithmetic is taken at ``omega = 1``: the factors ``omega * eta``, ``omega * log(y)``
+and ``- log(omega)`` of the source are dropped, which leaves every double unchanged
+(``1.0 * x`` and ``x - 0.0`` are exact).  ``RowEvaluation``, ``_immutable``, ``_exp``,
+``_signed_sum`` and the power and NB2 branches of ``_log_components`` keep the names,
+the order of operations and the messages of the source, so that ``score``,
+``observed_curvature``, ``fisher_curvature`` and ``log_mean`` are those of S7 bit for
+bit (``tools/verify_ports.py``).  The zero-row forms of the criterion are those of
+``_zero_contributions`` in ``zero_safe_kernel.py`` of the solver campaign (source S1).
+``PROVENANCE.md`` records the sources and the changes.
 
-The criterion is evaluated as written wherever its terms are representable.  A row whose
-direct evaluation is not finite is evaluated again from the logs of its two terms
-(``_log_sum``): a product such as ``exp(q) log1p(x)/x`` or ``z log(1/m + kappa)`` and a
-signed sum of two terms that overflow while their sum does not are then formed without
-the terms themselves.  This is the same analytic function in a second arithmetic, not a
-substitute family; a sum that is itself not representable still raises.  A scaled term
-``exp(a)/d`` of the power criterion whose exponential is not a normal double is formed
-as ``exp(a - log|d|)``, a single rounding: at a ``tau`` adjacent to an endpoint,
-``1/|d|`` is of order ``1e16`` and the direct quotient would otherwise lose the bits
-that the subnormal ``exp(a)`` has lost, or return zero for a representable value
-(``_scaled_exponential``).  The direct arithmetic, and so the zero-row form, is kept bit
-for bit wherever ``exp(a)`` is normal.  The factor ``log(1/m + kappa)`` of the NB2 term
-in ``z`` is formed, in the band where its root lies, from the exact difference ``kappa -
-q`` and the series of ``exp(-q) - 1 + q``, so that its second-order part survives the
-multiplication by a large outcome (``_nb2_pieces``).
+Numerical precautions, as in S7: log products are combined before exponentiating; the
+curvature weight is a signed sum of two log terms and is never floored, since it is
+negative for some rows when ``tau`` is outside ``[1, 2]``; a share that rounds to zero
+in ``e`` is kept as a log, so that a tiny share times a large component survives; the
+score of a positive row near its root is ``w log(z/m) expm1(d)/d``; zero rows are
+``r = -w``, ``c = (2 - e) w`` and ``l`` in closed form, so no product ``0 * exp(q)``
+is formed.  A genuine final underflow rounds to zero; a final value that is not
+representable raises ``FloatingPointError``.  Nothing is clipped, and no endpoint is
+substituted for a nearby ``tau`` or ``kappa``.  Validation errors are the built-in
+exceptions of the source; their public translation is interface work.
+
+The criterion is evaluated as written wherever its terms are representable.  A row
+whose direct evaluation is not finite is evaluated again from the logs of its two
+terms (``_log_sum``): a product such as ``exp(q) log1p(x)/x`` or ``z log(1/m + kappa)``
+and a signed sum of two terms that overflow while their sum does not are then formed
+without the terms themselves.  This is the same analytic function in a second
+arithmetic, not a substitute family; a sum that is itself not representable still
+raises.  A scaled term ``exp(a)/d`` of the power criterion whose exponential is not
+a normal double is formed as ``exp(a - log|d|)``, a single rounding: at a ``tau``
+adjacent to an endpoint, ``1/|d|`` is of order ``1e16`` and the direct quotient
+would otherwise lose the bits that the subnormal ``exp(a)`` has lost, or return zero
+for a representable value (``_scaled_exponential``).  The direct arithmetic, and so
+the S1 zero-row form, is kept bit for bit wherever ``exp(a)`` is normal.  The factor
+``log(1/m + kappa)`` of the NB2 term in ``z`` is formed, in the band where its root
+lies, from the exact difference ``kappa - q`` and the series of ``exp(-q) - 1 + q``,
+so that its second-order part survives the multiplication by a large outcome
+(``_nb2_pieces``).
 """
 
 from __future__ import annotations
@@ -77,10 +92,31 @@ EXP_TAIL_TERMS = 17
 
 def _immutable(value: FloatArray) -> FloatArray:
     """An independent read-only copy of ``value``, in its shape."""
-    array: FloatArray = np.frombuffer(
-        np.asarray(value, dtype=np.float64).tobytes(), dtype=np.float64
-    ).reshape(value.shape)
+    if (
+        type(value) is np.ndarray
+        and value.dtype == np.float64
+        and value.flags.c_contiguous
+    ):
+        stored = value.tobytes()
+    else:
+        stored = np.asarray(value, dtype=np.float64).tobytes()
+    array: FloatArray = np.frombuffer(stored, dtype=np.float64).reshape(value.shape)
     return array
+
+
+def _row_evaluation(
+    score: FloatArray,
+    observed_curvature: FloatArray,
+    fisher_curvature: FloatArray,
+    log_mean: FloatArray,
+) -> RowEvaluation:
+    """Construct ``RowEvaluation`` from verified finite arrays."""
+    out = object.__new__(RowEvaluation)
+    object.__setattr__(out, "score", _immutable(score))
+    object.__setattr__(out, "observed_curvature", _immutable(observed_curvature))
+    object.__setattr__(out, "fisher_curvature", _immutable(fisher_curvature))
+    object.__setattr__(out, "log_mean", _immutable(log_mean))
+    return out
 
 
 @dataclass(frozen=True)
@@ -170,7 +206,7 @@ def _log_components(
 def _aligned_rows(
     z: ArrayLike, q: ArrayLike, variance: Variance
 ) -> tuple[FloatArray, FloatArray]:
-    """The validation of the rows: built-in variance, aligned finite rows.
+    """The validation of S7 ``evaluate_rows``: built-in variance, aligned finite rows.
 
     Only the two verified built-in variances are enabled, by exact type: a subclass or
     another object of the protocol is refused, since a structural protocol alone is
@@ -191,9 +227,9 @@ def evaluate_rows(
 ) -> RowEvaluation:
     """Evaluate ``r``, ``c`` and ``w`` on aligned one-dimensional rows.
 
-    At mean order one, ``log_m`` is ``q`` itself and the normalized residual
-    ``expm1(d)/omega`` is ``expm1(d)``, with ``d = log(z) - q``. Zero outcomes are valid
-    and are evaluated in closed form.
+    S7 ``evaluate_rows`` at mean order one: ``log_m`` is ``q`` itself and the
+    normalized residual ``expm1(d)/omega`` is ``expm1(d)``, with ``d = log(z) - q``.
+    Zero outcomes are valid and are evaluated in closed form.
 
     Parameters
     ----------
@@ -202,7 +238,7 @@ def evaluate_rows(
     q : array
         Index of the transformed mean, finite, aligned with ``z``.
     variance : PowerVariance or NB2Variance
-        The working variance, by exact type.
+        The working variance; exact type, as in the source.
 
     Returns
     -------
@@ -243,7 +279,30 @@ def evaluate_rows(
         score[below] = -_exp(log_b[below] + np.log(-np.expm1(d[below])))
         score[~positive] = -_exp(log_b[~positive])
     curvature = _signed_sum(log_a + log_u, sign_u, log_b + log_v, sign_v)
-    return RowEvaluation(score, curvature, fisher, log_m)
+    return _row_evaluation(score, curvature, fisher, log_m)
+
+
+def _poisson_log_rows(log_z: FloatArray, q: FloatArray) -> RowEvaluation:
+    """Evaluate the PPML row branches on finite indices and checked log outcomes.
+
+    For a large difference, the score magnitude is exp(max(log z, q) +
+    log(-expm1(-abs(d)))). Close to the root, retain the original
+    exp(q + log(abs(d)) + log(expm1(d) / d)) evaluation order.
+    """
+    mean = _exp(q)
+    d = log_z - q
+    magnitude = np.abs(d)
+    close = (magnitude <= 0.5) & (d != 0)
+    with np.errstate(under="ignore", divide="ignore"):
+        scale = np.where(close, q + np.log(magnitude), np.maximum(log_z, q))
+        tail = np.expm1(np.where(close, d, -magnitude))
+        tail /= np.where(close, d, -1.0)
+        np.log(tail, out=tail)
+        score = np.copysign(_exp(scale + tail), d)
+    score[d == 0] = 0.0
+    zero = np.isneginf(log_z)
+    score[zero] = -mean[zero]
+    return _row_evaluation(score, mean, mean, q)
 
 
 LogTerms = tuple[FloatArray, FloatArray, FloatArray, FloatArray]
@@ -297,16 +356,16 @@ def _scaled_exponential(log_value: FloatArray, coefficient: float) -> FloatArray
     """``exp(log_value) / coefficient``, row by row, without a premature underflow.
 
     The direct quotient is formed wherever ``exp(log_value)`` is a normal double
-    (``log_value >= LOG_SMALLEST_NORMAL``): this is the direct arithmetic of the
-    zero-row form and of the displayed form on positive rows, kept bit for bit.  Where
-    the exponential is subnormal or zero it has already lost bits, or everything, before
-    the division: at a ``tau`` adjacent to one or two, ``|coefficient|`` is ``2^-52`` or
-    ``2^-53`` and ``exp(-746)/coefficient`` is a representable ``4.7e-309`` that the
-    direct quotient returns as zero, while ``exp(-744)/coefficient`` is a normal
+    (``log_value >= LOG_SMALLEST_NORMAL``): this is the arithmetic of S1 on zero rows
+    and of the displayed form on positive rows, kept bit for bit.  Where the
+    exponential is subnormal or zero it has already lost bits, or everything, before
+    the division: at a ``tau`` adjacent to one or two, ``|coefficient|`` is ``2^-52``
+    or ``2^-53`` and ``exp(-746)/coefficient`` is a representable ``4.7e-309`` that
+    the direct quotient returns as zero, while ``exp(-744)/coefficient`` is a normal
     ``3.5e-308`` that it returns with three correct bits.  Those rows are formed as
-    ``sign(coefficient) exp(log_value - log|coefficient|)``, one rounding of the value
-    itself; a value below half the smallest subnormal rounds to zero there, which is the
-    genuine final underflow.  The coefficient is a nonzero double.
+    ``sign(coefficient) exp(log_value - log|coefficient|)``, one rounding of the
+    value itself; a value below half the smallest subnormal rounds to zero there,
+    which is the genuine final underflow.  The coefficient is a nonzero double.
     """
     with np.errstate(over="ignore", under="ignore", invalid="ignore"):
         value: FloatArray = np.exp(log_value) / coefficient
@@ -319,16 +378,16 @@ def _scaled_exponential(log_value: FloatArray, coefficient: float) -> FloatArray
 
 
 def _power_criterion(z: FloatArray, q: FloatArray, tau: float) -> FloatArray:
-    """The criterion of the power family, row by row.
+    """The criterion of the power family, file 01, Section 5.1, row by row.
 
-    Zero rows take closed forms: ``q`` at ``tau = 2``, which forms no exponential, and
-    ``exp((2 - tau) q) / (2 - tau)`` otherwise.  Positive rows write ``z m^(1-tau)`` as
-    ``exp(log z + (1 - tau) q)`` so that a representable product of a large outcome and
-    a small power is not lost to an underflow.  Each scaled term is formed by
-    :func:`_scaled_exponential`, which keeps the direct quotient wherever its
-    exponential is a normal double.  A row whose direct value is not finite is evaluated
-    again by :func:`_log_sum` from the logs of its terms, which the direct arithmetic
-    leaves untouched elsewhere.
+    Zero rows take the forms of S1 ``_zero_contributions``: ``q`` at ``tau = 2``, which
+    forms no exponential, and ``exp((2 - tau) q) / (2 - tau)`` otherwise.  Positive
+    rows write ``z m^(1-tau)`` as ``exp(log z + (1 - tau) q)`` so that a representable
+    product of a large outcome and a small power is not lost to an underflow.  Each
+    scaled term is formed by :func:`_scaled_exponential`, which keeps the direct
+    quotient wherever its exponential is a normal double.  A row whose direct value
+    is not finite is evaluated again by :func:`_log_sum` from the logs of its terms,
+    which the direct arithmetic leaves untouched elsewhere.
     """
     positive = z > 0
     value = np.empty_like(q)
@@ -440,7 +499,7 @@ def _nb2_log_terms(z: FloatArray, q: FloatArray, kappa: float) -> LogTerms:
 
 
 def _nb2_criterion(z: FloatArray, q: FloatArray, kappa: float) -> FloatArray:
-    """The criterion of NB2, row by row.
+    """The criterion of NB2, file 01, Section 4.2, row by row.
 
     ``-z log(m/(1+kappa m))`` is ``z log(1/m + kappa)``, the factor formed by
     :func:`_nb2_pieces`: in the band of its root from the exact difference
@@ -476,7 +535,7 @@ def _nb2_criterion(z: FloatArray, q: FloatArray, kappa: float) -> FloatArray:
 def evaluate_criterion(
     z: ArrayLike, q: ArrayLike, *, variance: PowerVariance | NB2Variance
 ) -> FloatArray:
-    """Evaluate the criterion ``l(q; z)``, row by row.
+    """Evaluate the criterion ``l(q; z)`` of file 01, Section 5.1, row by row.
 
     Its derivative in ``q`` is minus the score residual of :func:`evaluate_rows`, and
     its second derivative the observed curvature.  The function is separate from the
@@ -494,7 +553,7 @@ def evaluate_criterion(
     q : array
         Index of the transformed mean, finite, aligned with ``z``.
     variance : PowerVariance or NB2Variance
-        The working variance, by exact type.
+        The working variance; exact type, as in the source.
 
     Returns
     -------

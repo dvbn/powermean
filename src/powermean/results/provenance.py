@@ -1,10 +1,13 @@
 """The provenance of a result: what actually ran, recorded beside the estimates.
 
-Each result records the package version; hashes of the compiled kernels and of the
-carried scikit-learn files, and the provider used; the resolved estimator, solver,
-options and start; the trace summary (iterations, line-search trials, retries,
-absorption sweeps, wall time by stage); a fingerprint of the estimation sample; and
-which implementation ran.
+``design/02_computation.md``, Section 9 ("each result records: package version;
+hashes of the compiled kernels and of the carried scikit-learn files, and the provider
+used; the resolved estimator, solver, options and start; the trace summary
+(iterations, line-search trials, retries, absorption sweeps, wall time by stage); and
+a fingerprint of the estimation sample"); ``design/11_engineering.md``, Section 3.1,
+rule 4 ("the result records which implementation ran"), Section 5, rules 7 and 10;
+``design/01_statistical_core.md``, Sections 6 and 7; decisions D24, D40, D50, D55 and
+D58.
 
 The record is formed once from the retained state and reports, as values that JSON
 holds, each nested value owned and read-only (a mapping as a read-only view, a list or
@@ -14,11 +17,12 @@ call (dicts and lists, recursively, with the meaning that JSON gives them), so t
 an edit of a copy reaches nothing retained:
 
 - the versions of the package, of Python, of the platform, of NumPy and pandas as
-  imported, and of the installed SciPy and Formulaic distributions;
-- the implementation of the row operations and of the iteration;
-  the Newton provider and its version; the
+  imported, and of the installed SciPy, Formulaic and within-py distributions
+  (within-py starts the absorptions of fixed-effect log-OLS, ruling 79);
+- the implementation of the row operations and of the iteration: NumPy throughout,
+  no compiled kernel at the first milestone; the Newton provider and its version; the
   SHA-256 of the carried scikit-learn files that ran (the Newton iteration of the
-  bundled provider, the linear loss of both providers), read from the
+  bundled provider, the linear loss of both providers, decision D50), read from the
   installed files, which is a record of what ran and no claim of parity with any
   other implementation or of a whole-fit comparison with a source;
 - the solver, the resolved settings as stored, the start with its origin, and the
@@ -30,16 +34,17 @@ an edit of a copy reaches nothing retained:
   metric, the root-Newton options, every stage with its attempts and certificate
   summary, the target stage, the continuation, the counts and the counted work; the
   start that the caller requested on the reported scale, where one was given, beside
-  the solver's start in its own coordinates (both coordinate meanings);
+  the solver's start in its own coordinates (task M0.22: both coordinate meanings);
   on the linear route the least-squares driver, its cutoff, rank and singular values,
-  and the requested start mapped to the coordinates of the solver by the
+  and the requested start mapped to the coordinates of the solver by the accepted
   forward map at the order zero, recorded as not used, since the least-squares solve
   reads no start and has no iterative trace;
-  for a supplied point without a solve, no trace; for an automatic start that had no
-  finite value, the record of that failure and no trace;
-- the status of the solve by the status rules, the level of the certificate,
-  whether the point is certified, whether its inference is degenerate, the
-  coverage label of the theory and its basis;
+  for a supplied point without a solve, no trace; for an automatic start with a
+  nonfinite
+  intercept or an IOLS scale-floor refusal, the failure record and no trace;
+- the status of the solve by the accepted rules, the level of the certificate,
+  whether the point is certified, whether its inference is degenerate (D49), the
+  coverage label of the theory and its basis (file 01, Section 6; D58);
 - the estimator record, the kind of the weights and the columns that the preparation
   read, an offset or exposure expression being recorded as the text it was given;
   the formula's first part, its terms and the columns of the data that they read,
@@ -48,12 +53,16 @@ an edit of a copy reaches nothing retained:
   statistical count, the counts by reason and by variable group, the conditioning on
   positive outcomes and the rows whose subset condition was missing;
 - the convention of the default covariance: method, cluster, bread, coordinate,
-  factor, counts, rank and diagnostics;
+  factor, counts, rank and diagnostics; on fixed-effect log-OLS, ``rank`` is the
+  exact rank of the design where the request forms it (HC2 to HC5, or
+  ``absorbed_count="exact"``) and ``None`` otherwise, and ``K`` the parameter count
+  that the factor or the reference reads, on a request that reads one (ruling 80);
 - the references retained with the result (:mod:`powermean.results.citations`).
 """
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import importlib.metadata
 import platform
@@ -66,10 +75,14 @@ from types import MappingProxyType
 import numpy as np
 import pandas as pd
 
+from powermean.data.retained import OrderSample
 from powermean.results import citations, naming
 from powermean.results.retained import AnyCandidate, RetainedFit
+from powermean.results.retained_gamma import RetainedGammaResult
+from powermean.results.sample import SampleView
 from powermean.solve.cancelled_records import RootAttemptRecord
 from powermean.solve.iols.candidate import IolsCandidate
+from powermean.solve.iols.normalization import IolsScaleFailure
 from powermean.solve.joint_root import summary_of
 from powermean.solve.joint_root_records import (
     JointRootCandidate,
@@ -79,11 +92,13 @@ from powermean.solve.joint_root_records import (
 from powermean.solve.newton_trace import NewtonAttempt, NewtonCandidate
 from powermean.solve.starts import Start
 
-# The carried scikit-learn files, by the provider that runs them: the Newton iteration
-# of the bundled provider, the linear loss of both.  Read as files by path, so that this
-# module imports no vendor code: the folder beside this package's result layer, located
-# from this module and not through the root package, which a lower layer does not import
-# (the root names the public API for the type checker).
+# The carried scikit-learn files (PROVENANCE.md, Section 6), by the provider that
+# runs them: the Newton iteration of the bundled provider, the linear loss of both
+# (decision D50).  Read as files by path, so that this module imports no vendor code
+# (rule 4 of file 11, Section 3.1): the folder beside this package's result layer,
+# located from this module and not through the root package, which a lower layer
+# does not import (the root names the public API for the type checker, and the
+# import graph of the contracts reads that name).
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 VENDOR = PACKAGE_ROOT / "_vendor"
 NATIVE_IOLS = PACKAGE_ROOT / "_native" / "iols"
@@ -142,10 +157,21 @@ def file_digest(name: str) -> str:
     return hashlib.sha256((VENDOR / name).read_bytes()).hexdigest()
 
 
+@functools.cache
+def _installed(name: str) -> str:
+    """The installed distribution's version, read once per process (LEANLOG2).
+
+    Each read of the distribution metadata costs about a millisecond; the version of a
+    library imported by this process cannot change within it.  A failed read is not
+    remembered.
+    """
+    return importlib.metadata.version(name)
+
+
 def _powermean_version() -> str:
     """Installed version, or the non-version sentinel ``uninstalled`` if absent."""
     try:
-        return importlib.metadata.version("powermean")
+        return _installed("powermean")
     except importlib.metadata.PackageNotFoundError as error:
         if error.args == ("powermean",):
             return "uninstalled"
@@ -161,8 +187,9 @@ def versions() -> Record:
             "platform": platform.platform(),
             "numpy": np.__version__,
             "pandas": pd.__version__,
-            "scipy": importlib.metadata.version("scipy"),
-            "formulaic": importlib.metadata.version("formulaic"),
+            "scipy": _installed("scipy"),
+            "formulaic": _installed("formulaic"),
+            "within-py": _installed("within-py"),
         }
     )
 
@@ -424,10 +451,35 @@ def _requested_start(retained: RetainedFit) -> Record | None:
 
 
 def _failure(retained: RetainedFit) -> Record | None:
-    """The automatic start that had no finite value, where the solve ended there."""
+    """The measured reason a solve stopped before producing a candidate."""
     failure = retained.failure
     if failure is None:
-        return None
+        diagnostic = retained.sample_failure
+        if diagnostic is None:
+            return None
+        return _frozen(
+            {
+                "source": "recession"
+                if isinstance(diagnostic, RetainedGammaResult)
+                else "support",
+                "reason": diagnostic.reason,
+            }
+        )
+    if isinstance(failure, IolsScaleFailure):
+        return _frozen(
+            {
+                "source": failure.source,
+                "message": failure.message,
+                "slope_index": failure.slope_index,
+                "slope_name": failure.slope_name,
+                "scale": failure.scale,
+                "scale_max": failure.scale_max,
+                "scale_floor": failure.scale_floor,
+                "iterations": failure.iterations,
+                "phase1_evaluations": failure.phase1_evaluations,
+                "phase2_evaluations": failure.phase2_evaluations,
+            }
+        )
     return _frozen(
         {
             "source": failure.source,
@@ -441,13 +493,34 @@ def _failure(retained: RetainedFit) -> Record | None:
 def _sample(retained: RetainedFit) -> Record:
     """The fingerprint and the accounting of the sample."""
     sample = retained.sample
+    view: OrderSample | SampleView = sample
+    if retained.exhausted is not None:
+        view = SampleView(
+            sample,
+            retained.labels,
+            retained.columns,
+            retained.subset_missing,
+            exhausted=retained.exhausted,
+        )
+    ledger = retained.exhausted if retained.exhausted is not None else sample.separation
+    totals = None if ledger is None else ledger.totals
+    frequency = (
+        {}
+        if totals is None
+        else {
+            "frequency_totals": {
+                "separated": totals["separated"],
+                "retained": totals["retained"],
+            }
+        }
+    )
     return _frozen(
         {
-            "fingerprint": sample.fingerprint,
+            "fingerprint": view.fingerprint,
             "nobs": sample.nobs,
-            "count": sample.count,
-            "effective_n": sample.effective_n,
-            "counts": dict(sample.counts),
+            "count": view.count,
+            "effective_n": view.effective_n,
+            "counts": dict(view.counts),
             "missing": dict(sample.missing.counts),
             "subset_missing": retained.subset_missing,
             "positive_only": sample.positive_only,
@@ -461,6 +534,7 @@ def _sample(retained: RetainedFit) -> Record:
             "offset_expression": retained.offset_design is not None,
             "cluster_column": retained.columns.cluster,
             "retained_classifications": tuple(sample.metadata),
+            **frequency,
         }
     )
 

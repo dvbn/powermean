@@ -1,8 +1,9 @@
 """Detached snapshots of joint separation support runs and results.
 
-This module detaches ``FEStep``, ``SupportResult``, and lowered ``RawSupportResult``
-fields into explicit finite typed records without retaining live ``Grouping`` or
-invoking ``SupportResult`` replay constructors.
+``design/02_computation.md``, Sections 2 and 4; ``plan/evidence/M1.15_contract.txt``;
+decision D51.  This module detaches ``FEStep``, ``SupportResult``, and lowered
+``RawSupportResult`` fields into explicit finite typed records without retaining
+live ``Grouping`` or invoking ``SupportResult`` replay constructors.
 """
 
 from __future__ import annotations
@@ -273,12 +274,20 @@ def _detach_support_parts(
             partition_map=partition_map,
         )
     )
+    overlap = None if ir_snap is None else ir_snap.overlap_lp
     work = SupportWork(
         0 if lp_snap is None else len(lp_snap.solves),
         0 if lp_snap is None else sum(s.iterations for s in lp_snap.solves),
         0 if ir_snap is None else ir_snap.charged,
         0 if ir_snap is None else sum(a.sweeps for a in ir_snap.attempts),
     )
+    if overlap is not None:
+        work = SupportWork(
+            work.lp_solves + 1,
+            work.lp_iterations + overlap.iterations,
+            work.wls_attempts + overlap.set_aside_attempts,
+            work.absorption_sweeps + overlap.set_aside_sweeps,
+        )
     return prob, fe_snap, lp_snap, ir_snap, wits, du_snap, work
 
 

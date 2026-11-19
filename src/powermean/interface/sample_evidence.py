@@ -1,17 +1,18 @@
-"""The owned evidence of a support invocation: the finite graph of its result.
+"""The owned evidence of a support invocation: the finite graph of its result (M1.10).
 
-Internal: no public name, option, default, message, tolerance or route.
+``plan/evidence/M1.10_revision_C.txt`` (correction C, Section 2), with the adopted
+contract ``plan/evidence/M1.10_contract.txt`` and its corrections A and B; decision
+D51.  Private: no public name, option, default, message, tolerance or route.
 
-The records of a support result (:mod:`powermean.solve.support` and its
+The accepted M1.7 records of a support result (:mod:`powermean.solve.support` and its
 witness, LP, rectifier and projection modules) are frozen dataclasses that their
-constructors check but, unlike the recession and collinearity records, do not own: a
-primal witness
+constructors check but, unlike the M1.8 and M1.9 records, do not own: a primal witness
 formed by its producer holds read-only arrays of its own, one built directly or by
 ``dataclasses.replace`` holds whatever it was given.  A result's status, separated set
 and positions are read afresh from its witnesses, so a caller's array kept inside an
 admitted record could change the evidence of a recorded removal afterward.
 :func:`owned_result` rebuilds the result of an invocation from owned copies of every
-part of that finite graph, before the constructor checks it again, once, on
+part of that finite graph, before the accepted constructor checks it again, once, on
 the invocation's own problem and controls; that owned record is the one kept.
 
 The graph.  The result, its FE step, its LP outcome (the solves, their marginals and
@@ -25,7 +26,7 @@ as they are: the support problem, the frozen control records, the absorber's res
 
 Rules.  An array is kept in bytes of its own with its dtype, shape and every bit (signed
 zeros, NaN payloads, infinities, empty arrays), read-only for good; a sequence becomes
-a tuple, the options a read-only copy, each record its type rebuilt from owned
+a tuple, the options a read-only copy, each record its accepted type rebuilt from owned
 parts; a scalar is kept as given, an array found there owned too.  Nothing is
 converted, cast, filtered, normalized or analyzed again.  A value that cannot be owned
 so (an array of Python objects, an array subclass, another value where an array, a
@@ -43,6 +44,7 @@ import numpy as np
 from powermean.fe.absorb import AbsorptionResult
 from powermean.solve.support import FEStep, SupportControls, SupportResult
 from powermean.solve.support_lp import LPControls, LPDual, LPOutcome, LPSolve
+from powermean.solve.support_overlap_lp import OverlapLP
 from powermean.solve.support_problem import SupportProblem
 from powermean.solve.support_projection import Projection, Refinement
 from powermean.solve.support_rectifier import (
@@ -300,6 +302,7 @@ def _ir(value: object) -> RectifierOutcome:
     """The rectifier outcome from owned parts: weights, attempts, last, witnesses."""
     if not isinstance(value, RectifierOutcome):
         raise ValueError(UNOWNED)
+    overlap = value.overlap_lp
     return RectifierOutcome(
         controls=_shared(value.controls, RectifierControls),
         penalty=_kept(value.penalty),
@@ -311,6 +314,7 @@ def _ir(value: object) -> RectifierOutcome:
         dual=_maybe(value.dual, _dual),
         completion=_kept(value.completion),
         reason=_kept(value.reason),
+        overlap_lp=None if overlap is None else _shared(overlap, OverlapLP),
     )
 
 

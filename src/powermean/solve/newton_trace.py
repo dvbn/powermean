@@ -1,13 +1,14 @@
 """The candidate of the convex Newton solver and the trace of its attempts.
 
-A solver returns a candidate and its trace, and makes no
-claim of convergence.  The provenance of a
+``DESIGN.md``, Section 5.3: a solver returns a candidate and its trace, and makes no
+claim of convergence.  ``design/02_computation.md``, Section 9: the provenance of a
 result records the provider, the resolved options, the start and the trace (iterations,
 line-search trials, retries, wall time).
 
 A native stop is the solver's own test, the gradient criterion and the Newton decrement
 of the carried iteration; its reason is a diagnostic of the attempt and never a status
-of the certificate, which only the independent certificate assigns.  The reasons are:
+of the certificate (Section 7), which only the independent certificate of task M0.11
+assigns.  The reasons are those of S1 ``engine.py``:
 
     native_stop            the iteration met its own stopping test
     iteration_limit        the iterations allowed to the solve are spent
@@ -62,7 +63,7 @@ class Timing:
 
 @dataclass(frozen=True)
 class EvaluationCount:
-    """The calls of the pointwise loss, by kind."""
+    """The calls of the pointwise loss, by kind, as the counts of S1 ``PointLoss``."""
 
     loss: int
     loss_gradient: int

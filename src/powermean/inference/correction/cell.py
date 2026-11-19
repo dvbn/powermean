@@ -1,4 +1,4 @@
-"""BBP after-cancellation cell analytical bias correction.
+"""BBP after-cancellation cell analytical bias correction (design03 Section 5.1).
 
 Evaluates the cell-level reduced-bias adjustment and cell-pair meat over an
 explicit set of ordered dependent cell pairs ``Pairs`` (including the diagonal),
@@ -208,6 +208,7 @@ def bbp_cell_correction(
             obs_weights=options.obs_weights,
             bounds=options.bounds,
             cell=True,
+            admitted=options.admitted,
         ),
     )
 

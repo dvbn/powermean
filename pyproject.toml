@@ -1,21 +1,33 @@
+# Project file: metadata of the package and the settings of every tool.
+# design/11_engineering.md explains each setting.  The package has no entry points,
+# and its URLs arrive with the hosted repository (decisions D33 and D42).
+
 [build-system]
-requires = ["hatchling>=1.26"]
-build-backend = "hatchling.build"
+requires = ["scikit-build-core>=0.10", "pybind11>=2.13", "numpy>=2.3.1", "cmeel-eigen==3.4.1"]
+build-backend = "scikit_build_core.build"
 
 [project]
 name = "powermean"
-version = "0.1.0a1"
-description = "Power-mean regression: PPML, GPML and log-linear models for outcomes with zeros"
-readme = "README.md"
+version = "0.1.0"
+description = "Power-mean regression: logs, zeros, fixed effects and proportional effects"
 authors = [{ name = "David Benatia" }]
-license = "BSD-3-Clause"
-license-files = ["LICENSE", "src/powermean/_vendor/SKLEARN_COPYING"]
-requires-python = ">=3.12"
-keywords = ["econometrics", "regression", "PPML", "GPML", "IOLS", "zeros", "proportional effects"]
+license = "BSD-3-Clause"  # the package only, by the author's statement (decision D2)
+# See the native notice for the checked build's exact upstream source references.
+license-files = [
+    "LICENSE",
+    "src/powermean/_vendor/SKLEARN_COPYING",
+    "licenses/PYBIND11_LICENSE",
+    "licenses/NATIVE_NOTICE.md",
+    "licenses/eigen/COPYING.MPL2",
+    "licenses/eigen/COPYING.BSD",
+    "licenses/eigen/HEADER_NOTICES.txt",
+    "licenses/pybind11/EXECUTORCH_LICENSE",
+    "licenses/pybind11/LLVM_LICENSE",
+]
+requires-python = ">=3.12"  # decision D22, amended by D32; applied by task P.8
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
-    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -23,30 +35,645 @@ classifiers = [
     "Topic :: Scientific/Engineering",
     "Typing :: Typed",
 ]
+# Run-time dependencies: NumPy and pandas since the preparation stage (D44 for the
+# NumPy bound), SciPy and Formulaic since task M0.1 (decision D39).  Each lower bound
+# names the upstream release that supplies what the project needs; the whole
+# minimum stack is exercised by `tools/check.py minimum` (evidence recorded in
+# plan/evidence/M0.1_review.txt).
 dependencies = [
     "numpy>=2.3.1",
-    "pandas>=2.2.3",
+    "pandas>=2.2.2",
+    # SciPy 1.13 and 1.14 require NumPy < 2.3 and cannot coexist with NumPy 2.3.1;
+    # 1.15.0 is the first release whose metadata admits it (SciPy toolchain roadmap).
     "scipy>=1.15.0",
-    "formulaic>=1.1.0",
+    # Formulaic 1.0.0 is the first release that supports Python 3.12 explicitly; its
+    # numeric and categorical model matrices passed the host smoke test.
+    "formulaic>=1.0.0",
+    # within-py 0.4 (MIT; NumPy only; wheels for Linux, macOS and Windows) is the
+    # absorption engine of pyfixest; fixed-effect log-OLS starts its absorptions from
+    # its coefficients (owner's ruling 79).  0.4.0 is the first release with the
+    # CoefficientLayout the start reads; minor releases may change its API.
+    "within-py>=0.4,<0.5",
 ]
 
-[project.optional-dependencies]
-test = ["pytest>=8.3"]
+[project.readme]
+content-type = "text/markdown"
+text = '''
+
+# Powermean
+
+<img src="https://raw.githubusercontent.com/dvbn/powermean/9ca4917ebf7666fed58f842112ab28de8a37fd65/docs/assets/powermean-logo.png" align="right" width="120" alt="Powermean logo" />
+
+**Powermean is a Python package for fitting power-mean regressions and estimating proportional effects.** It implements the framework of Benatia et al. (2026), *Dealing with Logs and Zeros in Regression Models*, including exponential conditional-mean models and log-linear regressions. With `pm.fit`, choose the conditional mean and the working variance separately, model outcomes in levels with observed zeros, and report proportional effects with confidence intervals. [Paper](https://arxiv.org/abs/2203.11820v4)
+
+Estimate multiple high-dimensional fixed-effect blocks jointly, or cancel a selected block while retaining the others. Powermean provides bias corrections that address the incidental-parameters problem in short panels and three-way gravity models. The same formula interface takes you from a simple conditional-mean regression to three-way gravity and nonlinear difference-in-differences.
+
+```bash
+python -m pip install powermean
+```
+
+Use Python 3.12 or later. The release provides native wheels for CPython 3.12–3.14
+on Linux, macOS, and Windows for x86-64 and ARM64.
+
+[User guide](https://github.com/dvbn/powermean/blob/main/docs/README.md) · [Function index](https://github.com/dvbn/powermean/blob/main/docs/reference/api.md)
+· [Gravity walkthrough](https://github.com/dvbn/powermean/blob/main/docs/get-started.md) · [Nonlinear DiD](https://github.com/dvbn/powermean/blob/main/docs/examples/nonlinear-did.md)
+'''
 
 [project.urls]
-Repository = "https://github.com/dvbn/powermean"
+Homepage = "https://github.com/dvbn/powermean"
+Documentation = "https://github.com/dvbn/powermean/blob/main/docs/README.md"
 Issues = "https://github.com/dvbn/powermean/issues"
-Paper = "https://arxiv.org/abs/2203.11820"
+Changelog = "https://github.com/dvbn/powermean/blob/main/CHANGELOG.md"
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/powermean"]
+[dependency-groups]
+# The five additions of task M0.1 are those of decision D39.  Each bound names the
+# upstream release that supplies what the project needs; all declared minima are
+# exercised by `tools/check.py minimum` (evidence: plan/evidence/M0.1_review.txt).
+dev = [
+    "hypothesis>=6.100.2",  # NumPy 2 preparation fix (changelog, 6.100.2)
+    "import-linter>=2.5",  # the `protected` contract type of Section 3.1 (2.5)
+    "mypy>=1.15",
+    "pandas-stubs>=2.2",
+    "pre-commit>=3.5.0",  # local hooks with `language: system`; 4.0 adds nothing used
+    "pytest>=8.3",
+    "pytest-cov>=6.0",
+    "ruff>=0.9",
+    # PoissonRegressor smoke passed; this does not certify a future Newton provider.
+    "scikit-learn>=1.4.2",
+    # 0.14.2 fails `import statsmodels.api` on macOS arm64 (unresolved npy_cabs);
+    # 0.14.3 fixes the macOS build and passed the Poisson GLM smoke with warnings as
+    # errors (statsmodels release notes, 0.14.3).
+    "statsmodels>=0.14.3",
+]
 
-[tool.hatch.build.targets.sdist]
-include = ["/src", "/tests", "/README.md", "/LICENSE", "/CHANGELOG.md", "/pyproject.toml"]
+[tool.scikit-build]
+wheel.packages = ["src/powermean"]
+cmake.build-type = "Release"
+# Native dependencies are existing libraries or explicit CMake inputs (D19).
+# A pure NumPy wheel can be selected with -Ccmake.define.POWERMEAN_BUILD_IOLS=OFF.
+sdist.include = ["CMakeLists.txt", "src/powermean/_native/iols/**", "src/powermean/_native/basis/**"]
+# Keep the source distribution public even when it is built from the checkout
+# rather than from the export-filtered Git archive.
+# The wheel keeps powermean/_native/iols/bind.cpp: solve/iols/source.py records it.
+sdist.exclude = [
+    "**/__pycache__",
+    "**/*.pyc",
+    "**/*.pyo",
+    "**/.DS_Store",
+    "/.gitattributes",
+    "/.github/**",
+    "/.pre-commit-config.yaml",
+    "/AGENTS.md",
+    "/CHANGELOG.md",
+    "/CITATION.cff",
+    "/CLAUDE.md",
+    "/DESIGN.md",
+    "/PROVENANCE.md",
+    "/REVIEW_LOG.md",
+    "/STATUS.md",
+    "/_MAP_ACTIVE_01_OFF_TREE_TEST_TOOL_SUPPORT_EXACT_RECONCILED_20261116.json",
+    "/benchmarks/**",
+    "/contracts/**",
+    "/design/**",
+    "/plan/**",
+    "/scripts/**",
+    "/spec/**",
+    "/tests/**",
+    "/tools/**",
+    "/uv.lock",
+]
+wheel.exclude = ["**/__pycache__", "**/*.pyc", "**/*.pyo", "**/.DS_Store"]
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
+# ----------------------------------------------------------------------------- ruff
 
 [tool.ruff]
 line-length = 88
 src = ["src"]
+extend-exclude = ["*.md"]  # code blocks of the design files keep their layout
+
+[tool.ruff.lint]
+select = [
+    "A",    # no shadowing of builtins
+    "ARG",  # no unused arguments
+    "B",    # likely bugs
+    "C4",   # comprehensions
+    "C90",  # complexity
+    "D",    # docstrings, NumPy convention
+    "E",    # style
+    "ERA",  # no commented-out code
+    "F",    # undefined and unused names
+    "I",    # import order
+    "N",    # naming
+    "NPY",  # NumPy: no legacy random interface
+    "PL",   # size and structure of functions
+    "PT",   # pytest style
+    "PTH",  # pathlib
+    "RET",  # returns
+    "RUF",  # ruff's own checks
+    "SIM",  # simplifications
+    "T20",  # no print in the package
+    "TID",  # absolute imports
+    "UP",   # current syntax
+    "W",    # whitespace
+]
+ignore = [
+    "D401",     # a summary line may be a noun phrase
+    "PLR2004",  # constants of a formula stay inline; see the conventions
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[tool.ruff.lint.mccabe]
+max-complexity = 12
+
+[tool.ruff.lint.pylint]
+max-args = 8
+max-positional-args = 5
+max-returns = 8
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D", "PLR0913", "ARG001"]
+"scripts/**" = ["T20"]
+"tools/**" = ["T20"]
+# The examples print their results by design (orchestrator decision, 16 November 2026).
+"examples/**" = ["T201"]
+"docs/examples/**" = ["T201"]
+# Decision D48: the two scikit-learn files carried at task M0.9 keep the signatures,
+# names, structure, verbose output and hooks of their source (PROVENANCE.md, Section
+# 6).  Each rule below is one such inherited convention; no other file of
+# src/powermean/_vendor is exempted.
+"src/powermean/_vendor/vendor_linear_loss.py" = [
+    "C901",     # gradient_hessian and gradient_hessian_product keep their branches
+    "E741",     # the class index `l` of the loop over pairs of classes
+    "N803",     # the argument `X` of the source's signatures
+    "N806",     # the source's local names WX, Xh, hX and hX_sum
+    "PLR0912",  # gradient_hessian keeps its branches
+    "PLR0913",  # gradient_hessian keeps its nine arguments
+    "PLR0915",  # gradient_hessian and gradient_hessian_product keep their statements
+    "PLR0917",  # the positional arguments of the five loss methods
+    "RET505",   # the source's else branches after a return
+    "SIM108",   # the source's if-else assignments of n_dof and sw
+]
+"src/powermean/_vendor/vendor_newton.py" = [
+    "ARG002",   # X, y and sample_weight of the hooks that the Cholesky solver ignores
+    "B008",     # the default linear_loss, built when the module is imported
+    "B027",     # finalize, an optional hook that does nothing in the base class
+    "N803",     # the argument `X` of the source's signatures
+    "T201",     # the diagnostic output printed when verbose is set
+]
+# ----------------------------------------------------------------------------- mypy
+
+[tool.mypy]
+strict = true
+warn_unreachable = true
+# The release check passes the paths of [tool.powermean.check] (rulings 116 and
+# 117: the package, its tests and the tools they need); a bare `mypy` checks these.
+files = ["src", "tests"]
+mypy_path = "src"
+
+# -------------------------------------------------------------------------- pyrefly
+
+# The import roots of the editor's checker (Pyrefly in Positron): the package in src
+# and the support package of scripts/checkpoint.py in scripts, which mypy finds as
+# the folder of the files it checks (task M1.46).  Search paths only: every error and
+# check keeps its default.
+[tool.pyrefly]
+search-path = ["src", "scripts"]
+
+# --------------------------------------------------------------------------- pytest
+
+[tool.pytest.ini_options]
+minversion = "8.3"
+addopts = ["-ra", "--strict-markers", "--strict-config", "--import-mode=importlib"]
+testpaths = ["tests"]
+pythonpath = ["scripts", "tools"]
+xfail_strict = true
+filterwarnings = ["error"]
+# The six tiers of design/07_validation_plan.md, Section 2.  `tools/check.py` runs
+# the first three on every commit and leaves the other three to a schedule or a
+# request; a test without a marker runs on every commit.
+markers = [
+    "algebra: tier 1, algebraic unit tests; every commit, seconds",
+    "oracle: tier 2, equivalence with dense oracles; every commit, under a minute",
+    "parity: tier 3, parity with reference software through stored fixtures; every commit",
+    "montecarlo: tier 4, Monte Carlo validation; on schedule and before a release, hours",
+    "benchmark: tier 5, performance benchmarks; on schedule, tracked over time",
+    "release: tier 6, release tests of installation, platforms, documentation and examples",
+]
+
+# -------------------------------------------------------------------- import-linter
+
+# The import rules of design/11_engineering.md, Section 3.1, checked by
+# `tools/check.py imports`.  The contracts are written with the first modules of
+# their layers (ledger M0, note on M0.1): rule 3 at task M0.1, with the root package
+# and `powermean.testing`; rule 1 and the boundary of the foundation layer at task
+# M0.4, with `powermean.model` next to `powermean.errors` and `powermean.messages`;
+# rule 1 for `powermean.systems`, and the boundary that keeps the model and the
+# foundation below it, at task M0.7, with its first module; rule 3 covers it as is.
+# Task M0.8 writes rule 1 for `powermean.solve`, and the boundary that keeps the
+# earlier stages (model, systems and foundation) below it, with its first module;
+# rule 3 covers it as is too.
+# External packages are in the graph so that a contract can name pandas and
+# Formulaic; a forbidden contract also rejects an indirect import, through any
+# chain of modules of the package.  The contract of rule 4 is written with `_vendor`.
+[tool.importlinter]
+root_packages = ["powermean"]
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "Rule 1: powermean.model imports neither pandas nor Formulaic"
+type = "forbidden"
+source_modules = ["powermean.model"]
+forbidden_modules = ["pandas", "formulaic"]
+
+[[tool.importlinter.contracts]]
+name = "Layers: powermean.errors and powermean.messages do not import powermean.model"
+type = "forbidden"
+source_modules = ["powermean.errors", "powermean.messages"]
+forbidden_modules = ["powermean.model"]
+
+[[tool.importlinter.contracts]]
+name = "Rule 3: nothing in the package imports powermean.testing"
+type = "protected"
+protected_modules = ["powermean.testing"]
+allowed_importers = ["powermean.testing"]
+
+[[tool.importlinter.contracts]]
+name = "Rule 1: powermean.systems imports neither pandas nor Formulaic"
+type = "forbidden"
+source_modules = ["powermean.systems"]
+forbidden_modules = ["pandas", "formulaic"]
+
+[[tool.importlinter.contracts]]
+name = "Layers: powermean.model and the foundation do not import powermean.systems"
+type = "forbidden"
+source_modules = ["powermean.model", "powermean.errors", "powermean.messages"]
+forbidden_modules = ["powermean.systems"]
+
+[[tool.importlinter.contracts]]
+name = "Rule 1: powermean.solve imports neither pandas nor Formulaic"
+type = "forbidden"
+source_modules = ["powermean.solve"]
+forbidden_modules = ["pandas", "formulaic"]
+
+[[tool.importlinter.contracts]]
+name = "Layers: earlier stages do not import powermean.solve"
+type = "forbidden"
+source_modules = ["powermean.model", "powermean.systems", "powermean.errors", "powermean.messages"]
+forbidden_modules = ["powermean.solve"]
+
+# Rule 4, written at task M0.9 with `_vendor`: only the Newton adapter of task M0.10,
+# powermean.solve.newton_convex, imports the carried scikit-learn files, and they
+# import one another.  With `as_packages = false` the adapter is named before it
+# exists, and the expressions ending in `**` protect, and allow, every module below
+# the vendor root.
+[[tool.importlinter.contracts]]
+name = "Rule 4: only the Newton adapter imports powermean._vendor"
+type = "protected"
+protected_modules = ["powermean._vendor", "powermean._vendor.**"]
+allowed_importers = ["powermean._vendor", "powermean._vendor.**", "powermean.solve.newton_convex"]
+as_packages = false
+
+[[tool.importlinter.contracts]]
+name = "Rule 4: only the IOLS direct-route adapter imports powermean._native.iols"
+type = "protected"
+protected_modules = ["powermean._native.iols", "powermean._native.iols.**"]
+allowed_importers = ["powermean._native.iols", "powermean._native.iols.**", "powermean.solve.iols.direct_route"]
+as_packages = false
+
+# Task M0.16 writes rule 1 for `powermean.inference`, and the boundary that keeps the
+# earlier stages (model, systems, solve and foundation) below it, with its first
+# modules; inference imports the contract of the solve stage, never the reverse.
+# Rule 3 covers it as is.
+[[tool.importlinter.contracts]]
+name = "Rule 1: powermean.inference imports neither pandas nor Formulaic"
+type = "forbidden"
+source_modules = ["powermean.inference"]
+forbidden_modules = ["pandas", "formulaic"]
+
+[[tool.importlinter.contracts]]
+name = "Layers: earlier stages do not import powermean.inference"
+type = "forbidden"
+source_modules = ["powermean.model", "powermean.systems", "powermean.solve", "powermean.errors", "powermean.messages"]
+forbidden_modules = ["powermean.inference"]
+
+# Task M0.18 writes the two boundaries of `powermean.formula`, the first module of the
+# interface layer, with its first modules: the later stages of the pipeline and the
+# foundation do not import it (rule 1 and the layers), and it imports no later stage
+# (rule 2); it may import pandas, Formulaic, NumPy and the foundation.  Rule 3 covers
+# it as is.
+[[tool.importlinter.contracts]]
+name = "Layers: later stages and the foundation do not import powermean.formula"
+type = "forbidden"
+source_modules = ["powermean.model", "powermean.systems", "powermean.solve", "powermean.inference", "powermean.errors", "powermean.messages"]
+forbidden_modules = ["powermean.formula"]
+
+[[tool.importlinter.contracts]]
+name = "Layers: powermean.formula imports no later stage"
+type = "forbidden"
+source_modules = ["powermean.formula"]
+forbidden_modules = ["powermean.model", "powermean.systems", "powermean.solve", "powermean.inference"]
+
+# Task M0.19 writes the boundaries of `powermean.data`, the first package of the
+# preparation layer, with its first modules: it imports neither pandas nor Formulaic
+# (rule 1), and neither the interface (`powermean.formula`) nor a later stage of the
+# pipeline (`powermean.systems`, `powermean.solve`, `powermean.inference`; rules 1 and
+# 2); it may import NumPy, `powermean.model` and the foundation.  The model and the
+# foundation, which it imports, do not import it.  Rule 3 covers it as is.
+[[tool.importlinter.contracts]]
+name = "Rule 1: powermean.data imports neither pandas nor Formulaic"
+type = "forbidden"
+source_modules = ["powermean.data"]
+forbidden_modules = ["pandas", "formulaic"]
+
+[[tool.importlinter.contracts]]
+name = "Layers: powermean.data imports neither the interface nor a later stage"
+type = "forbidden"
+source_modules = ["powermean.data"]
+forbidden_modules = ["powermean.formula", "powermean.systems", "powermean.solve", "powermean.inference"]
+
+[[tool.importlinter.contracts]]
+name = "Layers: powermean.model and the foundation do not import powermean.data"
+type = "forbidden"
+source_modules = ["powermean.model", "powermean.errors", "powermean.messages"]
+forbidden_modules = ["powermean.data"]
+
+# Task M0.20 writes the boundaries of the composing helper `powermean._prepare`, which
+# feeds the evaluated frame of the interface to the sample construction of the
+# preparation layer: it imports the interface, the preparation layer, the model and
+# the foundation, and no later stage of the pipeline (rule 2); no stage of the pipeline
+# and no foundation module imports it, since it is coordination, not a stage.  The same
+# task states the boundary that keeps `powermean.data` out of `powermean.formula`, so
+# that the front end cannot reach `powermean.model` through the preparation layer.
+# Rule 3 covers the helper as is.
+[[tool.importlinter.contracts]]
+name = "Layers: powermean.formula does not import powermean.data"
+type = "forbidden"
+source_modules = ["powermean.formula"]
+forbidden_modules = ["powermean.data"]
+
+[[tool.importlinter.contracts]]
+name = "Layers: powermean._prepare imports no later stage"
+type = "forbidden"
+source_modules = ["powermean._prepare"]
+forbidden_modules = ["powermean.systems", "powermean.solve", "powermean.inference"]
+
+[[tool.importlinter.contracts]]
+name = "Layers: no stage imports powermean._prepare"
+type = "forbidden"
+source_modules = ["powermean.formula", "powermean.data", "powermean.model", "powermean.systems", "powermean.solve", "powermean.inference", "powermean.errors", "powermean.messages"]
+forbidden_modules = ["powermean._prepare"]
+
+# Task M0.21 writes the boundary of `powermean.results`, the result layer of
+# `DESIGN.md`, Section 5.1: it imports the interface, the composing helper, the
+# preparation layer, every stage of the pipeline and the foundation, and no stage,
+# helper or foundation module imports it, since it consumes what they formed.  Rule 3
+# covers it as is, and rule 4 keeps it from the carried scikit-learn files.
+[[tool.importlinter.contracts]]
+name = "Layers: no stage imports powermean.results"
+type = "forbidden"
+source_modules = ["powermean.formula", "powermean.data", "powermean._prepare", "powermean.model", "powermean.systems", "powermean.solve", "powermean.inference", "powermean.errors", "powermean.messages"]
+forbidden_modules = ["powermean.results"]
+
+# Task M0.22 writes the two boundaries of the public interface, `powermean.interface`
+# (the collectors, the expressions, the preparation and the dispatch behind the API)
+# and `powermean.api` (the public functions): the interface imports the result layer,
+# the helper, the preparation layer, every stage and the foundation, and no stage,
+# helper, result or foundation module imports it; the API imports the interface and
+# the layers below, and nothing below the root package imports it (rule 2: the public
+# functions are the last stage; the root package resolves them lazily).  Rule 3
+# covers both as is, and rule 4 keeps them from the carried scikit-learn files.
+[[tool.importlinter.contracts]]
+name = "Layers: no stage imports powermean.interface"
+type = "forbidden"
+source_modules = ["powermean.formula", "powermean.data", "powermean._prepare", "powermean.model", "powermean.systems", "powermean.solve", "powermean.inference", "powermean.results", "powermean.errors", "powermean.messages"]
+forbidden_modules = ["powermean.interface"]
+
+[[tool.importlinter.contracts]]
+name = "Layers: nothing below the root package imports powermean.api"
+type = "forbidden"
+source_modules = ["powermean.interface", "powermean.formula", "powermean.data", "powermean._prepare", "powermean.model", "powermean.systems", "powermean.solve", "powermean.inference", "powermean.results", "powermean.errors", "powermean.messages"]
+forbidden_modules = ["powermean.api"]
+
+[tool.coverage.run]
+source = ["powermean"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 95
+# Keep the fail-under comparison precise at the release coverage denominator.
+precision = 6
+show_missing = true
+skip_covered = true
+
+[[tool.importlinter.contracts]]
+name = "Only the exact FE basis adapter imports the optional basis kernel"
+type = "protected"
+protected_modules = ["powermean._native.basis", "powermean._native.basis.**"]
+allowed_importers = ["powermean._native.basis", "powermean._native.basis.**", "powermean.fe.certificate_basis"]
+
+# Named exceptions to the size limits (owner's rulings 116 and 117): the functions
+# over the limits at the 0.1 release, one entry per file with the rules it needs and
+# the functions by name.  tools/check_lint.py runs ruff again without this table and
+# fails on any size finding that tools/size_exceptions.json does not name, so the
+# limits stay in force for every other function of these files and for new code.
+# Splitting them is item 1 of the 0.2 register.
+[tool.ruff.lint.extend-per-file-ignores]
+"src/powermean/data/sample_fe_source.py" = [
+    "PLR0912",  # _native_encoded 14 > 12
+]
+"src/powermean/describe/outcome.py" = [
+    "PLR0917",  # _inference 6 > 5
+]
+"src/powermean/fe/certificate_basis.py" = [
+    "C901",  # _fit_basis_prepared 23 > 12; _packed_echelon 14 > 12
+    "PLR0911",  # _fit_basis_prepared 10 > 8
+    "PLR0912",  # _fit_basis_prepared 24 > 12; _packed_echelon 14 > 12
+    "PLR0915",  # _fit_basis_prepared 73 > 50
+    "PLR0917",  # _operational_basis_prepared 7 > 5; _proposal_prepared 6 > 5; _valid_prepared 7 > 5
+]
+"src/powermean/fe/certificate_coordinates.py" = [
+    "C901",  # _opening_context 29 > 12
+    "PLR0911",  # _opening_context 23 > 8
+    "PLR0912",  # _opening_context 30 > 12
+]
+"src/powermean/fe/geometry_rank.py" = [
+    "PLR0911",  # _split_residual 9 > 8
+]
+"src/powermean/fe/profile_arithmetic.py" = [
+    "PLR0917",  # _build_profile_problem 6 > 5
+]
+"src/powermean/fe/reductions.py" = [
+    "C901",  # _prepared_reductions 25 > 12
+]
+"src/powermean/formula/names.py" = [
+    "C901",  # _read 13 > 12
+    "PLR0912",  # _read 13 > 12
+]
+"src/powermean/inference/absorbed_preflight.py" = [
+    "C901",  # _preflight 13 > 12
+    "PLR0912",  # _preflight 15 > 12
+    "PLR0915",  # _preflight 62 > 50
+]
+"src/powermean/interface/_ordinary_pair_default.py" = [
+    "C901",  # _ordinary_pair 18 > 12
+    "PLR0912",  # _ordinary_pair 17 > 12
+    "PLR0917",  # _pair_partition 7 > 5
+]
+"src/powermean/interface/cancelled_fit.py" = [
+    "PLR0915",  # fit_cancelled_private 52 > 50
+]
+"src/powermean/interface/fe_dispatch.py" = [
+    "C901",  # _cancelled 15 > 12; _joint 15 > 12
+    "PLR0912",  # _cancelled 14 > 12; _joint 17 > 12; _joint_audit 14 > 12
+    "PLR0915",  # _cancelled 81 > 50; _joint 66 > 50
+    "PLR0917",  # _without_near_collinear 6 > 5
+]
+"src/powermean/interface/fe_joint_result.py" = [
+    "C901",  # AbsorbedResultBackend._inference 14 > 12
+    "PLR0912",  # AbsorbedResultBackend._inference 15 > 12
+]
+"src/powermean/interface/fe_light.py" = [
+    "C901",  # _eligible 16 > 12; _light_core 20 > 12
+    "PLR0911",  # _eligible 12 > 8
+    "PLR0912",  # _eligible 16 > 12; _light_core 21 > 12
+    "PLR0913",  # LightCore.__init__ 10 > 8
+    "PLR0915",  # _light_core 88 > 50
+    "PLR0917",  # LightLogBackend.__init__ 8 > 5; _counts 7 > 5
+]
+"src/powermean/interface/fe_linear.py" = [
+    "PLR0913",  # linear_absorbed_fit 10 > 8
+    "PLR0917",  # _hc_scale 8 > 5
+]
+"src/powermean/interface/owned_fit_state.py" = [
+    "C901",  # _passive_values 18 > 12; _passive_values.passive 17 > 12; normalized_numeric_inputs 13 > 12
+    "PLR0911",  # normalized_numeric_inputs 9 > 8
+    "PLR0912",  # _passive_values.passive 18 > 12
+]
+"src/powermean/interface/retained_admission.py" = [
+    "PLR0912",  # _resolve_interface_preparation 13 > 12
+]
+"src/powermean/interface/retained_metadata.py" = [
+    "PLR0911",  # _owned_missing_count 9 > 8
+    "PLR0913",  # BoundDependence._from_owned 11 > 8
+]
+"src/powermean/results/absorbed_binding.py" = [
+    "PLR0913",  # _capture_admission 12 > 8
+    "PLR0917",  # _capture_admission 12 > 5
+]
+"src/powermean/results/absorbed_sample_binding.py" = [
+    "C901",  # _plain_effect_blocks 22 > 12
+    "PLR0911",  # _plain_effect_blocks 18 > 8
+    "PLR0912",  # _plain_effect_blocks 22 > 12
+]
+"src/powermean/solve/absorbed_certificate_inner.py" = [
+    "PLR0917",  # _verified_auxiliary 6 > 5
+]
+"src/powermean/solve/cancelled_certificate.py" = [
+    "PLR0913",  # _certify 9 > 8; certify_cancelled 9 > 8
+]
+"src/powermean/solve/compact_scaling.py" = [
+    "PLR0917",  # _paired_entries 7 > 5
+]
+"src/powermean/solve/reduced_execution.py" = [
+    "PLR0911",  # _completed_projection 12 > 8
+    "PLR0917",  # _completed_projection 7 > 5
+]
+"tests/results/test_handoff.py" = [
+    "PLR0915",  # test_the_exact_root_certifies_with_missing_inference_when_saturated 51 > 50
+]
+"tests/tools/test_project_setup.py" = [
+    "PLR0915",  # test_import_contracts_are_the_rules_of_the_design_for_existing_modules 51 > 50
+]
+
+# ------------------------------------------------------------------- release check
+
+# The paths of the release check (rulings 116 and 117): the package, its tests, and
+# by name the tools and scripts that tools/check.py runs or that the tests import.
+# The other tools and scripts (ports, fixture builders, stand-ins, the retired
+# perturbation catalogs) stay in the repository and are outside the check.  A new
+# tool enters the check by being added here.
+[tool.powermean.check]
+paths = [
+    "src",
+    "tests",
+    "scripts/checkpoint_examples.py",
+    "scripts/checkpoint_support",
+    "tools/absorb_checks.py",
+    "tools/absorb_exact.py",
+    "tools/absorb_layouts.py",
+    "tools/absorb_test_support.py",
+    "tools/absorbed_certificate_checks.py",
+    "tools/build_campaign_fixture.py",
+    "tools/build_cases.py",
+    "tools/campaign_archive.py",
+    "tools/case_build",
+    "tools/certificate_checks.py",
+    "tools/check.py",
+    "tools/check_lint.py",
+    "tools/check_design.py",
+    "tools/collinearity_checks.py",
+    "tools/criterion_reference.py",
+    "tools/data_checks.py",
+    "tools/export_spec.py",
+    "tools/glm_checks.py",
+    "tools/group_checks.py",
+    "tools/inference_checks.py",
+    "tools/joint_checks.py",
+    "tools/linear_checks.py",
+    "tools/logols_public_checks.py",
+    "tools/m1_16_parity.py",
+    "tools/m1_17_frame_oracle.py",
+    "tools/m1_17_native.py",
+    "tools/majorant_evaluator.py",
+    "tools/multiway_oracles.py",
+    "tools/newton_checks.py",
+    "tools/oracle_checks.py",
+    "tools/order_checks.py",
+    "tools/powermean_stock_oracles",
+    "tools/profile_checks.py",
+    "tools/profile_nb2_checks.py",
+    "tools/reference_checks.py",
+    "tools/result_checks.py",
+    "tools/retained_dependence_oracles.py",
+    "tools/retained_state_checks.py",
+    "tools/retained_state_guards.py",
+    "tools/sample_checks.py",
+    "tools/spec_export",
+    "tools/stata_fixture",
+    "tools/status.py",
+    "tools/support_cases.py",
+    "tools/support_checks.py",
+    "tools/support_gamma_cases.py",
+    "tools/support_gamma_checks.py",
+    "tools/vendor_checks.py",
+    "tools/vendor_newton_checks.py",
+    "tools/verify_ports.py",
+    "tools/verify_ports_certificate.py",
+    "tools/verify_ports_common.py",
+    "tools/verify_ports_data.py",
+    "tools/verify_ports_data_cases.py",
+    "tools/verify_ports_data_sides.py",
+    "tools/verify_ports_groups.py",
+    "tools/verify_ports_groups_cases.py",
+    "tools/verify_ports_inference.py",
+    "tools/verify_ports_inference_cases.py",
+    "tools/verify_ports_joint.py",
+    "tools/verify_ports_joint_cases.py",
+    "tools/verify_ports_newton.py",
+    "tools/verify_ports_newton_solves.py",
+    "tools/verify_ports_order.py",
+    "tools/verify_ports_order_cases.py",
+    "tools/verify_ports_reference.py",
+    "tools/verify_ports_reference_cases.py",
+    "tools/verify_ports_rows.py",
+    "tools/verify_ports_vendor.py",
+    "tools/verify_ports_vendor_cases.py",
+    "tools/verify_ports_vendor_equivalents.py",
+    "tools/verify_ports_vendor_fits.py",
+    "tools/verify_ports_zero.py",
+]

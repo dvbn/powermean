@@ -33,10 +33,10 @@ NB2 working variance ``V(m) = m + kappa m^2`` with any ``kappa >= 0``, and
 ``SolverOptions`` the record that ``solver_defaults`` returns.  The result is a
 :class:`~powermean.results.result.Result`.
 
-Fixed effects: the normal formula and prepared-fit routes
-require an explicit `absorbed="index"` or `"profiled"` in `solver_options`.
-Joint fits also require an actual `sample_request` control record; cancellation
-requires actual `controls` (CancelledFitControls). Preparation stays order neutral.
+Fixed effects: the formula and prepared-fit routes default to `absorbed="profiled"`.
+Choose `"index"` explicitly in `solver_options` to use that organization. Joint
+fits accept an optional `sample_request` record; cancelled fits accept an optional
+`controls` record (CancelledFitControls). Preparation stays order neutral.
 A joint fit with `tau` outside `[1, 2]` at a nonzero `omega` is a selected local
 root: rank checks only on its sample (no existence analysis, a `CoverageWarning`
 where the root is not characterized), the certified nearest convex fit of the same
@@ -51,14 +51,15 @@ effects is changed.
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Mapping
 from typing import Unpack
 
 import pandas as pd
 
 from powermean import messages
-from powermean.errors import SpecificationError
-from powermean.formula.grammar import parse_formula
+from powermean.errors import CoverageWarning, SpecificationError
+from powermean.formula.grammar import collapsed_powers, parse_formula
 from powermean.interface.dispatch import fit_prepared
 from powermean.interface.options import (
     DEFAULT_SOLVER,
@@ -87,10 +88,6 @@ NB2 = NB2Variance
 # secondary warning names the caller's line: the helper, the public function, the
 # caller.
 _CALLER_DEPTH = 3
-# Fixed effects are switched off in this version: a formula that names them is refused.
-_FIXED_EFFECTS = (
-    "fixed effects (the part of a formula after '|'); they are planned for version 0.1"
-)
 
 
 def solver_defaults(solver: str = DEFAULT_SOLVER) -> SolverOptions | IolsOptions:
@@ -201,6 +198,19 @@ def _has_fixed_effects(formula: object) -> bool:
         return False
 
 
+def _note_collapsed_powers(formula: str, depth: int) -> None:
+    """Warn, at the caller ``depth`` frames up, of each power that adds no column."""
+    try:
+        regressors = parse_formula(formula).regressors
+    except (SpecificationError, TypeError, AttributeError):
+        return  # a formula that cannot be read is refused where it is prepared
+    for written, variable, fix in collapsed_powers(regressors):
+        fields = {"written": written, "variable": variable, "fix": fix}
+        warnings.warn(
+            CoverageWarning("coverage.power_collapsed", fields), stacklevel=depth + 1
+        )
+
+
 def _fit_problem(
     problem: PreparedProblem,
     options: Mapping[str, object],
@@ -258,13 +268,11 @@ def prepare(
         An unknown keyword, a value outside its domain, contradictory arguments, a
         malformed formula, or a feature that is not available.
     SampleError
-        A negative outcome; no usable observation.
+        A finite negative outcome among complete rows or no usable observation,
+        including an empty frame. Non-finite outcomes are excluded as missing.
     """
+    _note_collapsed_powers(formula, 2)
     has_fe = _has_fixed_effects(formula)
-    if has_fe:
-        raise SpecificationError(
-            "specification.unimplemented", {"feature": _FIXED_EFFECTS}
-        )
     collected = collect(
         options,
         "keyword of prepare",
@@ -300,11 +308,8 @@ def _fit(
     stacklevel: int,
 ) -> Result:
     """Prepare once and fit once: ``fit`` and the three convenience wrappers."""
+    _note_collapsed_powers(formula, stacklevel)
     has_fe = _has_fixed_effects(formula)
-    if has_fe:
-        raise SpecificationError(
-            "specification.unimplemented", {"feature": _FIXED_EFFECTS}
-        )
     collected = collect(
         options,
         "keyword of fit",
@@ -353,10 +358,10 @@ def fit(formula: str, data: pd.DataFrame, **options: Unpack[FitOptions]) -> Resu
         ``"robust"``, the default, with the keyword ``ssc``, several dimensions as
         ``{"cluster": "a + b"}`` with ``"multiway"`` and ``"psd"`` and the keyword
         ``ssc``, or a HC method by its exact string, ``"HC0"`` to ``"HC5"`` or
-        ``"HC4m"``, with its ``ssc`` and ``bread``),
-        ``solver``,
-        ``solver_options``, ``tol``, ``start``, ``on_failure`` and
-        ``keep_influence``; a feature that is not available is refused.
+        ``"HC4m"``, with its ``ssc`` and ``bread``). Joint fixed-effect fits also
+        accept these named HC methods. Their leverage calculation includes the fixed
+        effects. Other options include ``solver``, ``solver_options``, ``tol``,
+        ``start``, ``on_failure`` and ``keep_influence``.
 
     Returns
     -------
@@ -371,8 +376,9 @@ def fit(formula: str, data: pd.DataFrame, **options: Unpack[FitOptions]) -> Resu
         An unknown keyword, a value outside its domain, contradictory arguments, a
         malformed formula, or a feature that is not available.
     SampleError
-        A negative outcome; zeros at ``omega <= 0`` without ``positive_only=True``;
-        no usable observation.
+        A finite negative outcome among complete rows, zeros at ``omega <= 0``
+        without ``positive_only=True``, or no usable observation, including an
+        empty frame. Non-finite outcomes are excluded as missing.
     ConvergenceError
         No certified solution, with ``on_failure="raise"``: the last state and the
         certificate, where one was formed, are attached.

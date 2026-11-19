@@ -1,6 +1,9 @@
 """The linear path without effects: weighted least squares of the log-response.
 
-Log OLS is ``omega = 0``.  A solver returns a candidate, never a claim of convergence.
+``design/02_computation.md``, Sections 1 (rules 2 and 3) and 5.5; file 01, Section 3.3
+(``omega = 0``, log OLS); ``DESIGN.md``, Section 5.3 (a solver returns a candidate,
+never a claim of convergence); decisions D41, D47, D49 and D51.  File 06 designates no
+source for this path: the module is written from the design.
 
 The problem.  On a log-response ``l``, a dense design ``X``, an offset ``o`` and
 nonnegative weights ``a``, :func:`solve` computes over every row of positive weight
@@ -8,11 +11,11 @@ nonnegative weights ``a``, :func:`solve` computes over every row of positive wei
     beta = argmin_b  1/2 sum_i a_i (l_i - o_i - x_i' b)^2,   e = l - o - X beta,
 
 whose normal equations are ``X'(a e) = 0``, sums over the rows.  The caller forms
-``l = log Y``: ``l`` is any finite real, negative ones included, and is not
+``l = log Y`` (task M0.17): ``l`` is any finite real, negative ones included, and is not
 exponentiated.  The offset has coefficient one and is not multiplied by an order, no
 coefficient is divided by one, no intercept is added and nothing is centered: every
 column given is kept.  The three kinds of weights share this solve; they differ in
-inference.  Rows of zero weight are validated and keep their position, as
+inference (task M0.16).  Rows of zero weight are validated and keep their position, as
 in the ``SamplingUnits`` of :mod:`powermean.systems.joint`, but enter no arithmetic.
 
 The factorization.  ``beta`` solves ``sqrt(a) X b = sqrt(a) (l - o)`` in the
@@ -23,24 +26,25 @@ the normal equations or an inverse.  LAPACK counts as zero the singular values a
 ``M`` rows and ``N`` columns: the default of NumPy's ``lstsq`` since NumPy 2.0, on the
 same driver, and the threshold of NumPy's ``matrix_rank``, whose documentation gives it
 as MATLAB's and as the bound that recognizes a column that is a linear combination of
-others in floating point, whose computed singular value is roundoff rather than zero.
-SciPy's default, ``eps``, can count that roundoff as a direction.  The cutoff
+others in floating point, whose computed singular value is roundoff rather than zero
+(D51).  SciPy's default, ``eps``, can count that roundoff as a direction.  The cutoff
 decides whether every coefficient is identified, and nothing else: it is neither the
-certificate's ``tol`` nor its ``rcond_min``, and it is not an option.
+certificate's ``tol`` nor its ``rcond_min`` (D47), and it is not an option.
 
 The rank.  At full column rank the coefficients and residuals are formed.  Below it,
 fewer rows of positive weight than columns included, none is: the library's
 minimum-norm solution is discarded, and no ridge, dropped column, pseudoinverse or
-other solver replaces it.  The rank and singular values are kept as the
+other solver replaces it (rule 2; D41).  The rank and singular values are kept as the
 library reported them.  Its residual sums of squares are never read; the residuals are
-recomputed from the unweighted rows.  Near-collinearity is not collinearity:
-singular values above the cutoff are solved, however small their ratio,
+recomputed from the unweighted rows.  Near-collinearity is not collinearity (file 02,
+Section 3): singular values above the cutoff are solved, however small their ratio,
 which they report.
 
 The candidate.  :class:`LinearCandidate` is owned and read-only, and never a
-certification claim.  The certificate evaluates the joint system and the
+certification claim.  The certificate of task M0.11 evaluates the joint system and the
 status of a solve reads a Newton candidate; neither receives it.  No standard error is
-formed, so the coefficient gate is untouched.
+formed, so the coefficient gate of D49 is untouched.  A certificate of the linear path
+remains necessary before a public log OLS fit.
 
 Failures.  A value that is not representable in float64 (``l - o``, the weighted design
 or response, the solution or the residuals) ends the solve with ``numerical_breakdown``
@@ -61,7 +65,7 @@ from dataclasses import dataclass
 from typing import Literal, NamedTuple, Protocol, cast, get_args
 
 import numpy as np
-from numpy.typing import ArrayLike
+from numpy.typing import ArrayLike, NDArray
 
 from powermean.model.rows import _immutable
 from powermean.model.variance import FloatArray, _finite_array, _finite_result
@@ -215,7 +219,11 @@ def _weights(weights: ArrayLike | None, rows: int) -> FloatArray:
 
 
 class Problem(NamedTuple):
-    """The rows of positive weight, copied from the inputs, and their positions."""
+    """The rows of positive weight, taken from the inputs, and their positions.
+
+    Read, never written: where every row has a positive weight, a C-contiguous input
+    is taken as it is, whose rows are those of its copy in the same layout.
+    """
 
     response: FloatArray
     design: FloatArray
@@ -237,7 +245,26 @@ def _problem(
     mass = _weights(weights, rows)
     active = mass > 0
     units = SamplingUnits(_positions(active), _positions(~active), rows)
-    return Problem(values[active], matrix[active], shift[active], mass[active], units)
+    every = bool(active.all())
+    return Problem(
+        _active(values, active, every),
+        _active(matrix, active, every),
+        _active(shift, active, every),
+        _active(mass, active, every),
+        units,
+    )
+
+
+def _active(values: FloatArray, active: NDArray[np.bool_], every: bool) -> FloatArray:
+    """``values[active]``, or ``values`` itself when ``every`` row is active.
+
+    Only a C-contiguous array is taken as it is: its rows, values and layout are then
+    those of the selected copy.
+    """
+    if every and values.flags.c_contiguous:
+        return values
+    taken: FloatArray = values[active]
+    return taken
 
 
 # ------------------------------------------------------------------ the arithmetic

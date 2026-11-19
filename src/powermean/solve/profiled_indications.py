@@ -1,21 +1,27 @@
 """The existence indications of the profiled Newton solver: ZC, GC and their alarm.
 
-During iteration the solver stops when fitted means at zero rows collapse or the
-criterion decreases without bound, and nothing is dropped on the basis of an iterate.
-Internal module, separate from the whole-point state of
-:mod:`powermean.solve.profiled_loss`.
+``design/02_computation.md``, Section 4 (during iteration: stop when fitted means at
+zero rows collapse or the criterion decreases without bound, and nothing is dropped on
+the basis of an iterate); the M1.11 contract with its private mechanics B (Section 3)
+and their reviews; decision D51.  Task M1.11, private; separated from the whole-point
+state of :mod:`powermean.solve.profiled_loss` by correction A, the definitions
+unchanged.
 
-Indications: :func:`zero_row_alarm` (ZC) and
+Indications (mechanics B, Section 3): :func:`zero_row_alarm` (ZC) and
 :func:`chord_alarm` (GC, ``tau = 2`` only), evaluated by the whole-point state at the
 completed initial profile, at each newly accepted point after the native convergence
 test (before the iteration could honor it), and at the fresh final point; never at a
-held or refused trial.  ZC is an UNSCALED adaptation, in the original transformed units,
-of the log-mean heuristic of ``ppmlhdfe`` 2.3.4 (``ppmlhdfe.mata``, lines 137 to 139,
-591 to 592 and 683 to 690, read as a convention; no code copied): ``ppmlhdfe``
-standardizes the outcome by default, so no parity of its alarms or unit invariance is
-claimed.  GC compares consecutive
-accepted points of one attempt with exact comparisons and a checked normalization;
-its rounded
+held or refused trial.  ZC is read at an accepted point only when that point passed the
+native convergence test: an iterate that is not a candidate root can carry a very low
+index on a zero row and then recover, and stopping there ends the fit although its
+root exists.  ZC adapts S9's log-mean heuristic (``ppmlhdfe.mata``, lines 137 to 139,
+591 to 592 and 683 to 690, read as a convention; no code copied) without S9's cap of
+the margin at zero, which is the one term that depends on the outcome's unit: the
+threshold moves with the least index of a positive row, so multiplying the outcome by
+a constant changes no alarm.  No parity with S9's alarms is claimed.  GC compares
+consecutive accepted points of one attempt (the two recession patterns of
+``plan/evidence/M1.8_contract.txt``, lines 15 to 25) with exact comparisons and M1.8's
+checked normalization; its rounded
 chord is an indication, not a reconstructed recession direction, and a finite decrease
 proves no unboundedness.  Indications at one point coalesce into one :class:`Alarm`.
 Neither the presence nor the absence of an alarm is an existence certificate.
@@ -36,11 +42,9 @@ from powermean.model.variance import FloatArray
 from powermean.solve.support_gamma_lp import dot, normalized
 from powermean.solve.support_problem import indices
 
-# ppmlhdfe 2.3.4, ppmlhdfe.mata, line 138: mu_tol = 1e-6, used through log(mu_tol)
-# (line 592).
+# S9 ppmlhdfe.mata, line 138: mu_tol = 1e-6, used through log(mu_tol) (line 592).
 LOG_MEAN_TOLERANCE = math.log(1e-6)
-# ppmlhdfe 2.3.4, ppmlhdfe.mata, line 687: the margin 5 added to the least index of a
-# positive row.
+# S9 ppmlhdfe.mata, line 687: the margin 5 added to the least index of a positive row.
 INDEX_MARGIN = 5.0
 
 Where = Literal["initial", "accepted", "final"]
@@ -48,11 +52,12 @@ Where = Literal["initial", "accepted", "final"]
 
 @dataclass(frozen=True, eq=False)
 class ZeroRowAlarm:
-    """ZC: zero rows whose index is at most ``h``.
+    """ZC: zero rows whose index is at most ``h`` (mechanics B, Section 3).
 
-    ``threshold`` is ``h = log(1e-6) + min(lowest + 5, 0)``, ``lowest`` the least index
-    of a positive row; ``rows`` the triggering rows of the sample, ``positions`` their
-    original positions and ``indexes`` their indexes.
+    ``threshold`` is ``h = log(1e-6) + lowest + 5``, ``lowest`` the least index of a
+    positive row, so that the comparison does not depend on the outcome's unit;
+    ``rows`` the triggering rows of the sample, ``positions`` their original positions
+    and ``indexes`` their indexes.
     """
 
     threshold: float
@@ -75,7 +80,7 @@ def zero_row_alarm(
     if not positive.any():
         raise ValueError("no row has a positive outcome: the support is unresolved")
     lowest = float(np.min(index[positive]))
-    threshold = LOG_MEAN_TOLERANCE + min(lowest + INDEX_MARGIN, 0.0)
+    threshold = LOG_MEAN_TOLERANCE + lowest + INDEX_MARGIN
     rows = np.flatnonzero(~positive & (index <= threshold))
     if not rows.size:
         return None
@@ -118,7 +123,7 @@ def chord_alarm(
     """GC between two consecutive accepted points ``(L/A, q)``, or ``None``.
 
     Requires ``L_new < L_old``; ``d = q_new - q_old`` by the checked difference; when
-    every ``d[P] >= 0``, ``sigma = sum(rho d)`` with the checked normalized weights
+    every ``d[P] >= 0``, ``sigma = sum(rho d)`` with M1.8's checked normalized weights
     and product sum, and the alarm when ``sigma < 0`` or ``sigma == 0`` with some
     ``d[P] > 0``.  Exact comparisons, no margin.  ``ValueError`` for points of other
     rows; ``FloatingPointError`` when a required quantity is not representable, which

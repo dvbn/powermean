@@ -1,59 +1,67 @@
 """The point of a fit with its influence record and default covariance, formed once.
 
+``design/04_inference_and_effects.md``, Sections 1 and 2.3; decisions D49 and D55.
 The handoff of a fit (:mod:`powermean.results.handoff`) forms, after its checks, the
 point in the coordinates of the solver, the influence record of that point by the
-primitives (:mod:`powermean.inference.contributions`: the observed bread, never the
-expected information, from the certificate's fresh evaluation; or the linear candidate
-with the retained scaled design), the covariance of the point by the convention for the
-inference requested at the fit, in the coordinates of the solver
+accepted primitives (:mod:`powermean.inference.contributions`: the observed bread,
+never the expected information, from the certificate's fresh evaluation; or the
+linear candidate with the retained scaled design), the covariance of the point by the
+convention for the inference requested at the fit, in the coordinates of the solver
 (:class:`~powermean.inference.convention.Covariance`, against which the handoff binds
-the standard errors that the certificate's coefficient gate read), and that covariance
-reported once (:mod:`powermean.results.covariance`).  Where the certificate formed no
-correction, because its equilibrated factorization failed its test of conditioning, the
-map ``C^-1`` does not exist and no influence record or covariance is formed: the point
-keeps its diagnostics.  Where the linear path formed no coefficients, there is no point.
-On the linear route certified afresh, the influence record is that of the certificate's
-fresh evaluation of the original linear equation (:func:`linear_certified_point`), never
-the cached residuals of the candidate.  Nothing here solves, certifies or reselects a
-row.
+the standard errors that the certificate's coefficient gate read), and that
+covariance reported once (:mod:`powermean.results.covariance`).  Where the certificate
+formed no correction, because its equilibrated factorization failed its test of
+conditioning, the map ``C^-1`` does not exist and no influence record or covariance is
+formed: the point keeps its diagnostics.  Where the linear path formed no
+coefficients, there is no point.  On the linear route certified afresh (task M0.22),
+the influence record is that of the certificate's fresh evaluation of the original
+linear equation (:func:`linear_certified_point`), never the cached residuals of the
+candidate.  Nothing here solves, certifies or reselects a row.
 
-A named HC method requested at the fit.  Its covariance at the point is formed by the
-entry points of :mod:`powermean.inference.hc`: :func:`~powermean.inference.hc.joint_hc`
-of the system that the fit solved at the certificate's evaluation, which it binds to
-that system bit for bit, or :func:`~powermean.inference.hc.linear_hc` of the solve
-captured before it ran, under the convention in force at the fit
-(:func:`fit_convention`: the request's explicit convention, else the default
-``"stata"``, whose factor a named method never takes).  Its record
-(:func:`powermean.results.covariance.hc_default`) holds the covariance, the reported
-one, the direct standard errors and the applied convention, without a row array, so that
-``keep_influence=False`` discards nothing that it keeps.  :func:`fit_preflight` runs the
-refusals that need no point before the fit solves, and :func:`joint_provider` and
-:func:`linear_provider` form the reported-scale provider of the inference requested at
-the fit for its certificate: the unchanged robust and one-way providers, those of
-:mod:`powermean.inference.hc_provider`, or those of a typed cluster request.
+A named HC method requested at the fit (``plan/evidence/M1_contract.txt``, rules B1,
+B2, B10, B12(a) and Sections 3.1 and 3.2; decisions D57 and D60).  Its covariance at
+the point is formed by the accepted entry points of :mod:`powermean.inference.hc`:
+:func:`~powermean.inference.hc.joint_hc` of the system that the fit solved at the
+certificate's evaluation, which it binds to that system bit for bit, or
+:func:`~powermean.inference.hc.linear_hc` of the solve captured before it ran, under
+the convention in force at the fit (:func:`fit_convention`: the request's explicit
+convention, else the default ``"stata"``, whose factor a named method never takes).
+Its record (:func:`powermean.results.covariance.hc_default`) holds the covariance, the
+reported one, the direct standard errors and the applied convention, without a row
+array, so that ``keep_influence=False`` discards nothing that it keeps.
+:func:`fit_preflight` runs the refusals that need no point before the fit solves, and
+:func:`joint_provider` and :func:`linear_provider` form the reported-scale provider of
+the inference requested at the fit for its certificate: the unchanged robust and
+one-way providers, those of :mod:`powermean.inference.hc_provider`, or those of a
+typed cluster request.
 
 A typed cluster request at the fit (``{"cluster": "a + b"}`` with ``"multiway"`` and
-``"psd"``, or any cluster request with an explicit ``ssc``) is answered by the
-convention engine (:mod:`powermean.results.cluster_covariance` over
-:mod:`powermean.results.retained_inference`): its preflight binds its dimensions and
-applies its convention to the counts before the solve, its providers give the
+``"psd"``, or any cluster request with an explicit ``ssc``; contract, rules B1, B3,
+B10, B12(a) and Sections 3.1, 3.3 and 6(d), (e); decisions D4, D60 and D65) is
+answered by the accepted convention engine (:mod:`powermean.results.cluster_covariance`
+over :mod:`powermean.results.retained_inference`): its preflight binds its dimensions
+and applies its convention to the counts before the solve, its providers give the
 certificate's gate the standard errors of the requested covariance at every candidate
 (the final reported matrix's of an adjusted signed request), and its record is formed
 once at the certificate's evaluation, with those standard errors (:attr:`Point.errors`)
-for the handoff's binding.  The robust covariance with an explicit ``ssc`` takes the
-same engine route (:func:`~powermean.results.cluster_covariance.engine_request`): its
-preflight applies the requested convention to the counts, its providers give every
-candidate's gate the standard errors of the robust covariance under that convention, and
-its record is formed once and bound in the same way; without an explicit ``ssc`` the
-robust covariance keeps its default provider and record.
+for the handoff's binding.  The robust covariance with an explicit ``ssc`` (contract,
+Sections 3.1 and 6(e)) takes the same engine route
+(:func:`~powermean.results.cluster_covariance.engine_request`): its preflight applies
+the requested convention to the counts, its providers give every candidate's gate the
+standard errors of the robust covariance under that convention, and its record is
+formed once and bound in the same way; without an explicit ``ssc`` the robust
+covariance keeps the provider and the record of the first milestone.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
+import numpy as np
+
 from powermean.data.retained import OrderSample
 from powermean.data.specs import Inference
+from powermean.errors import SpecificationError
 from powermean.inference.contributions import (
     Influence,
     joint_influence,
@@ -85,9 +93,12 @@ from powermean.results.cluster_covariance import (
     fit_record,
 )
 from powermean.results.retained import CovarianceRecord
+from powermean.results.retained_inference import InferenceRequest
+from powermean.results.saturated import SaturatedCovariance, saturated_covariance
 from powermean.solve.certificate import Certificate
 from powermean.solve.linear import LinearCandidate
 from powermean.solve.linear_certificate import LinearCertificate
+from powermean.solve.reported import saturated_rows
 from powermean.systems.joint import JointSystem
 
 
@@ -96,18 +107,19 @@ class Point:
     """The point, its influence record and its default covariance, as formed once.
 
     ``convention`` is the covariance of ``theta`` by the convention, for the inference
-    requested at the fit, from which ``default`` is reported; both are ``None`` where no
-    influence record could be formed.  ``errors`` are the standard errors of an engine
-    request's record (a typed cluster request, or the robust covariance with an explicit
-    ``ssc``), against which the handoff binds the certificate's (``convention`` is then
-    ``None``: no default covariance stands for the request); ``None`` otherwise, where
-    the direct map of ``convention`` gives them.
+    requested at the fit, from which ``default`` is reported; both are ``None`` where
+    no influence record could be formed.  ``errors`` are the standard errors of an
+    engine request's record (a typed cluster request, or the robust covariance with
+    an explicit ``ssc``), against which the handoff binds the certificate's
+    (``convention`` is then ``None``: no covariance of the first milestone stands for
+    the request); ``None`` otherwise, where the direct map of ``convention`` gives
+    them.
     """
 
     theta: FloatArray | None
     influence: Influence | None
     convention: Covariance | None
-    default: CovarianceRecord | None
+    default: CovarianceRecord | SaturatedCovariance | None
     errors: FloatArray | None = None
 
 
@@ -118,6 +130,50 @@ def frequency_of(sample: OrderSample) -> bool:
     convention engine reads below this module, kept here for its importers.
     """
     return covariance.frequency_of(sample)
+
+
+def _saturated_sample(sample: OrderSample) -> bool:
+    """Whether the sample is saturated: observations equal to its columns.
+
+    Read only where a request was refused for zero residual degrees of freedom, which
+    on a saturated fit is no refusal: its covariance is missing
+    (:mod:`powermean.results.saturated`), so no preflight or provider is formed.
+    """
+    weights = sample.data.weight_values
+    return saturated_rows(
+        weights[weights > 0], sample.data.nparams, frequency=frequency_of(sample)
+    )
+
+
+def _saturated_refusal(error: SpecificationError, sample: OrderSample) -> bool:
+    """Whether ``error`` is the zero-residual-dof refusal of a saturated sample."""
+    return error.identifier == "specification.no_residual_dof" and _saturated_sample(
+        sample
+    )
+
+
+def _saturated_point(
+    certificate: Certificate | LinearCertificate,
+    inference: Inference,
+    influence: Influence | None,
+) -> Point:
+    """The point of a saturated certificate: no covariance is formed.
+
+    An accepted certificate gets the missing covariance of its request, with the note
+    issued once, at the fit (:mod:`powermean.results.saturated`); ``N`` equals the
+    coefficients by the certificate's decision.  A certificate that is not accepted
+    gets none and issues nothing: its inference is withheld.
+    """
+    theta = certificate.gamma
+    if not certificate.accepted:
+        return Point(theta, influence, None, None)
+    clusters = inference.clusters
+    cluster = clusters.dimensions if clusters is not None else inference.cluster
+    method = inference.method or ("robust" if cluster is None else "cluster")
+    default = saturated_covariance(
+        method, cluster, inference.bread, theta.size, theta.size, stacklevel=4
+    )
+    return Point(theta, influence, None, default)
 
 
 def _typed_point(
@@ -134,8 +190,8 @@ def _typed_point(
 def fit_convention(inference: Inference) -> ResolvedConvention:
     """The convention in force of a request at its fit: explicit, else ``"stata"``.
 
-    At the fit nothing is inherited: the request's explicit ``ssc``, a preset put in
-    force by its name or a custom record, else the default.
+    At the fit nothing is inherited (contract, Section 3.1): the request's explicit
+    ``ssc``, a preset put in force by its name or a custom record, else the default.
     """
     return resolve_convention(inference.ssc)
 
@@ -146,9 +202,8 @@ def fit_preflight(sample: OrderSample, inference: Inference) -> HCPreflight | No
     The accepted preflight (:func:`powermean.inference.hc.hc_preflight`) on the
     sample's scaled design and raw weights, every retained row in its order (a row of
     zero weight is no replica), under the convention in force at the fit:
-    ``specification.no_residual_dof`` for HC1 at ``N = K``,
-    ``specification.conflicting`` for an explicit second correction and
-    ``specification.unit_leverage`` for structural unit leverage; the
+    ``specification.no_residual_dof`` for HC1 at ``N = K`` and
+    ``specification.conflicting`` for an explicit second correction (rule B12(a)); the
     kernel's ``ValueError`` for a design that is not of full column rank on its
     active rows, whose leverage is undefined.  ``None`` for the robust and cluster
     covariances; an engine request (a typed cluster request, or the robust covariance
@@ -156,11 +211,36 @@ def fit_preflight(sample: OrderSample, inference: Inference) -> HCPreflight | No
     (:func:`~powermean.results.cluster_covariance.cluster_preflight`: a dimension
     that was not retained or has a missing value, fewer than two clusters among the
     active rows, a convention without positive degrees of freedom), and keeps nothing.
+    A refusal for zero residual degrees of freedom of a saturated sample is no
+    refusal: ``None``, the fit's covariance is missing (:mod:`powermean.results.
+    saturated`).
     """
+    try:
+        return _fit_preflight(sample, inference)
+    except SpecificationError as error:
+        if _saturated_refusal(error, sample):
+            return None  # a saturated fit forms no covariance (results.saturated)
+        raise
+
+
+def _fit_preflight(sample: OrderSample, inference: Inference) -> HCPreflight | None:
+    """:func:`fit_preflight` without the saturated exception."""
     method = inference.method
     if method is None:
         if engine_request(inference):
             cluster_preflight(sample, inference)
+        elif inference.cluster is not None:
+            codes = covariance.cluster_codes(sample, inference.cluster)
+            active = sample.data.weight_values > 0
+            if int(np.unique(codes.codes[active]).size) < 2:
+                raise SpecificationError(
+                    "specification.invalid_value",
+                    {
+                        "argument": "cluster",
+                        "value": inference.cluster,
+                        "valid": "at least two clusters on the estimation sample",
+                    },
+                )
         return None
     return hc_preflight(
         sample.design.matrix,
@@ -171,26 +251,41 @@ def fit_preflight(sample: OrderSample, inference: Inference) -> HCPreflight | No
     )
 
 
+def _engine_preflight(
+    sample: OrderSample, inference: Inference
+) -> InferenceRequest | None:
+    """The engine request's preflight; ``None`` for a saturated fit's dof refusal."""
+    try:
+        return cluster_preflight(sample, inference)
+    except SpecificationError as error:
+        if _saturated_refusal(error, sample):
+            return None
+        raise
+
+
 def joint_provider(
     sample: OrderSample,
     inference: Inference,
     system: JointSystem,
     *,
     preflight: HCPreflight | None = None,
-) -> CovarianceScale | HCScale | ClusterScale:
+) -> CovarianceScale | HCScale | ClusterScale | None:
     """The reported-scale provider of the inference requested at a joint fit.
 
-    The default robust or one-way provider, unchanged, the named HC provider on the
-    active rows of ``system`` with the request's preflight (formed here where none is
-    given), or the provider of an engine request (a typed cluster request, its
-    dimensions bound to the sample's rows, or the robust covariance with an explicit
-    ``ssc``); the direct map of the sample's order scale every way.
+    The robust or one-way provider of the first milestone, unchanged, the named HC
+    provider on the active rows of ``system`` with the request's preflight (formed
+    here where none is given), or the provider of an engine request (a typed cluster
+    request, its dimensions bound to the sample's rows, or the robust covariance with
+    an explicit ``ssc``); the direct map of the sample's order scale every way.
+    ``None`` where a saturated fit's request has no residual degrees of freedom: its
+    certificate calls no provider (:func:`powermean.solve.reported.saturated`).
     """
     frequency = frequency_of(sample)
     method = inference.method
     if method is None:
         if engine_request(inference):
-            return ClusterScale(sample, cluster_preflight(sample, inference))
+            engine = _engine_preflight(sample, inference)
+            return None if engine is None else ClusterScale(sample, engine)
         cluster = None
         if inference.cluster is not None:
             cluster = covariance.cluster_codes(sample, inference.cluster)
@@ -198,6 +293,8 @@ def joint_provider(
             frequency=frequency, cluster=cluster, order=sample.order_scale
         )
     found = fit_preflight(sample, inference) if preflight is None else preflight
+    if found is None and _saturated_sample(sample):
+        return None  # a saturated fit calls no provider (solve.reported.saturated)
     if found is None or found.method != method:
         raise ValueError("the preflight is not that of the request")
     return HCScale(
@@ -212,18 +309,20 @@ def joint_provider(
 
 def linear_provider(
     sample: OrderSample, inference: Inference, solved: LinearSolve
-) -> LinearCovarianceScale | LinearHCScale | LinearClusterScale:
+) -> LinearCovarianceScale | LinearHCScale | LinearClusterScale | None:
     """The reported-scale provider of the inference requested at a log OLS fit.
 
-    The default robust or one-way provider, unchanged, the named HC provider of the
-    solve captured before it ran, or the provider of an engine request (a typed cluster
-    request, its dimensions bound to the sample's rows, or the robust covariance with an
-    explicit ``ssc``); the direct map of the sample's order scale every way.
+    The robust or one-way provider of the first milestone, unchanged, the named HC
+    provider of the solve captured before it ran, or the provider of an engine request
+    (a typed cluster request, its dimensions bound to the sample's rows, or the robust
+    covariance with an explicit ``ssc``); the direct map of the sample's order scale
+    every way.
     """
     method = inference.method
     if method is None:
         if engine_request(inference):
-            return LinearClusterScale(sample, cluster_preflight(sample, inference))
+            engine = _engine_preflight(sample, inference)
+            return None if engine is None else LinearClusterScale(sample, engine)
         cluster = None
         if inference.cluster is not None:
             cluster = covariance.cluster_codes(sample, inference.cluster)
@@ -270,6 +369,25 @@ def default_covariance(
     return convention, covariance.record(convention, sample.order_scale, name)
 
 
+def _saturated_influence(
+    certificate: Certificate, sample: OrderSample
+) -> Influence | None:
+    """The influence record of a saturated certificate, where it is representable.
+
+    ``moment_influence_map`` refuses a map with a value beyond the doubles by its
+    finiteness check (``ValueError``); on a saturated fit no covariance reads the
+    map, so that refusal leaves the record absent instead of ending the fit.
+    """
+    evaluation = certificate.evaluation
+    if not certificate.conditioned or evaluation is None:
+        return None
+    with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
+        try:
+            return joint_influence(evaluation, frequency=frequency_of(sample))
+        except ValueError:
+            return None
+
+
 def power_point(
     sample: OrderSample,
     inference: Inference,
@@ -285,6 +403,13 @@ def power_point(
     of that evaluation.
     """
     evaluation = certificate.evaluation
+    if certificate.saturated:
+        # A saturated fit stands with every covariance missing (4d02929), whatever its
+        # influence map; a map that float64 cannot represent (a subnormal curvature,
+        # 1/J beyond the doubles) is then not served (owner's ruling 103).
+        return _saturated_point(
+            certificate, inference, _saturated_influence(certificate, sample)
+        )
     influence = None
     if certificate.conditioned and evaluation is not None:
         influence = joint_influence(evaluation, frequency=frequency_of(sample))
@@ -313,9 +438,9 @@ def linear_point(
 ) -> Point:
     """The point of a bare linear candidate, where one was formed.
 
-    The components of a candidate handed over without its fresh certificate: never
-    served as inference, which the result refuses on this route without a certificate; a
-    named HC request forms no covariance for it.
+    The components of a candidate handed over without its fresh certificate (task
+    M0.21): never served as inference, which the result refuses on this route
+    without a certificate; a named HC request forms no covariance for it.
     """
     if linear.coefficients is None:
         return Point(None, None, None, None)
@@ -350,6 +475,8 @@ def linear_certified_point(
     influence: Influence | None = None
     if evaluation is not None and certificate.conditioned:
         influence = fresh_linear_influence(evaluation, frequency=frequency_of(sample))
+    if certificate.saturated:
+        return _saturated_point(certificate, inference, influence)
     if engine_request(inference) and influence is not None:
         return _typed_point(certificate.gamma, sample, inference, influence)
     method = inference.method

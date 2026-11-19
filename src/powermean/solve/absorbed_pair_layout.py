@@ -1,7 +1,7 @@
 """Fresh native-index pair layout for observed geometry, without cached maps.
 
-Integer lexicographic sorting changes only the pair index, never the curvature row
-order.
+``design/02_computation.md``, Section 7; M1.14 readiness, Section 2. Integer
+lexicographic sorting changes only the pair index, never the curvature row order.
 """
 
 from __future__ import annotations

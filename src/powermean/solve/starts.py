@@ -1,30 +1,34 @@
 """Starting values of the convex Newton solver: one vector, automatic or the user's.
 
-The damped
+``DESIGN.md``, Section 6.3, and ``design/02_computation.md``, Section 6.  The damped
 Newton solver takes one starting value and iterates from it: no pilot, no path, no
 restart ladder and no grid.  For the convex criteria of the joint system (the power
 family with ``tau`` in ``[1, 2]``, and NB2) the root does not depend on the start, which
 affects the time only.
 
-Automatic start, with no pilot or truth-based start: the logarithm of the mean of
-``z`` in the intercept column and zero in every
+Automatic start.  The start of the solver campaign (S1 ``engine.solve``; S3
+``config.json``: "zero slopes, log(sample mean) intercept; no pilot or truth-based
+start"): the logarithm of the mean of ``z`` in the intercept column and zero in every
 other column, or the zero vector when the design has no intercept.  The intercept is
-named by the caller, as the index of its column, and is never presumed: a design of
-the package may have none or hold it elsewhere.  The
+named by the caller, as the index of its column, and is never presumed: S1 wrote the
+logarithm into the first column, which held the intercept in every design of its
+campaign, whereas a design of the package may have none or hold it elsewhere.  The
 named column must be a column of ones.  The mean is the plain mean of ``z`` over the
-rows of positive weight, those that the system solves, as ``log(z.mean())``: neither
-weighted nor adjusted for the offset, which would be a pilot.
+rows of positive weight, those that the system solves (S1 had no weights), with S1's
+arithmetic, ``log(z.mean())``: neither weighted nor adjusted for the offset, which
+would be a pilot of a kind that the campaign did not use.
 
-No early return is made when the mean is not positive: without an intercept the zero
-start is finite and the solve proceeds (an
+S1 returned at once, with zero coefficients and its status ``all_zero_outcome``, when
+the mean was not positive.  That return is not carried over, because it holds only for
+its designs: without an intercept the zero start is finite and the solve proceeds (an
 outcome of zeros on the rows ``-1`` and ``+1`` of a single column has the Poisson root
 zero).  With an intercept and a zero mean, ``log(0)`` has no finite value, and
 :func:`automatic_start` raises ``FloatingPointError``, as the system does for a value
 that is not representable; nothing is clipped or floored.  Whether the equation has a
-finite root at all is the question of the existence analysis, not answered here.
+finite root at all is the question of the existence analysis (M1), not answered here.
 
 User start.  A finite vector with one value per column of the design, copied and
-recorded; always accepted.  :class:`Start` records the vector and its
+recorded; always accepted (Section 6.3).  :class:`Start` records the vector and its
 origin, for the trace of the solver and the provenance of a result.
 """
 
@@ -108,7 +112,7 @@ def _intercept_column(system: JointSystem, intercept: object) -> int:
 
 
 def automatic_start(system: JointSystem, *, intercept: int | None) -> Start:
-    """The automatic start: ``log(mean z)`` in the intercept, zero slopes.
+    """The start of the solver campaign: ``log(mean z)`` in the intercept, zero slopes.
 
     Parameters
     ----------

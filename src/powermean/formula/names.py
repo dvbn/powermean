@@ -38,6 +38,11 @@ rest follows Python's syntax tree (:mod:`ast`) in the order of evaluation, so th
 name is classified by where Python loads it from, not by whether the expression binds
 it somewhere.  Formulaic binds each name within backticks to a variable before Python
 evaluates the expression, so such a name is read wherever it stands.
+
+The raw-reference collector can also request literal ``Q("name")`` reads in this
+same traversal.  Only a call whose ``Q`` loads from the mapping contributes the
+literal name; a caller whose data shadows the transform must leave this disabled.
+Dynamic string reads remain unknown, without discarding independently known reads.
 """
 
 from __future__ import annotations
@@ -65,6 +70,8 @@ class _Scope:
     never : frozenset of str
         The names that the block declares global: the targets of the assignment
         expressions within its comprehensions, loaded as globals wherever they stand.
+    literal_q : bool
+        Whether an unshadowed mapping call ``Q("name")`` also reads the literal name.
     loaded : set of str
         The names loaded from the mapping so far.
     stored : set of str
@@ -79,15 +86,21 @@ class _Scope:
     loaded: set[str] = field(default_factory=set)
     stored: set[str] = field(default_factory=set)
     hidden: list[str] = field(default_factory=list)
+    literal_q: bool = False
 
 
-def python_names(expression: str) -> set[str]:
+def python_names(expression: str, *, literal_q: bool = False) -> set[str]:
     """The names that the evaluation of a Python factor reads, columns or not.
 
     Parameters
     ----------
     expression : str
         The expression of a factor that Formulaic evaluates as Python, as written.
+    literal_q : bool, default False
+        Include the string of a one-positional-string-literal ``Q`` call when the
+        callable is loaded from the evaluation mapping, not locally bound.  The
+        caller must exclude data-shadowed ``Q``.  This reuses the same parse and
+        scope traversal; unknown dynamic lookups add no inferred column.
 
     Returns
     -------
@@ -96,7 +109,57 @@ def python_names(expression: str) -> set[str]:
         of the evaluation (module docstring).  Each name within backticks has a
         stand-in of its own, a name longer than the expression, so that Python reads
         the expression and takes none of its own names, nor two names within
-        backticks, for one name.
+        backticks, for one name.  With ``literal_q``, the known literal column names
+        are included as well.
+    """
+    quoted, stand_ins, code = _python_code(expression)
+    looked_up = _names_loaded(code, literal_q=literal_q)
+    return quoted | (looked_up - stand_ins)
+
+
+# The builtins that read the namespace of the frame that calls them, here the mapping
+# of the evaluation: ``locals()`` and ``vars()`` return it, ``dir()`` lists its names,
+# ``eval`` and ``exec`` evaluate code in it.
+NAMESPACE_BUILTINS = frozenset({"dir", "eval", "exec", "locals", "vars"})
+
+
+def string_lookups(expression: str) -> set[str] | None:
+    """The columns that a Python factor reads by a string, or ``None`` if not known.
+
+    A Python factor reads a column by its name as Python loads it
+    (:func:`python_names`), or by a string: Formulaic's ``Q("name")`` returns the
+    column of the string, and a builtin of :data:`NAMESPACE_BUILTINS` reaches the
+    mapping of the evaluation, the data among it.  The strings of every ``Q`` called
+    with one string literal are returned; ``None`` when the expression uses ``Q`` in
+    any other way or loads such a builtin from the mapping, since the column then read
+    is known only from the evaluation.
+    """
+    loaded = python_names(expression)
+    if loaded & NAMESPACE_BUILTINS:
+        return None
+    if "Q" not in loaded:
+        return set()
+    tree = ast.parse(_python_code(expression)[2], mode="eval")
+    used = [n for n in ast.walk(tree) if isinstance(n, ast.Name) and n.id == "Q"]
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            if node.func.id != "Q":
+                continue
+            if node.keywords or len(node.args) != 1:
+                return None
+            name = node.args[0]
+            if not (isinstance(name, ast.Constant) and isinstance(name.value, str)):
+                return None
+            found.add(name.value)
+            used.remove(node.func)
+    return None if used else found
+
+
+def _python_code(expression: str) -> tuple[set[str], set[str], str]:
+    """The names within backticks, their stand-ins and the code that Python reads.
+
+    The stand-ins are those of :func:`python_names`.
     """
     quoted = {
         found[1] for found in _QUOTED.finditer(expression) if found[1] is not None
@@ -107,11 +170,10 @@ def python_names(expression: str) -> set[str]:
     code = _QUOTED.sub(
         lambda found: found[0] if found[1] is None else stand_ins[found[1]], expression
     )
-    looked_up = _names_loaded(code)
-    return quoted | (looked_up - set(stand_ins.values()))
+    return quoted, set(stand_ins.values()), code
 
 
-def _names_loaded(code: str) -> set[str]:
+def _names_loaded(code: str, *, literal_q: bool = False) -> set[str]:
     """The names that Python loads from the mapping while it evaluates ``code``.
 
     The block of the expression, in Python's symbol table, says which names it
@@ -124,7 +186,7 @@ def _names_loaded(code: str) -> set[str]:
         if symbol.is_declared_global()
     }
     tree = ast.parse(code, mode="eval")
-    scope = _Scope(never=frozenset(declared))
+    scope = _Scope(never=frozenset(declared), literal_q=literal_q)
     _read(tree.body, scope)
     return scope.loaded
 
@@ -142,6 +204,11 @@ def _read(node: ast.AST, scope: _Scope) -> None:
     match node:
         case ast.Name(id=name, ctx=ast.Load()):
             _name(name, scope)
+        case ast.Call(
+            func=ast.Name(id="Q"), args=[ast.Constant(value=name)], keywords=[]
+        ) if scope.literal_q and isinstance(name, str):
+            if _name("Q", scope):
+                scope.loaded.add(name)
         case ast.NamedExpr(target=ast.Name(id=name), value=value):
             _read(value, scope)
             scope.stored.add(name)
@@ -168,16 +235,19 @@ def _read(node: ast.AST, scope: _Scope) -> None:
             _children(node, scope)
 
 
-def _name(name: str, scope: _Scope) -> None:
+def _name(name: str, scope: _Scope) -> bool:
     """A load of ``name``: from the mapping, unless Python finds it elsewhere.
 
     A global of the block is loaded from the empty globals and the builtins; a variable
     of an enclosing comprehension is a local; a name that an assignment expression has
-    surely stored is found in the mapping before the data.
+    surely stored is found in the mapping before the data.  Return whether this
+    load reaches the original mapping, for the literal-Q call attribution.
     """
     elsewhere = scope.never | set(scope.hidden) | scope.stored
     if name not in elsewhere:
         scope.loaded.add(name)
+        return True
+    return False
 
 
 def _defaults(arguments: ast.arguments, scope: _Scope) -> None:

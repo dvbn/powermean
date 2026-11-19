@@ -1,68 +1,75 @@
 """The design of the estimation sample and its internal column scaling.
 
-Internal column scaling, reversed in all reported quantities and not reported: the
-design matrix is scaled and handed over as it is.  The solving stages receive the scaled
-design ``X D^-1`` with ``D = diag(d)``, ``d > 0`` finite, and work in the coordinates
-``theta = D gamma``; :class:`powermean.model.order_scale.OrderScale` maps their results
-back with the same ``d``, once.  Nothing else changes: no column is centered, so an
-intercept keeps its meaning and no other column shifts it; no column is dropped,
-combined or reordered, so an exactly dependent, constant or all-zero column reaches the
-solver as it is and a later certificate, not the preparation, refuses a model that it
-cannot solve (the collinearity resolution is not part of this step).
+``design/02_computation.md``, Section 2, step 9 ("internal column scaling, reversed in
+all reported quantities; not reported"); ``DESIGN.md``, Section 6.1; the ledger note on
+M0.20 ("at M0 the design matrix is scaled and handed over as it is", decision D41);
+decisions D49, D51 and D54.  The solving stages receive the scaled design ``X D^-1``
+with ``D = diag(d)``, ``d > 0`` finite, and work in the coordinates ``theta = D gamma``;
+:class:`powermean.model.order_scale.OrderScale` maps their results back with the same
+``d``, once.  Nothing else changes: no column is centered, so an intercept keeps its
+meaning and no other column shifts it; no column is dropped, combined or reordered, so
+an exactly dependent, constant or all-zero column reaches the solver as it is and a
+later certificate, not the preparation, refuses a model that it cannot solve (M1 owns
+the collinearity resolution).
 
-The convention (a routine numerical choice).  ``d_j`` is the power of two with ``d_j <=
-max_i |x_ij| < 2 d_j``, that is ``2^floor(log2 max_i |x_ij|)``, so that the largest
-entry of a scaled column lies in ``[1, 2)``; an all-zero column has ``d_j = 1``.  This
-is a column-only scaling by powers of the radix, a choice of this package inspired by
-the general principle that LAPACK's equilibration routine ``DGEEQUB`` states for its
-factors, that scaling by powers of the radix introduces no rounding error.  It is not
-that routine and claims no parity with it: ``DGEEQUB`` computes row factors first, takes
-the column maxima on the row-scaled entries, forms its factors as
-``RADIX**INT(LOG(...)/LOGRDX)`` and clips them to safe bounds, and refuses an all-zero
-column, which the preparation keeps with a harmless unit scale.
+The convention (decision D51, a routine numerical choice).  ``d_j`` is the power of two
+with ``d_j <= max_i |x_ij| < 2 d_j``, that is ``2^floor(log2 max_i |x_ij|)``, so that
+the largest entry of a scaled column lies in ``[1, 2)``; an all-zero column has
+``d_j = 1``.  This is a column-only scaling by powers of the radix, a choice of this
+package inspired by the general principle that LAPACK's equilibration routine
+``DGEEQUB`` states for its factors, that scaling by powers of the radix introduces no
+rounding error.  It is not that routine and claims no parity with it: ``DGEEQUB``
+computes row factors first, takes the column maxima on the row-scaled entries, forms
+its factors as ``RADIX**INT(LOG(...)/LOGRDX)`` and clips them to safe bounds, and
+refuses an all-zero column, which the preparation keeps with a harmless unit scale.
 
-What the choice guarantees, and no more.  Dividing a double by a power of two is exact
-wherever the quotient is a normal double, since only the exponent changes; it rounds
-once, correctly, where the quotient is subnormal; it overflows nowhere here, since every
-quotient is below two in magnitude.  So each scaled entry is the exact quotient on
-normal doubles, ``(X D^-1) D`` restores ``X`` bit for bit wherever the quotients are
-normal (a rounded subnormal quotient times ``d_j`` is that rounded value in the exponent
-of ``x_ij``, not ``x_ij``), each product ``(x_ij / d_j) theta_j`` is the double ``x_ij
-(theta_j / d_j)`` wherever the two quotients ``x_ij / d_j`` and ``theta_j / d_j`` are
-exact, as each is where it is a normal double or an exact zero, the quotient of a zero
-numerator (a quotient that rounds to zero is zero and not exact: with ``x_ij = d_j =
-2^1023`` and ``theta_j = 2^-1074``, ``theta_j / d_j`` rounds to zero, ``x_ij (theta_j /
-d_j)`` is zero and ``(x_ij / d_j) theta_j`` is ``theta_j``), since the two products then
-round the one real value ``x_ij theta_j / d_j`` once; and the maps of ``OrderScale``,
-which divide by ``d`` with exact exponents, are exact in ``d``.  That the two products
-are normal is not enough for their identity: with ``x_ij = d_j = 2^1023`` and
-``theta_j`` the double after one, ``theta_j / d_j`` rounds in the subnormal range,
-``x_ij (theta_j / d_j)`` is one and ``(x_ij / d_j) theta_j`` is ``theta_j``, two normal
-products that differ in their last bit.  Nothing is claimed of a sum of such products:
-two matrix-vector products that accumulate the same terms in another order, as another
-BLAS kernel may, agree to the rounding of the summation, not bit for bit.  Nor is
-anything claimed of the conditioning of the scaled problem or of the running time of a
-solve: this step changes no option, tolerance or default of the solving stages, and what
-it does to the conditioning of a given design is the certificate's to report.  A scale
-by the root mean square or the standard deviation, as a standardizing regression would
-use, needs a centered or a rounded divisor and would change the bits of every entry;
-this one changes no bit of a normal entry.
+What the choice guarantees, and no more.  Dividing a double by a power of two is
+exact wherever the quotient is a normal double, since only the exponent changes; it
+rounds once, correctly, where the quotient is subnormal; it overflows nowhere here,
+since every quotient is below two in magnitude.  So each scaled entry is the exact
+quotient on normal doubles, ``(X D^-1) D`` restores ``X`` bit for bit wherever the
+quotients are normal (a rounded subnormal quotient times ``d_j`` is that rounded value
+in the exponent of ``x_ij``, not ``x_ij``), each product ``(x_ij / d_j) theta_j`` is
+the double ``x_ij (theta_j / d_j)`` wherever the two quotients ``x_ij / d_j`` and
+``theta_j / d_j`` are exact, as each is where it is a normal double or an exact zero,
+the quotient of a zero numerator (a quotient that rounds to zero is zero and not
+exact: with ``x_ij = d_j = 2^1023`` and ``theta_j = 2^-1074``, ``theta_j / d_j`` rounds
+to zero, ``x_ij (theta_j / d_j)`` is zero and ``(x_ij / d_j) theta_j`` is
+``theta_j``), since the two products then round the one real value
+``x_ij theta_j / d_j`` once; and the maps of ``OrderScale``, which divide by ``d``
+with exact exponents, are exact in ``d``.
+That the two products are normal is not enough for their identity: with
+``x_ij = d_j = 2^1023`` and ``theta_j`` the double after one, ``theta_j / d_j`` rounds
+in the subnormal range, ``x_ij (theta_j / d_j)`` is one and ``(x_ij / d_j) theta_j`` is
+``theta_j``, two normal products that differ in their last bit
+(``tests/data/test_design.py``).  Nothing is claimed of a sum of such products: two
+matrix-vector products that accumulate the same terms in another order, as another BLAS
+kernel may,
+agree to the rounding of the summation, not bit for bit, and the tests of this module
+compare an index with a bound derived from that rounding.  Nor is anything claimed of
+the conditioning of the scaled problem or of the running time of a solve: this step
+changes no option, tolerance or default of the solving stages, and what it does to the
+conditioning of a given design is the certificate's to report.  A scale by the root
+mean square or the standard deviation, as S5's within-country design or a standardizing
+regression would use, needs a centered or a rounded divisor and would change the bits
+of every entry; this one changes no bit of a normal entry.
 
 Range.  ``d_j`` lies between ``2^-1074`` and ``2^1023`` for any finite column (the
-column whose largest entry is the smallest subnormal, and the one whose largest entry is
-the largest double), every scaled entry lies below two in magnitude, and a scaled entry
-in the subnormal range is rounded once by IEEE arithmetic and kept.  A nonzero entry
-whose quotient rounds to zero, which happens where the entry is at most half the
+column whose largest entry is the smallest subnormal, and the one whose largest entry
+is the largest double), every scaled entry lies below two in magnitude, and a scaled
+entry in the subnormal range is rounded once by IEEE arithmetic and kept.  A nonzero
+entry whose quotient rounds to zero, which happens where the entry is at most half the
 smallest subnormal times ``d_j``, is refused (``FloatingPointError``), as the order
-layer refuses a power that changes the zero mask: no zero is made of a nonzero value.  A
-column with a missing or infinite value, which the sample accounting excludes before
-this step, is refused here, never deleted.
+layer refuses a power that changes the zero mask: no zero is made of a nonzero value
+(decisions D49 and D54).  A column with a missing or infinite value, which the sample
+accounting excludes before this step, is refused here, never deleted.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from fractions import Fraction
 
 import numpy as np
 from numpy.typing import ArrayLike
@@ -79,6 +86,65 @@ def _matrix(design: ArrayLike) -> FloatArray:
     if matrix.ndim != 2 or not matrix.shape[0] or not matrix.shape[1]:
         raise ValueError("design must be a nonempty matrix")
     return matrix
+
+
+def _minor_nonsingular_mod65537(rows: FloatArray) -> bool:
+    """Prove a finite binary64 square minor nonsingular; false is inconclusive.
+
+    Every entry is exactly ``s * 2**(e-53)`` with an integer ``|s| < 2**53``
+    from frexp, including subnormals and signed zero. In the prime field 65537,
+    ``2**32 = 1``, so reducing the exponent modulo 32 is exact, including for
+    negative exponents. All residues are below 65537; elimination products are
+    at most ``65536**2``, safely inside int64. No rounded determinant is used.
+    """
+    fraction, exponent = np.frexp(rows)
+    significand = np.ldexp(fraction, 53).astype(np.int64)
+    powers = np.left_shift(1, (exponent - 53) % 32, dtype=np.int64) % 65537
+    work = ((significand % 65537) * powers) % 65537
+    k = int(rows.shape[0])
+    for column in range(k):
+        candidates = np.flatnonzero(work[column:, column])
+        if not candidates.size:
+            return False
+        pivot = column + int(candidates[0])
+        if pivot != column:
+            work[[column, pivot]] = work[[pivot, column]]
+        inverse = pow(int(work[column, column]), -1, 65537)
+        tail = (work[column, column + 1 :] * inverse) % 65537
+        # Earlier columns are no longer used: only update the trailing block.
+        work[column + 1 :, column + 1 :] -= (
+            work[column + 1 :, column, None] * tail[None, :]
+        )
+        work[column + 1 :, column + 1 :] %= 65537
+    return True
+
+
+def exact_rank_is(rows: FloatArray, expected: int) -> bool:
+    """Decide the algebraic rank of finite binary64 rows by rational elimination."""
+    basis: dict[int, list[Fraction]] = {}
+    for values in rows:
+        row = [Fraction(float(value)) for value in values]
+        for pivot, previous in basis.items():
+            multiplier = row[pivot]
+            if multiplier:
+                row = [a - multiplier * b for a, b in zip(row, previous, strict=True)]
+        for pivot, value in enumerate(row):
+            if value:
+                basis[pivot] = [entry / value for entry in row]
+                if len(basis) == rows.shape[1]:
+                    return len(basis) == expected
+                if len(basis) > expected:
+                    return False
+                break
+    return len(basis) == expected
+
+
+def _has_full_column_rank(rows: FloatArray) -> bool:
+    """Certify a nonsingular minor or decide rank exactly over the original rows."""
+    n, k = rows.shape
+    if n < k:
+        return False
+    return _minor_nonsingular_mod65537(rows[:k]) or exact_rank_is(rows, k)
 
 
 def column_scale(design: ArrayLike) -> FloatArray:

@@ -1,13 +1,15 @@
 """Detached snapshots of absorbed candidate histories across all four routes.
 
-This module defines :class:`RetainedHistorySnapshot`, :func:`_point_mapper`,
+``design/02_computation.md``, Sections 5.2, 5.3 and 7; ``plan/evidence/
+M1.15_contract.txt``, items 2, 3 and 7; ``brief/layout_C_ownership.txt`` (P06).  This
+module defines :class:`RetainedHistorySnapshot`, :func:`_point_mapper`,
 :func:`_candidate_inner_and_start`, :func:`snapshot_candidate_history`, and
 :func:`snapshot_history`, and re-exports linear decomposition and state symbols from
-:mod:`powermean.results.absorbed_linear_history`.  The selected-root route (``"root"``)
-keeps its stages as its attempts (:mod:`powermean.results.absorbed_root_records`), its
-target stage as ``retained``, no final work, and the resolved solver and requested
-organization's options; its initializer's own history is snapshotted by
-:mod:`powermean.results.absorbed_root`.
+:mod:`powermean.results.absorbed_linear_history`.  The selected-root route
+(``"root"``) keeps its stages as its attempts
+(:mod:`powermean.results.absorbed_root_records`), its target stage as ``retained``,
+no final work, and the resolved solver and requested organization's options; its
+initializer's own history is snapshotted by :mod:`powermean.results.absorbed_root`.
 """
 
 from __future__ import annotations
@@ -84,7 +86,7 @@ from powermean.solve.linear_absorbed_state import (
     AbsorbedLinearCandidate,
     LinearWork,
 )
-from powermean.solve.absorbed import AbsorbedOptions
+from powermean.solve.m1_options import AbsorbedOptions
 from powermean.solve.newton_absorbed import IndexAttempt, IndexCandidate
 from powermean.solve.newton_profiled import ProfiledAttempt, ProfiledCandidate
 from powermean.solve.newton_trace import Timing

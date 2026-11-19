@@ -1,8 +1,9 @@
-"""No-FE direct fixed-tau IOLS adapter and column scaling."""
+"""Campaign-faithful no-FE direct fixed-tau IOLS adapter and column scaling."""
 
 from __future__ import annotations
 
 import dataclasses
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Final, Literal
@@ -10,6 +11,7 @@ from typing import Any, Final, Literal
 import numpy as np
 import numpy.typing as npt
 
+from powermean.model.variance import _mean
 from powermean.solve.iols._numeric import FloatArray
 from powermean.solve.iols.direct_route import (
     DirectNoFEBackend,
@@ -87,7 +89,7 @@ BACKEND_DETAIL_KEYS: Final = (
 
 @dataclass(frozen=True)
 class IOLSAdapterResult:
-    """Result of the no-FE IOLS adapter."""
+    """Result of the campaign-faithful no-FE IOLS adapter."""
 
     theta: FloatArray | None
     intercept: float
@@ -229,10 +231,10 @@ def _reconstruct_full_theta(
     slopes: FloatArray,
     direct_res: IOLSDirectNoFEResult,
     *,
-    tau: float,
     intercept_col_idx: int,
     slope_cols: list[int],
     diagnostics: dict[str, Any],
+    response_exponent: int,
 ) -> tuple[FloatArray | None, FloatArray | None, float]:
     n_cols = len(slope_cols) + 1
     theta: FloatArray | None = None
@@ -241,7 +243,7 @@ def _reconstruct_full_theta(
     if np.all(np.isfinite(slopes)) and np.isfinite(direct_res.intercept):
         base: FloatArray = exog @ slopes
         intercept = float(
-            _profile_intercept_adjustment(endog=y, linear=base, tau=float(tau))
+            _profile_intercept_adjustment(endog=y, linear=base, tau=direct_res.tau_fit)
         )
         candidate_linear: FloatArray = base + intercept
         candidate_theta: FloatArray = np.empty(n_cols, dtype=np.float64)
@@ -254,10 +256,45 @@ def _reconstruct_full_theta(
             theta = candidate_theta
             linear = candidate_linear
             if direct_res.linear is not None:
+                direct_linear = np.asarray(direct_res.linear)
+                if response_exponent:
+                    direct_linear = direct_linear + response_exponent * math.log(2.0)
                 diagnostics["fitted_index_consistency_max_abs"] = float(
-                    np.max(np.abs(np.asarray(direct_res.linear) - candidate_linear))
+                    np.max(np.abs(direct_linear - candidate_linear))
                 )
     return theta, linear, intercept
+
+
+def _ppml_kernel_response(
+    y: FloatArray, tau: float, control: IOLSKernelControl
+) -> tuple[FloatArray, int]:
+    """Choose a reversible response unit outside the default PPML step range.
+
+    Scaling y by c shifts the profiled intercept by log(c) and multiplies
+    the PPML update and its curvature by c. At the zero-slope point the
+    curvature in every demeaned slope direction equals mean(y). Keep the
+    ordinary unit while it lies within one default step-grid span of unity.
+    Explicitly altered grids retain their physical response units.
+    """
+    if (
+        tau != 1.0
+        or control._pilot_deltas is not None
+        or control.rho_log_min != IOLSKernelControl.rho_log_min
+        or control.rho_log_max != IOLSKernelControl.rho_log_max
+    ):
+        return y, 0
+    mean = _mean(y, None)
+    span = (1 + math.exp(control.rho_log_max)) / (1 + math.exp(control.rho_log_min))
+    if not math.isfinite(mean) or mean <= 0.0 or 1 / span <= mean <= span:
+        return y, 0
+    exponent = math.frexp(mean)[1] - 1
+    # The new mean is in [1, 2). Wide-support data keep their original units
+    # if the shift would overflow, lose an observation, or round a subnormal.
+    with np.errstate(over="ignore", under="ignore"):
+        scaled = np.ldexp(y, -exponent)
+        if not np.array_equal(np.ldexp(scaled, exponent), y):
+            return y, 0
+    return scaled, exponent
 
 
 def run_iols_nofe(
@@ -270,8 +307,9 @@ def run_iols_nofe(
     rho_grid_policy: str = "curvature_step_grid",
     intercept_col_idx: int = 0,
     scale_columns: bool = True,
+    _condition_response: bool = False,
 ) -> IOLSAdapterResult:
-    """Run the direct fixed-tau no-FE IOLS solve on ``exog_full``."""
+    """Run the campaign-faithful direct fixed-tau no-FE IOLS solve on ``exog_full``."""
     y, exog, slope_cols, _ = _extract_nofe_slope_design(
         endog, exog_full, intercept_col_idx
     )
@@ -281,9 +319,12 @@ def run_iols_nofe(
     )
     exog_star = apply_transformed_normalization(exog, norm)
     core_control = dataclasses.replace(control, transformed_design_normalization="none")
+    kernel_y, exponent = (
+        _ppml_kernel_response(y, tau, control) if _condition_response else (y, 0)
+    )
 
     direct_res = solve_nofe_direct_fixed_tau(
-        endog=y,
+        endog=kernel_y,
         exog_slopes=exog_star,
         tau=float(tau),
         backend=backend,
@@ -312,15 +353,18 @@ def run_iols_nofe(
         reason=reason,
         native_converged=native_converged,
     )
+    if exponent:
+        # The archived kernel score, curvature and steps refer to y / 2**exponent.
+        diagnostics["kernel_response_unit_exponent"] = exponent
     theta, linear, intercept = _reconstruct_full_theta(
         y,
         exog,
         slopes,
         direct_res,
-        tau=tau,
         intercept_col_idx=intercept_col_idx,
         slope_cols=slope_cols,
         diagnostics=diagnostics,
+        response_exponent=exponent,
     )
 
     status = "converged" if native_converged else f"direct_nonconvergence:{reason}"

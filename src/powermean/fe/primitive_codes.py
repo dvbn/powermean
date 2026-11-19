@@ -1,6 +1,7 @@
 """First-occurrence codes of exact primitive labels and of integer keys, in bulk.
 
-:mod:`powermean.fe.groups` encodes a
+``design/03_fixed_effects.md``, Sections 1 and 2; decision D66; the private primitive
+FE-label preparation candidate of 26 October 2026.  :mod:`powermean.fe.groups` encodes a
 block by the first occurrence of its labels with a loop over the rows (``_encode``),
 which reads every label as the object given and refuses a missing or an unhashable one.
 Where the exact types of the labels decide that loop's outcome, the functions here give
@@ -119,6 +120,12 @@ def key_codes(
     ``numpy.lexsort`` puts equal tuples together in row order; a run starts where any
     key changes, its first row is its first element, and runs are numbered by that row.
     """
+    if len(keys) == 1:
+        values = keys[0]
+        first = first_rows(values)
+        if first is not None:
+            # These integers are already numbered by their order of appearance.
+            return np.array(values, dtype=np.intp, copy=True), first
     order = np.lexsort(tuple(keys))
     starts = np.zeros(order.size, dtype=np.bool_)
     starts[0] = True

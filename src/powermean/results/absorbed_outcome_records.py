@@ -1,6 +1,9 @@
 """Detached snapshots of sample coordinator requests, invocations, rounds, and outcomes.
 
-This module defines :data:`RetainedClosureSnapshot`, :func:`_owned_closure`,
+``design/02_computation.md``, Sections 2 to 4 and 8.4;
+``plan/evidence/M1.15_contract.txt``, items 2, 3 and 7;
+``brief/layout_C_ownership.txt`` (P12); decisions D51 and D68 to D72.  This module
+defines :data:`RetainedClosureSnapshot`, :func:`_owned_closure`,
 :class:`RetainedSampleRequest`, :func:`build_sample_request_snapshot`,
 :class:`RetainedSupportInvocation`, :class:`RetainedRecessionInvocation`,
 :class:`RetainedCollinearityInvocation`, :class:`RetainedRound`, and
@@ -317,25 +320,35 @@ class RetainedOutcomeSnapshot:
 
     @classmethod
     def _from_numeric(
-        cls, *, input_snapshot: RetainedInputSnapshot,
+        cls,
+        *,
+        input_snapshot: RetainedInputSnapshot,
         request: RetainedSampleRequest,
-        sample: RetainedSampleSnapshot, details: tuple[Any, Any, Any],
+        sample: RetainedSampleSnapshot,
+        details: tuple[Any, Any, Any],
     ) -> RetainedOutcomeSnapshot:
         """Lossless private coordinator view, not a diagnostic export prerequisite."""
         result = object.__new__(cls)
         for name, value in (
-            ("input_snapshot", input_snapshot), ("request", request),
-            ("status", "complete"), ("_ledger", sample._ledger),
-            ("sample", sample), ("input_key", input_snapshot.key),
-            ("sample_key", sample.key), ("_numeric_details", details),
+            ("input_snapshot", input_snapshot),
+            ("request", request),
+            ("status", "complete"),
+            ("_ledger", sample._ledger),
+            ("sample", sample),
+            ("input_key", input_snapshot.key),
+            ("sample_key", sample.key),
+            ("_numeric_details", details),
         ):
             object.__setattr__(result, name, value)
         return result
 
     def __getattribute__(self, name: str) -> Any:
         """Detailed diagnostic exports retain their full original typed records."""
-        if (type(self) is RetainedOutcomeSnapshot and type(name) is str
-                and name in ("rounds", "recession", "collinearity", "origin")):
+        if (
+            type(self) is RetainedOutcomeSnapshot
+            and type(name) is str
+            and name in ("rounds", "recession", "collinearity", "origin")
+        ):
             state = object.__getattribute__(self, "__dict__")
             details = state.get("_numeric_details")
             if details is not None:

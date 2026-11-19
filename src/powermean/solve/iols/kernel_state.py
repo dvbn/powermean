@@ -11,7 +11,6 @@ from powermean.solve.iols._numeric import (
     FloatArray,
     IntArray,
 )
-from powermean.solve.iols.fe import _ProfileFEGroups, demean, profile_fe
 from powermean.solve.iols.kernel_records import (
     FULLRECOVER_JOINT_FE_POLICY,
     FULLRECOVER_PROFILED_FE_POLICY,
@@ -81,7 +80,9 @@ def _demean_singleton_intercept(
     if array.size == 0:
         return array.copy()
     if weights is None:
-        unweighted: FloatArray = array - np.mean(array, axis=0)
+        # An overflow is a mean of inf; the kernel then refuses as before.
+        with np.errstate(over="ignore", invalid="ignore"):
+            unweighted: FloatArray = array - np.mean(array, axis=0)
         return unweighted
 
     weight_arr: FloatArray = np.asarray(weights, dtype=np.float64)
@@ -110,6 +111,7 @@ def _profile_linear(
     maxiter: int = 10000,
     tol: float = 1e-6,
 ) -> FloatArray:
+    _ = (tol, maxiter)
     base_linear: FloatArray = exog @ beta
     if len(groups) == 0:
         return base_linear
@@ -120,26 +122,9 @@ def _profile_linear(
             tau=tau,
         )
         return adjusted
-    if len(groups) <= 2:
-        alpha, gamma = profile_fe(
-            endog,
-            exog,
-            beta,
-            _ProfileFEGroups(
-                group_i=groups[0],
-                group_t=groups[1] if len(groups) == 2 else None,
-                n_i=counts[0],
-                n_t=counts[1] if len(groups) == 2 else None,
-            ),
-            tau=tau,
-            maxiter=maxiter,
-            tol=tol,
-        )
-        linear: FloatArray = base_linear + alpha[groups[0]]
-        if gamma is not None:
-            linear = linear + gamma[groups[1]]
-        return linear
-    raise NotImplementedError("Manyway FE profiling is outside the no-FE direct route.")
+    raise NotImplementedError(
+        "Fixed-effect profiling is outside the no-FE direct route."
+    )
 
 
 def _demean_for_groups(
@@ -150,22 +135,15 @@ def _demean_for_groups(
     tol: float = 1e-10,
     maxiter: int = 10000,
 ) -> FloatArray:
+    _ = (tol, maxiter)
     if len(groups) == 0:
         copied: FloatArray = np.asarray(values, dtype=np.float64).copy()
         return copied
     if _is_singleton_intercept_group(groups, counts):
         return _demean_singleton_intercept(values)
-    if len(groups) <= 2:
-        return demean(
-            values,
-            groups[0],
-            groups[1] if len(groups) == 2 else None,
-            counts[0],
-            counts[1] if len(groups) == 2 else None,
-            tol=tol,
-            maxiter=maxiter,
-        )
-    raise NotImplementedError("Manyway FE demeaning is outside the no-FE direct route.")
+    raise NotImplementedError(
+        "Fixed-effect demeaning is outside the no-FE direct route."
+    )
 
 
 def _uses_joint_hdfe_state(groups: tuple[IntArray, ...]) -> bool:
@@ -212,6 +190,39 @@ def _recover_fe_linear(
     return diff
 
 
+def _fixed_design_projection(x: FloatArray) -> FloatArray:
+    """Solve the Gram normal equations with their original relative rank cutoff."""
+    with np.errstate(over="ignore", invalid="ignore", under="ignore"):
+        gram = x.T @ x
+        # On the ordinary path only the small Gram is inspected.
+        small = gram.diagonal() < np.finfo(np.float64).tiny
+        if not np.all(np.isfinite(gram)) or (small.any() and np.any(x[:, small])):
+            largest = float(np.max(np.abs(x), initial=0.0))
+            if 0.0 < largest < np.inf:
+                shift = int(np.frexp(largest)[1])
+                z = np.ldexp(x, -shift)
+                # A mixed-scale design may need a smaller shift to keep its
+                # smallest entries exact. Find the largest reversible shift.
+                if shift > 0 and not np.array_equal(np.ldexp(z, shift), x):
+                    low, high = 0, shift
+                    while high - low > 1:
+                        mid = (low + high) // 2
+                        if np.array_equal(np.ldexp(np.ldexp(x, -mid), mid), x):
+                            low = mid
+                        else:
+                            high = mid
+                    shift = low
+                    z = np.ldexp(x, -shift)
+                scaled_gram = z.T @ z
+                if shift and np.all(np.isfinite(scaled_gram)):
+                    scaled = np.linalg.lstsq(scaled_gram, z.T, rcond=None)[0]
+                    projection: FloatArray = np.ldexp(scaled, -shift)
+                    if np.all(np.isfinite(projection)):
+                        return projection
+    ordinary: FloatArray = np.linalg.lstsq(gram, x.T, rcond=None)[0]
+    return ordinary
+
+
 def _fullrecover_invariant_state(
     *,
     exog: FloatArray,
@@ -226,14 +237,9 @@ def _fullrecover_invariant_state(
         tol=float(control.fe_demean_tol),
         maxiter=int(control.fe_demean_maxiter),
     )
-    projection: FloatArray = np.linalg.lstsq(
-        x_demeaned.T @ x_demeaned,
-        x_demeaned.T,
-        rcond=None,
-    )[0]
     return _FullrecoverInvariantState(
         x_demeaned=x_demeaned,
-        projection=projection,
+        projection=_fixed_design_projection(x_demeaned),
     )
 
 

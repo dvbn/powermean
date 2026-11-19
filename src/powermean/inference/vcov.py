@@ -2,43 +2,52 @@
 
 If beta_hat-beta_0 is approximately n^{-1} sum_i phi_i, these functions estimate its
 covariance, not the covariance multiplied by n.  No independence or moment-validity
-assumption is inferred from the supplied labels.  The module provides the robust
-estimator, one-way clustering, and the two multiway forms: the signed
-inclusion-exclusion of Cameron, Gelbach and Miller (``"cgm"``) and the sum of the
-one-way components (``"cgm2"``, the ``"ddg"`` of the package).
+assumption is inferred from the supplied labels.  ``design/04_inference_and_effects.md``
+Sections 2 and 2.1 describe the robust estimator, one-way clustering, and the two
+multiway forms: the signed inclusion-exclusion of Cameron, Gelbach and Miller
+(``"cgm"``) and the sum of the one-way components (``"cgm2"``, the ``"ddg"`` of the
+design).
 
-These are primitives with their own conventions: ``HC0`` and ``HC1``
+These are the primitives of the source with their own conventions: ``HC0`` and ``HC1``
 with an explicit residual count, and the cluster corrections ``"none"``,
-``"component"`` and ``"min"``.  They are not the convention of the package: the
-robust and one-way estimators with the factors of the ``"stata"`` preset are
-:mod:`powermean.inference.convention`, and multiway clustering, the other presets and
-the adjustment of an indefinite signed estimate are in other modules;
+``"component"`` and ``"min"``.  They are not the convention of the package, whose
+first milestone exposes only the robust and one-way estimators with the factors of the
+``"stata"`` preset (:mod:`powermean.inference.convention`).  Multiway clustering, the
+other presets and the adjustment of an indefinite signed estimate are exposed at M1;
 nothing here clips, floors or repairs an estimate, and an indefinite or singular one is
 returned with its diagnostics and a :class:`CovarianceWarning`, which is not the
 package's ``NumericalWarning`` of secondary convergence.
 
-Two points of the implementation:
+Port of ``inference/covariance.py`` of pyiols (source S6 of
+``design/06_reuse_map.md``).  The records, functions, names, checks, messages,
+diagnostics, warnings and arithmetic are those of the source, with two deliberate
+changes, each recorded in ``PROVENANCE.md``, Section 10:
 
-1. Cluster labels arrive as integer codes prepared by the interface
-   layer; this module does not import pandas.  ``clusters`` is a NumPy array of integer
+1. Decision D40: cluster labels arrive as integer codes prepared by the interface
+   layer, which no longer imports pandas.  ``clusters`` is a NumPy array of integer
    codes, one-dimensional for one dimension or two-dimensional with one column per
    dimension, or a mapping from names to such one-dimensional arrays; each is aligned
-   with the influence rows by position.  :func:`_codes` checks them: an array of
-   another dtype, a negative code (the marker of a missing label in factorized codes)
-   or a misaligned array is refused, nothing is parsed, coerced or reordered, and the
-   codes of each dimension are numbered in order of first appearance, as
-   ``pandas.factorize(sort=False)`` numbers labels.
-2. :func:`_result` forms the symmetric part of the covariance with
+   with the influence rows by position.  The pandas preparation of the source (its
+   index alignment, ``observation_index``, missing-label test and factorization) is
+   replaced by :func:`_codes`: an array of another dtype, a negative code (the marker
+   of a missing label in factorized codes) or a misaligned array is refused, nothing is
+   parsed, coerced or reordered, and the codes of each dimension are numbered in order
+   of first appearance, as ``pandas.factorize(sort=False)`` numbers labels.  Every
+   later step, the intersection keys of ``numpy.unique`` included, is that of the
+   source, so that codes that relabel the source's labels one to one give its estimate
+   bit for bit.
+2. Decision D54: :func:`_result` forms the symmetric part of the covariance with
    :func:`powermean.inference.numeric.symmetric_part`, each entry rounded once,
-   instead of ``cov/2 + cov.T/2``, which rounds a representable subnormal covariance
+   instead of ``cov/2 + cov.T/2``, which rounded a representable subnormal covariance
    to zero (rows ``[[2**-536], [0]]``: an HC0 variance of ``2**-1074``, reported as
    zero with zero-covariance diagnostics).  Where halving each entry is exact, as for
    every entry of at least ``2**-1021`` in absolute value, the two are identical bit
    for bit; below that bound they can differ on a normal entry too, whose half rounds
-   (``0x1.0000000000001p-1022``).
+   (``0x1.0000000000001p-1022``).  Aggregation, formulas, factors, diagnostics and a
+   genuine zero covariance are unchanged.
 
-The records are frozen without generated equality (``eq=False``): a generated
-comparison could not compare their arrays.
+The records are frozen without generated equality (``eq=False``), whose comparison of
+arrays the source's records could not perform.
 """
 
 from __future__ import annotations
@@ -155,7 +164,7 @@ def _result(
 ) -> CovarianceEstimate:
     """The record of a covariance: symmetric part, eigenvalues, rank, diagnostics."""
     cov = finite_array(covariance, "covariance")
-    # Roundoff cleanup, not an eigenvalue repair; each entry rounded once.
+    # Roundoff cleanup, not an eigenvalue repair; each entry rounded once (D54).
     cov = symmetric_part(cov)
     eigenvalues = np.linalg.eigvalsh(cov)
     scale = float(np.max(np.abs(eigenvalues)))
@@ -237,11 +246,12 @@ def hc_covariance(
 def _codes(name: str, labels: object, nobs: int) -> CodeArray:
     """The integer codes of one dimension, numbered in order of first appearance.
 
-    ``labels`` must be a one-dimensional NumPy array of integers (signed or unsigned,
-    not boolean) with one nonnegative code per row; a negative code is the marker of a
-    missing label.  Codes 0, 1, ... are assigned to the distinct values in the order in
-    which they first appear, as ``pandas.factorize(sort=False)`` assigns them to labels;
-    the partition is the one supplied, and nothing is coerced or reordered.
+    Decision D40, in place of the source's pandas preparation: ``labels`` must be a
+    one-dimensional NumPy array of integers (signed or unsigned, not boolean) with one
+    nonnegative code per row; a negative code is the marker of a missing label.  Codes
+    0, 1, ... are assigned to the distinct values in the order in which they first
+    appear, as ``pandas.factorize(sort=False)`` assigns them to labels; the partition is
+    the one supplied, and nothing is coerced or reordered.
     """
     if not isinstance(labels, np.ndarray) or labels.dtype.kind not in ("i", "u"):
         raise ValueError(
@@ -251,6 +261,14 @@ def _codes(name: str, labels: object, nobs: int) -> CodeArray:
         raise ValueError(f"cluster dimension {name!r} must match the row count")
     if np.any(labels < 0):
         raise ValueError(f"cluster dimension {name!r} contains missing labels")
+    numbered = _numbered(labels)
+    if numbered is not None:
+        codes_found, groups = numbered
+        if groups < 2:
+            raise ValueError(
+                f"cluster dimension {name!r} must contain at least two clusters"
+            )
+        return codes_found
     unique, first, inverse = np.unique(labels, return_index=True, return_inverse=True)
     if len(unique) < 2:
         raise ValueError(
@@ -262,10 +280,42 @@ def _codes(name: str, labels: object, nobs: int) -> CodeArray:
     return codes
 
 
+def _numbered(labels: np.ndarray) -> tuple[CodeArray, int] | None:
+    """The labels as codes, and their number, when they number values by appearance.
+
+    That holds when the first label is ``0`` and every label is at most one more than
+    the largest before it: the distinct values are then ``0, ..., G - 1``, each first
+    appearing after the one below it, so the numbering of :func:`_codes` maps every
+    label to itself and ``G`` is the largest label plus one.  ``None`` for any other
+    vector, an empty one included, which :func:`_codes` numbers by sorting.
+    """
+    if not labels.size or labels[0] != 0:
+        return None
+    running = np.maximum.accumulate(labels)
+    if not bool((labels[1:] <= running[:-1] + 1).all()):
+        return None
+    codes: CodeArray = np.array(labels, dtype=np.intp)
+    return codes, int(running[-1]) + 1
+
+
+def _group_sums(inverse: CodeArray, rows: FloatArray, groups: int) -> FloatArray:
+    """The sum of the rows of each group, added in the order of the rows.
+
+    Column by column, ``numpy.bincount`` adds each row's weight to its group's total
+    in row order from zero, as ``numpy.add.at`` on a zero matrix does: the same
+    additions in the same order, hence the same doubles.
+    """
+    sums = np.zeros((groups, rows.shape[1]))
+    for column in range(rows.shape[1]):
+        weights = rows[:, column]
+        sums[:, column] = np.bincount(inverse, weights=weights, minlength=groups)
+    return sums
+
+
 def _cluster_columns(
     clusters: object, *, nobs: int
 ) -> tuple[tuple[str, ...], CodeArray]:
-    """The names of the dimensions and their codes, one column per dimension."""
+    """The names of the dimensions and their codes, one column per dimension (D40)."""
     columns: list[tuple[str, object]]
     if isinstance(clusters, Mapping):
         columns = [(str(name), labels) for name, labels in clusters.items()]
@@ -291,6 +341,27 @@ def _cluster_columns(
     return names, np.column_stack(coded)
 
 
+def _subset_groups(
+    codes: CodeArray, group_counts: tuple[int, ...], subset: tuple[int, ...]
+) -> tuple[CodeArray, int]:
+    """Return ``(inverse, n_groups)`` for a cluster dimension subset."""
+    if len(subset) == 1:
+        return codes[:, subset[0]], group_counts[subset[0]]
+    unique, inverse = np.unique(codes[:, subset], axis=0, return_inverse=True)
+    return inverse, len(unique)
+
+
+def _subset_factor(
+    correction: str, groups: int, nobs: int, df: int | None, common_factor: float | None
+) -> float:
+    """Return the small-sample factor for one cluster subset."""
+    if correction == "component":
+        return float(groups / (groups - 1) * (nobs - 1) / cast("int", df))
+    if correction == "min":
+        return float(cast("float", common_factor))
+    return 1.0
+
+
 def cluster_covariance(
     influence: ArrayLike,
     clusters: Clusters,
@@ -309,7 +380,7 @@ def cluster_covariance(
     Result methods are respectively ``'cluster'`` and ``'cluster_cgm2'``.
 
     ``clusters`` is an n-row integer-code vector or matrix, or a mapping from
-    names to aligned integer-code vectors. Codes are aligned with
+    names to aligned integer-code vectors (decision D40). Codes are aligned with
     the influence rows by position; nothing is reordered.
 
     For each nonempty subset A of dimensions, aggregate influence rows by
@@ -351,7 +422,8 @@ def cluster_covariance(
     nobs = len(values)
     df = _df(df_resid, nobs, required=correction != "none")
     names, codes = _cluster_columns(clusters, nobs=nobs)
-    group_counts = tuple(len(np.unique(codes[:, j])) for j in range(codes.shape[1]))
+    # Each column numbers its clusters 0, ..., G - 1, every code present (_codes).
+    group_counts = tuple(map(int, codes.max(axis=0) + 1))
     min_groups = min(group_counts)
     # df is an integer whenever a correction is requested: _df refused None.
     common_factor = (
@@ -366,26 +438,9 @@ def cluster_covariance(
     for size in range(1, maximum_size + 1):
         sign = 1 if size % 2 else -1
         for subset in combinations(range(len(names)), size):
-            if len(subset) == 1:
-                # _cluster_columns already numbers each owned column densely in
-                # first-appearance order. Its sorted unique values are 0..G-1,
-                # so the original inverse is this column itself. Reuse the G
-                # already obtained above; no row sort or additional scan.
-                inverse = codes[:, subset[0]]
-                groups = group_counts[subset[0]]
-            else:
-                unique, inverse = np.unique(
-                    codes[:, subset], axis=0, return_inverse=True
-                )
-                groups = len(unique)
-            sums = np.zeros((groups, values.shape[1]))
-            np.add.at(sums, inverse, scaled)
-            if correction == "component":
-                factor = groups / (groups - 1) * (nobs - 1) / cast("int", df)
-            elif correction == "min":
-                factor = cast("float", common_factor)
-            else:
-                factor = 1.0
+            inverse, groups = _subset_groups(codes, group_counts, subset)
+            sums = _group_sums(inverse, scaled, groups)
+            factor = _subset_factor(correction, groups, nobs, df, common_factor)
             component = float(factor) * (sums.T @ sums)
             covariance += sign * component
             components.append(

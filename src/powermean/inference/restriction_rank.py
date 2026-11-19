@@ -1,9 +1,10 @@
 """Numerical rank, consistency, range and generalized inverse of restrictions.
 
-Joint tests under a rank-aware policy. Redundant
+Design/04 Section 6 joint tests under the rank-aware policy that the author
+approved on 30 October 2026 ("Approve rank-aware joint tests"). Redundant
 restrictions count once; an untestable discrepancy component has no p-value;
 empty or inconsistent requests refuse. Nothing here fits, repairs a covariance
-or changes the exact-zero, negative-variance or withholding rules.
+or changes the D49 exact-zero, negative-variance or D45 withholding rules.
 
 Rank rule. The numerical rank of a matrix with singular values ``s`` counts the
 values above ``max(s) * max(shape) * eps``, the documented default of
@@ -37,12 +38,13 @@ Neither guard changes d, S, the inverse directions, nor its effective df.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
-from fractions import Fraction
 from typing import Final
 
 import numpy as np
 
+from powermean.data.design import exact_rank_is
 from powermean.model.variance import FloatArray
 
 EPS: Final[float] = float(np.finfo(np.float64).eps)
@@ -56,6 +58,8 @@ class Spectrum:
     (columns); ``discarded`` holds the unit eigenvectors below the cutoff. The
     cutoff is ``max |lambda| * m * eps``. ``indefinite`` records a retained
     negative eigenvalue, which is reported as missing inference, never repaired.
+    If an eigenvalue overflows, the stored eigenvalues are those of S divided
+    by 2**(2 * half_shift). The cutoff is always in the original units.
     """
 
     values: FloatArray
@@ -63,6 +67,7 @@ class Spectrum:
     discarded: FloatArray
     cutoff: float
     indefinite: bool
+    half_shift: int = 0
 
     @property
     def rank(self) -> int:
@@ -112,13 +117,27 @@ def spectrum(covariance: FloatArray) -> Spectrum:
     """Eigen-directions of a finite nonzero symmetric ``S`` split at the cutoff."""
     values, vectors = np.linalg.eigh(covariance)
     cutoff = rank_cutoff(values, covariance.shape)
+    half_shift = 0
+    if not math.isfinite(cutoff):
+        # |lambda| <= m * max|S_ij|. Divide by a power of four greater than m
+        # so every eigenvalue fits and its square-root scale is an exact power
+        # of two. Keep small and ordinary spectra on the original calculation.
+        half_shift = (covariance.shape[0].bit_length() + 1) // 2
+        with np.errstate(under="ignore"):
+            bounded = np.ldexp(covariance, -2 * half_shift)
+        values, vectors = np.linalg.eigh(bounded)
+        cutoff = rank_cutoff(values, covariance.shape)
     retained = np.abs(values) > cutoff
+    if half_shift:
+        with np.errstate(over="ignore"):
+            cutoff = float(np.ldexp(cutoff, 2 * half_shift))
     return Spectrum(
         values[retained],
         vectors[:, retained],
         vectors[:, ~retained],
         cutoff,
         bool(np.any(values[retained] < 0.0)),
+        half_shift,
     )
 
 
@@ -152,33 +171,11 @@ def outside_range(
     return bool(np.max(np.abs(components)) > tolerance)
 
 
-def exact_rank_is(rows: FloatArray, expected: int) -> bool:
-    """Certify algebraic row rank of finite supplied doubles, without a cutoff.
-
-    Fraction elimination establishes genuine dependencies of R, not a different
-    numerical rank policy. This is used only when choosing a structural range
-    basis; S's unchanged spectrum alone selects its inverse and effective df.
-    Stop as soon as the proposed rank is disproved. No exact rank, factorization
-    or success flag is retained across reporting calls.
-    """
-    basis: dict[int, list[Fraction]] = {}
-    for values in rows:
-        row = [Fraction(float(value)) for value in values]
-        for pivot, previous in basis.items():
-            multiplier = row[pivot]
-            if multiplier:
-                row = [a - multiplier * b for a, b in zip(row, previous, strict=True)]
-        for pivot, value in enumerate(row):
-            if value:
-                basis[pivot] = [entry / value for entry in row]
-                if len(basis) > expected:
-                    return False
-                break
-    return len(basis) == expected
-
-
 def quadratic_form(spectrum: Spectrum, difference: FloatArray) -> float:
     """``sum_i (u_i'd)^2 / lambda_i`` over the retained directions only."""
+    if spectrum.half_shift:
+        with np.errstate(under="ignore"):
+            difference = np.ldexp(difference, -spectrum.half_shift)
     components = spectrum.vectors.T @ difference
     scaled = components / np.sqrt(spectrum.values)
     return float(np.sum(scaled * scaled))

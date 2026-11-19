@@ -1,6 +1,8 @@
 """Detached profile and absorption state and result records.
 
-This module defines :func:`_owned_equation_check`, :func:`_owned_fresh_check`,
+``design/02_computation.md``, Sections 5.2 and 7; ``plan/evidence/M1.15_contract.txt``;
+``brief/layout_C_ownership.txt`` (P03).  This module defines
+:func:`_owned_equation_check`, :func:`_owned_fresh_check`,
 :class:`RetainedProfileState`, :class:`RetainedProfileResult`,
 :func:`_owned_profile_result`, :class:`RetainedAbsorptionState`,
 :class:`RetainedAbsorptionResult`, and :func:`_owned_absorption_result`.  Each state
@@ -269,9 +271,20 @@ class RetainedAbsorptionState:
         grouping: Grouping | RetainedGroupingSnapshot,
         columns: tuple[str, ...],
         coefficients: tuple[FloatArray, ...],
+        *,
+        _view: bool = False,
     ) -> None:
-        """Detach ``grouping`` and store owned copies of ``coefficients``."""
-        object.__setattr__(self, "_grouping", detach_grouping(grouping))
+        """Detach ``grouping`` and store owned copies of ``coefficients``.
+
+        With ``_view``, ``grouping`` is an internally owned snapshot of the retained
+        assembly and is stored as given; it is rematerialized on every outward
+        exposure, as a detached one is.
+        """
+        if _view:
+            assert type(grouping) is RetainedGroupingSnapshot
+        object.__setattr__(
+            self, "_grouping", grouping if _view else detach_grouping(grouping)
+        )
         object.__setattr__(self, "columns", tuple(str(c) for c in columns))
         object.__setattr__(self, "_coefficients", _tuple_arrays(coefficients))
 
@@ -282,8 +295,14 @@ class RetainedAbsorptionState:
         *,
         grouping_snapshot: RetainedGroupingSnapshot | None = None,
         grouping_map: GroupingIdentityMap | None = None,
+        view: RetainedGroupingSnapshot | None = None,
     ) -> RetainedAbsorptionState:
-        """Detach an ``AbsorptionState`` into a :class:`RetainedAbsorptionState`."""
+        """Detach an ``AbsorptionState`` into a :class:`RetainedAbsorptionState`.
+
+        ``view``: the internally owned snapshot of ``state.grouping``, stored as given.
+        """
+        if view is not None:
+            return cls(view, state.columns, state.coefficients, _view=True)
         grp = _resolve_state_grouping(
             state.grouping,
             grouping_snapshot=grouping_snapshot,
@@ -336,12 +355,17 @@ class RetainedAbsorptionResult:
         *,
         grouping_snapshot: RetainedGroupingSnapshot | None = None,
         grouping_map: GroupingIdentityMap | None = None,
+        view: RetainedGroupingSnapshot | None = None,
     ) -> RetainedAbsorptionResult:
-        """Detach an ``AbsorptionResult`` into a :class:`RetainedAbsorptionResult`."""
+        """Detach an ``AbsorptionResult`` into a :class:`RetainedAbsorptionResult`.
+
+        ``view``: as :meth:`RetainedAbsorptionState.from_state` takes it.
+        """
         st = RetainedAbsorptionState.from_state(
             r.state,
             grouping_snapshot=grouping_snapshot,
             grouping_map=grouping_map,
+            view=view,
         )
         return cls(
             r.residual,

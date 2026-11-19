@@ -1,4 +1,4 @@
-"""Row arithmetic for cancellation.
+"""D12 row arithmetic for cancellation (01 Sections 4.1 and 5.2).
 
 Reuse the package's log components for its built-in variances: in particular the
 small NB2 complement must survive an elasticity that rounds to two. Other Variance
@@ -8,11 +8,12 @@ No outcome/order mapping, criterion or statistical weight policy is defined here
 
 from __future__ import annotations
 
-from typing import NamedTuple
+from typing import TYPE_CHECKING, NamedTuple
 
 import numpy as np
 
 from powermean.fe._cancel_storage import IndexArray, finite_vector
+from powermean.fe.cancel import segment_sum
 from powermean.model.rows import _exp, _immutable, _log_components, _log_sum
 from powermean.model.variance import (
     FloatArray,
@@ -126,3 +127,54 @@ def group_residuals(
             "cancelled Jacobian weight",
         )
     return pi, rho, k
+
+
+if TYPE_CHECKING:
+    from powermean.fe.retained import CenteredDesign
+
+GROUPED_WORK = 64
+
+
+def _grouped_block(
+    design: CenteredDesign, k: FloatArray, pi: FloatArray | None, out: FloatArray
+) -> None:
+    """Write ``F_R' M_C D M_C F_R`` into ``out`` from group-by-level sums."""
+    structure = design.structure
+    groups, codes = structure.n_groups, structure.sorted_codes
+    counts = structure.counts.astype(np.float64)
+    k_mean = segment_sum(structure, k) / counts
+    shares = None if pi is None else pi - (segment_sum(structure, pi) / counts)[codes]
+    blocks = list(
+        zip(
+            structure.retained_sorted_codes,
+            [start - design.n_slopes for start in design.block_starts],
+            structure.block_sizes,
+            strict=True,
+        )
+    )
+    left: list[FloatArray] = []
+    right: list[FloatArray] = []
+    for block_codes, _, size in blocks:
+        cells, length = codes * size + block_codes, groups * size
+        present_counts = np.bincount(cells, minlength=length).astype(np.float64)
+        present = present_counts.reshape(groups, size)
+        sums = np.bincount(cells, weights=k, minlength=length).reshape(groups, size)
+        factors = [
+            (k_mean / counts)[:, None] * present - sums / counts[:, None],
+            -present / counts[:, None],
+        ]
+        partners = [present, sums]
+        if shares is not None:
+            spread = np.bincount(cells, weights=shares, minlength=length)
+            factors.append(-spread.reshape(groups, size))
+            partners.append(sums - k_mean[:, None] * present)
+        left.append(np.concatenate(factors))
+        right.append(np.concatenate(partners))
+    for (row_codes, row, rows), factor in zip(blocks, left, strict=True):
+        for (col_codes, col, cols), partner in zip(blocks, right, strict=True):
+            own = np.bincount(
+                row_codes * cols + col_codes, weights=k, minlength=rows * cols
+            )
+            out[row : row + rows, col : col + cols] = (
+                own.reshape(rows, cols) + factor.T @ partner
+            )

@@ -1,13 +1,17 @@
 """The named HC covariances HC0 to HC5 and HC4m: multipliers, meat, composition.
 
-The multipliers are those of sandwich 3.1-1 ``meatHC``, read from its source and
-written here from its formulas.  No public name or default here.  The exact strings
-of a request without fixed effects
-reach these kernels through the fit-time provider of
+``design/04_inference_and_effects.md``, Sections 2.3 and 3 (D55, D57, D60);
+``plan/evidence/M1_contract.txt``, rules B1, B2, B5, B6, B12 and Sections 3.1 and 3.2
+(the multipliers of sandwich 3.1-1 ``meatHC``, read from its source, written here from
+the pinned formulas); ``plan/evidence/M1_validation_plan.txt``, Section 4;
+``plan/evidence/D55_nonlinear_HC_reference.txt`` (the composite with the observed
+bread); decisions D49, D51, D54, D57, D60 and D65.  Task M1.18: no public name or
+default here.  The exact strings of a request without fixed effects (contract, Section
+6(a)) reach these kernels through the fit-time provider of
 :mod:`powermean.inference.hc_provider` and the retained adapter of
 :mod:`powermean.results.retained_hc`.
 
-Definitions.  With ``h_i`` the per-replica leverage of
+Definitions (Section 3.2).  With ``h_i`` the per-replica leverage of
 :mod:`powermean.inference.leverage`, ``N`` the statistical count,
 ``p = round(sum_i f_i h_i)`` (the trace over literal replicas, equal to the identified
 full-design rank ``K``) and ``r_i = N h_i / p``, the squared-score multipliers are
@@ -23,13 +27,13 @@ covariance is the sandwich of the SAME point, ``V = A [sum_i q_i s_i s_i' / f_i]
 the expected information with ``bread="expected"``, both on the full nuisance basis for
 an absorbed fit), ``q_i`` the multiplier of the row, ``f_i`` its frequency count (a
 replica carries ``s_i / f_i``), so that HC0 is the robust meat with factor one, bit for
-bit through the primitive (:func:`powermean.inference.ssc.primitive_estimate`
+bit through the accepted primitive (:func:`powermean.inference.ssc.primitive_estimate`
 of the rows ``sqrt(q_i) u_i``).  The nonlinear hats use the expected-information
-geometry whatever the bread: with the observed bread the result is a declared
-COMPOSITE, not stock GLM covariance; with
+geometry whatever the bread (D57): with the observed bread the result is the declared
+COMPOSITE of ``D55_nonlinear_HC_reference.txt``, not stock GLM covariance; with
 ``bread="expected"`` it is the stock sandwich.  Both components are recorded.
 
-Ownership.  The scalar is :mod:`powermean.inference.ssc`'s:
+Ownership (D60, Section 3.1).  The scalar is :mod:`powermean.inference.ssc`'s:
 ``apply_convention(..., kind="robust", method=...)`` gives the method's own factor
 (``N/(N-K)`` for HC1, defined for ``N > K`` only, else
 ``specification.no_residual_dof``; one otherwise), refuses an explicit convention
@@ -38,23 +42,31 @@ reference distribution of the convention in force, inherited or default conventi
 never multiplying.  The factor is applied once by
 :func:`powermean.inference.ssc.scaled_covariance`.
 
-Refusals before any solve: the preflight (:func:`hc_preflight`).  From
+Refusals before any solve (rule B12(a)): the preflight (:func:`hc_preflight`).  From
 the design, the raw weights, their kind, the method and the convention alone, which a
 fit has before it solves and a post-fit request has in its retained state, the
 preflight decides the exact full column rank of the design on its active rows
 (:func:`powermean.inference.leverage.exact_full_rank`, the rational echelon: a
 dependent column refuses with ``ValueError``), the statistical count, the method's
 factor (HC1 at ``N = K``: ``specification.no_residual_dof``; an explicit second
-correction: ``specification.conflicting``) and, for HC2 to HC5 and HC4m, structural
-unit leverage of one replica (``specification.unit_leverage`` with the count of such
-observations).  Every entry point runs it before any evaluation, factorization or
-solve, so a refusal costs none; the same function serves a fit before its solve
-with the same identifiers.  A computed hat within rounding of
-one on a row that is not structural is not refused there: its multiplier is formed as
-written, and a base ``1 - h`` that is not positive, or a multiplier or product beyond
-the doubles, raises ``FloatingPointError`` (no floor, no clamp, no fallback).  Exact
-zero variances stay zero, representable tiny values are kept, a negative
+correction: ``specification.conflicting``).  Every entry point runs it before any
+evaluation, factorization or solve, so a refusal costs none; the same function serves a
+fit before its solve (tasks M1.22 and M1.45) with the same identifiers.  Unit leverage
+is not refused (owner's ruling 74, as on the fixed-effect routes): where a computed hat
+is above ``UNSTABLE_ABOVE`` (``sandwich``'s near-one criterion),
+:func:`hc_covariance` issues ``covariance.unstable_leverage`` and HC2 to HC5 and HC4m
+are missing (:attr:`HCCovariance.undefined`).  A multiplier or product beyond the
+doubles raises ``FloatingPointError`` (no floor, no clamp, no fallback).  Exact
+zero variances stay zero (D49), representable tiny values are kept (D54), a negative
 variance gives a missing standard error downstream.
+
+Fits with fixed effects do not use that preflight: at ``omega != 0`` (owner's rulings
+55, 63 and 65) their request is prepared and composed by
+:mod:`powermean.inference.absorbed_block_hc` (no exact rank or unit-leverage decision,
+singleton rows excluded and counted, sandwich's warning for hat values close to one,
+hats by block elimination, none for HC0 and HC1), and fixed-effect log-OLS
+(``omega = 0``, ruling 52) by :mod:`powermean.inference.absorbed_linear`, with the
+same rules and the leverage of the dummy-variable regression.
 
 Binding.  Each entry point forms every component from ONE owner of the rows at one
 point, and forms it again at every call: nothing is cached, aliased or reused across
@@ -68,35 +80,21 @@ every row is bound, the rows of zero score included, and no caller matrix enters
 linear request names the :class:`LinearRequest` that owns the equation as the solve
 received it (response, offset, design, raw weights and their kind, every input row in
 its order, the rows of zero weight included) together with the candidate that the
-solve returned for it (:class:`LinearSolve`, formed by :func:`solve_request`,
-the internal request/solve handoff that captures the equation before the solve): the
+accepted solve returned for it (:class:`LinearSolve`, formed by :func:`solve_request`,
+the private request/solve handoff that captures the equation before the solve): the
 candidate's units, weights and residuals are checked bit for bit against the owner's
 rows at the candidate's coefficients (``e = l - o - X beta``, the solve's own
 arithmetic, no second solve), and the design of the bread, of the hats and of the
 scores is the owner's own, since a candidate alone carries neither response, offset
-nor design.  An absorbed request names the
-:class:`~powermean.solve.absorbed_certificate_point.AdmittedPoint` of the
-certificate path, which owns the sample (response, offset, raw weights and their
-kind, the scaled slopes and the blocks) and the point (``q``, ``theta``, the base and
-the working variance): the record is admitted again by
-:func:`~powermean.solve.absorbed_certificate_point.admit_point` and must equal the
-record given bit for bit, the full nuisance basis is the sample's own
-(:func:`~powermean.fe.certificate_basis.owned_basis`), and the observed rows
-(:func:`~powermean.solve.absorbed_certificate_point.fresh_rows`) and the expected
-curvature are both evaluated at that one ``q`` from that one sample, so that no caller
-row, Fisher vector or basis enters; the composition of given rows is an internal
-helper of this module, not an entry point.  The root point of a selected-root
-absorbed fit outside ``tau in [1, 2]`` is admitted as its kind (its inner controls
-those its organization requested) and its observed rows keep their actual signed
-curvature: the hats stay those of the positive expected information, the bread
-the actual observed Jacobian, as for every nonlinear point.  Records own their
+nor design.  Records own their
 arrays: the leverage record of a composition is copied whole
 (:func:`powermean.inference.leverage.detached`), so that no caller array header or
-record is retained.  The reporting map is not applied here.
+record is retained.  The reporting map (rule B3) is not applied here.
 """
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, replace
 from typing import Literal
 
@@ -105,11 +103,10 @@ from numpy.typing import ArrayLike
 
 from powermean.data.accounting import frozen_index
 from powermean.data.inference_requests import HC_METHODS, HCMethod
-from powermean.errors import SpecificationError
-from powermean.fe.certificate_basis import CertificateBasis, owned_basis
-from powermean.inference.absorbed_code_tuples import CachedCodeTuples
+from powermean.errors import CovarianceWarning
+from powermean.fe.certificate_basis import CertificateBasis
 from powermean.inference.absorbed_rank import AbsorbedCount, absorbed_count
-from powermean.inference.bread import Bread, bread_influence, same_point_influence
+from powermean.inference.bread import Bread
 from powermean.inference.contributions import (
     Influence,
     linear_influence,
@@ -119,7 +116,6 @@ from powermean.inference.influence import influence_values, moment_influence_map
 from powermean.inference.leverage import (
     FullRank,
     Leverage,
-    absorbed_leverage,
     dense_leverage,
     detached,
     exact_full_rank,
@@ -135,35 +131,34 @@ from powermean.inference.ssc import (
 )
 from powermean.inference.vcov import CovarianceEstimate
 from powermean.model.order import IndexArray
-from powermean.model.rows import _immutable, evaluate_rows
+from powermean.model.rows import _immutable
 from powermean.model.variance import FloatArray, _finite_array, _finite_result
-from powermean.solve.absorbed_certificate_geometry import hessian
-from powermean.solve.absorbed_certificate_point import (
-    AdmittedPoint,
-    FreshRows,
-    InnerControls,
-    admit_point,
-    fresh_rows,
-)
 from powermean.solve.linear import LinearCandidate, solve
 from powermean.solve.linear import _offset as _linear_offset
 from powermean.solve.linear import _response_and_design as _linear_rows
 from powermean.solve.linear import _weights as _linear_weights
-from powermean.solve.linear_absorbed_point import LinearControls, LinearPoint
-from powermean.solve.absorbed import AbsorbedOptions, Organization
-from powermean.solve.profiled_trigger import WholePoint
 from powermean.systems.joint import JointEvaluation, JointSystem, SamplingUnits
 
 LEVERAGE_METHODS: tuple[str, ...] = ("HC2", "HC3", "HC4", "HC4m", "HC5")
-# The constants of the formulas of sandwich's meatHC, not options.
+# The constants of the formulas of sandwich's meatHC (Section 3.2), not options.
 HC4_CAP = 4.0
 HC4M_POWERS = (1.0, 1.5)
 HC5_FLOOR = 4.0
 HC5_SHARE = 0.7
 HC5_HALF = 0.5
+# R sandwich 3.1-3 (CRAN, 2026-08-02), file R/vcovHC.R, function meatHC: for every
+# type but "const" the hat values are tested by
+#     idx <- diaghat > 1 - sqrt(.Machine$double.eps)
+# and, for HC2, HC3, HC4, HC4m and HC5, the covariance is computed with
+#     warning("%s covariances are numerically unstable for hat values close to 1
+#              (and undefined if exactly 1) as for observation(s) %s").
+# The same criterion on the same floating-point type is used here (ruling 65): it is
+# sandwich's constant, not one of this package.  sandwich also warns for HC0 and HC1
+# ("become (close to) singular if hat values are (close to) 1"); that warning has no
+# counterpart here (the routes with fixed effects compute no hat value for them).
+UNSTABLE_ABOVE = 1.0 - float(np.sqrt(np.finfo(np.float64).eps))
 Layout = Literal["dense", "absorbed"]
 NOT_SOLVED = "the candidate is not the solve of this request at its coefficients"
-NOT_ADMITTED = "the point is not the admitted point of its record on its sample"
 
 
 # -------------------------------------------------------------------- records
@@ -215,28 +210,47 @@ class HCCovariance:
     applied : AppliedConvention
         The convention in force, the counts, the factor with its owner, the reference:
         a frozen record of integers and strings, without an array.
-    leverage : Leverage
+    leverage : Leverage or None
         The per-replica hats and their provenance, an owned copy: no array header or
-        nested record of the caller's record is retained.
-    multipliers : Multipliers
-        ``q_i``, ``r_i``, ``p`` and ``max r``.
+        nested record of the caller's record is retained.  ``None`` for HC0 and HC1
+        of a joint fixed-effect fit, which compute no hat
+        (:mod:`powermean.inference.absorbed_block_hc`).
+    multipliers : Multipliers or None
+        ``q_i``, ``r_i``, ``p`` and ``max r``; ``None`` with ``leverage``.
     bread : {"observed", "expected"}
         The bread of the influence rows.
     layout : {"dense", "absorbed"}
         Slopes alone, or the full nuisance basis.
     influence : array
         ``u_i = A s_i`` on the active rows, owned.
+    dropped : int
+        The singleton rows excluded from the request (joint fixed-effect fits; zero
+        elsewhere): ``N`` and the rank of ``applied`` do not count them.
+    unstable : int
+        The observations whose hat value is above sandwich's criterion
+        ``1 - sqrt(eps)``, for which the note ``covariance.unstable_leverage`` was
+        issued (HC2 to HC5 and HC4m; zero otherwise).
+    undefined : int
+        The observations above the near-one warning criterion, on every route
+        (owner's ruling 74).  Where it is positive the request is undefined:
+        ``covariance`` is missing (every entry NaN), ``multipliers`` is ``None``
+        and ``estimate`` is the unadjusted primitive of the same influence rows
+        (``gate_covariance`` is then the covariance the fit's coefficient gate
+        reads; the reported standard errors of the request are missing).
     """
 
     method: HCMethod
     covariance: FloatArray
     estimate: CovarianceEstimate
     applied: AppliedConvention
-    leverage: Leverage
-    multipliers: Multipliers
+    leverage: Leverage | None
+    multipliers: Multipliers | None
     bread: Bread
     layout: Layout
     influence: FloatArray
+    dropped: int = 0
+    unstable: int = 0
+    undefined: int = 0
 
     @property
     def factor(self) -> float:
@@ -251,9 +265,39 @@ class HCCovariance:
         return self.applied.reference
 
     @property
+    def gate_covariance(self) -> FloatArray:
+        """``covariance``, or the unadjusted estimate where the request is undefined."""
+        if not self.undefined:
+            return self.covariance
+        scaled: FloatArray = self.factor * self.estimate.covariance
+        return scaled
+
+    @property
     def hat_geometry(self) -> str:
-        """The leverage convention: the expected-information geometry."""
-        return self.leverage.geometry
+        """The leverage convention: the expected-information geometry (D57)."""
+        return "expected" if self.leverage is None else self.leverage.geometry
+
+
+def missing_covariance(like: FloatArray) -> FloatArray:
+    """A covariance of the shape of ``like`` whose every entry is missing (NaN)."""
+    return _immutable(np.full(like.shape, np.nan))
+
+
+def _unstable(method: HCMethod, leverage: Leverage) -> int:
+    """Issue sandwich's warning for hat values close to one; their number.
+
+    ``UNSTABLE_ABOVE`` and the wording follow ``sandwich::meatHC`` (see the constant).
+    """
+    hat = leverage.hat[leverage.active]
+    count = int(np.count_nonzero(hat > UNSTABLE_ABOVE))
+    if count:
+        warnings.warn(
+            CovarianceWarning(
+                "covariance.unstable_leverage", {"method": method, "count": count}
+            ),
+            stacklevel=2,
+        )
+    return count
 
 
 # ----------------------------------------------------------------- multipliers
@@ -267,7 +311,7 @@ def _method(method: HCMethod) -> HCMethod:
 
 
 def _exponents(method: HCMethod, r: FloatArray, max_r: float) -> FloatArray:
-    """The exponent ``e_i`` of ``(1 - h_i)^-e_i``."""
+    """The exponent ``e_i`` of ``(1 - h_i)^-e_i`` (Section 3.2)."""
     if method in ("HC0", "HC1"):
         return np.zeros(r.shape)
     if method == "HC2":
@@ -459,10 +503,8 @@ def hc_preflight(
         Misaligned or invalid inputs, an unknown method, or a design that is not of
         full column rank on the rows of positive weight (the exact witness).
     SpecificationError
-        ``specification.no_residual_dof`` (HC1 at ``N = K``),
         ``specification.conflicting`` (an explicit second correction) or
-        ``specification.unit_leverage`` (HC2 to HC5 and HC4m, with the count of
-        observations of structural unit leverage), in that order.
+        ``specification.no_residual_dof`` (HC1 at ``N = K``), in that order.
     TypeError
         ``frequency`` is not a ``bool``.
     """
@@ -487,11 +529,6 @@ def hc_preflight(
         kind="robust",
         method=found,
     )
-    if found in LEVERAGE_METHODS and exact.unit.size:
-        raise SpecificationError(
-            "specification.unit_leverage",
-            {"method": found, "count": int(exact.unit.size)},
-        )
     return HCPreflight(found, applied, exact, count, frequency, int(a.size), absorbed)
 
 
@@ -536,12 +573,16 @@ def hc_covariance(
         raise ValueError("the influence rows are not the active rows of the leverage")
     if applied.counts.rank != owned.rank:
         raise ValueError("the counts and the leverage disagree on the rank")
-    found = multipliers(method, owned, applied.counts.count)
-    estimate = adjusted_estimate(rows, weights, found.values, frequency=frequency)
+    # Owner's ruling 74: a computed hat above the near-one criterion is a hat of one;
+    # HC2 to HC5 are then missing after the note, as on the fixed-effect routes.
+    undefined = _unstable(method, owned) if method in LEVERAGE_METHODS else 0
+    found = None if undefined else multipliers(method, owned, applied.counts.count)
+    values = np.ones(rows.shape[0]) if found is None else found.values
+    estimate = adjusted_estimate(rows, weights, values, frequency=frequency)
     scaled = scaled_covariance(estimate, applied)
     return HCCovariance(
         method,
-        scaled.covariance,
+        missing_covariance(scaled.covariance) if undefined else scaled.covariance,
         estimate,
         applied,
         owned,
@@ -549,6 +590,8 @@ def hc_covariance(
         bread,
         layout,
         _immutable(rows),
+        unstable=undefined,
+        undefined=undefined,
     )
 
 
@@ -622,16 +665,15 @@ def joint_hc(
     frequency : bool
         Whether the weights are frequency counts.
     bread : {"observed", "expected"}, optional
-        The observed Jacobian (default, the composite) or the expected
+        The observed Jacobian (default, the D57 composite) or the expected
         information (the stock sandwich).  The hats use the expected geometry either
         way.
 
     Raises
     ------
     SpecificationError
-        ``specification.no_residual_dof`` (HC1 at ``N = K``),
-        ``specification.conflicting`` (a second correction), or
-        ``specification.unit_leverage`` (HC2 to HC5, HC4m), each by the preflight,
+        ``specification.no_residual_dof`` (HC1 at ``N = K``) or
+        ``specification.conflicting`` (a second correction), each by the preflight,
         before the evaluation and any solve.
     ValueError
         A design that is not of full column rank, an unknown method or bread, or an
@@ -1020,201 +1062,6 @@ def linear_hc(
 # --------------------------------------------------------------------- absorbed
 
 
-@dataclass(frozen=True)
-class HCComposition:
-    """Structural facts and the current observed influence of one composition."""
-
-    preflight: HCPreflight | None = None
-    code_tuples: CachedCodeTuples | None = None
-    observed_influence: FloatArray | None = None
-
-
-def _absorbed_composition(
-    design: FloatArray,
-    basis: CertificateBasis,
-    rows: FreshRows,
-    fisher: FloatArray,
-    method: HCMethod,
-    *,
-    convention: ResolvedConvention,
-    bread: Bread,
-    prepared: HCComposition | None = None,
-) -> HCCovariance:
-    """The composition of given absorbed rows: an internal helper, not an entry point.
-
-    ``design`` is ``X`` on every row of the grouping, ``basis`` the kept nuisance
-    coordinates of those rows, ``rows`` the observed ``b = a r`` and ``C = a c`` with
-    the raw weights and their kind, ``fisher`` the expected row curvature ``w_i`` at
-    the same point, unweighted (ones for the linear equation).  Nothing here can tell
-    rows of one point from a Fisher vector of another: :func:`absorbed_hc` derives
-    all four from one admitted point and is the entry point.
-    """
-    if type(rows) is not FreshRows or type(basis) is not CertificateBasis:
-        raise TypeError("rows must be FreshRows and basis a CertificateBasis")
-    matrix = _finite_array(design, "design")
-    a, frequency = rows.weights, rows.frequency
-    n = basis.grouping.n_rows
-    if matrix.ndim != 2 or matrix.shape[0] != n or not matrix.shape[1]:
-        raise ValueError("design must have one row per row of the grouping, a column")
-    if a.shape != (n,) or rows.b.shape != (n,) or rows.curvature.shape != (n,):
-        raise ValueError("the rows belong to another grouping")
-    preflight = None if prepared is None else prepared.preflight
-    code_tuples = None if prepared is None else prepared.code_tuples
-    observed_influence = None if prepared is None else prepared.observed_influence
-    if preflight is None:
-        preflight = hc_preflight(
-            matrix, a, method, convention, frequency=frequency, basis=basis
-        )
-    active = preflight.active
-    leverage = absorbed_leverage(
-        matrix, basis, a, fisher, frequency=frequency, code_tuples=code_tuples
-    )
-    if bread == "observed" and observed_influence is not None:
-        inf_rows = observed_influence
-    elif bread == "expected" and leverage.slope_map is not None:
-        inf_rows = bread_influence(matrix, basis, rows.b, leverage.slope_map.columns)
-    else:
-        curvature = rows.curvature if bread == "observed" else leverage.gram_weights
-        inf_rows = same_point_influence(
-            matrix, basis, rows.b, hessian(matrix, curvature, basis), bread=bread
-        ).influence
-    return hc_covariance(
-        inf_rows[active],
-        a[active],
-        leverage,
-        preflight.applied,
-        frequency=frequency,
-        bread=bread,
-        layout="absorbed",
-    )
-
-
-def _absorbed_options(kind: Organization, inner: InnerControls) -> AbsorbedOptions:
-    """The accepted options record of a nonlinear admission's inner controls."""
-    if inner.profile_tol is None:
-        return AbsorbedOptions(
-            absorbed=kind,
-            absorb_tol_final=inner.tolerance,
-            absorb_max_sweeps=inner.max_sweeps,
-            absorb_acceleration=inner.acceleration,
-        )
-    return AbsorbedOptions(
-        absorbed=kind,
-        absorb_tol_final=inner.tolerance,
-        absorb_max_sweeps=inner.max_sweeps,
-        absorb_acceleration=inner.acceleration,
-        profile_tol=inner.profile_tol,
-    )
-
-
-def _readmitted(point: AdmittedPoint) -> AdmittedPoint:
-    """The point's record admitted again by the accepted path, equal to the point.
-
-    :func:`~powermean.solve.absorbed_certificate_point.admit_point` of the point's own
-    record under its inner controls (with its sample and working variance for a
-    nonlinear record) must give its kind, its sample (the same object), its slopes,
-    its base and its index bit for bit; otherwise the point is not the admitted point
-    of its record on its sample (``ValueError``; ``TypeError`` for a record that is
-    not of its kind).  The fresh record is the one used.
-    """
-    record, inner = point.record, point.inner
-    if point.kind == "linear":
-        if not isinstance(record, LinearPoint):
-            raise ValueError(NOT_ADMITTED)
-        controls = LinearControls(inner.tolerance, inner.max_sweeps, inner.acceleration)
-        fresh = admit_point(record, controls)
-    else:
-        if isinstance(record, LinearPoint) or point.variance is None:
-            raise ValueError(NOT_ADMITTED)
-        kind: Organization = "profiled" if point.kind == "profiled" else "index"
-        if point.kind == "root":
-            # A root point keeps the requested organization's controls as given.
-            kind = "profiled" if inner.profile_tol is not None else "index"
-        whole = WholePoint(point.sample, point.variance, record)
-        fresh = admit_point(whole, _absorbed_options(kind, inner))
-    bound = (
-        fresh.kind == point.kind
-        and fresh.sample is point.sample
-        and _same(fresh.theta, point.theta)
-        and _same(fresh.base, point.base)
-        and _same(fresh.q, point.q)
-    )
-    if not bound:
-        raise ValueError(NOT_ADMITTED)
-    return fresh
-
-
-def _expected_curvature(point: AdmittedPoint) -> FloatArray:
-    """The expected row curvature ``w_i`` at the admitted point, unweighted.
-
-    One for the WLS equation; else the information weight of the accepted row kernel
-    at ``q`` on the sample's response, the evaluation whose score and observed
-    curvature ``fresh_rows`` weighs.
-    """
-    sample = point.sample
-    if point.variance is None:
-        return np.ones(sample.count)
-    rows = evaluate_rows(sample.problem.response, point.q, variance=point.variance)
-    return rows.fisher_curvature
-
-
-def absorbed_hc(
-    point: AdmittedPoint,
-    method: HCMethod,
-    convention: ResolvedConvention,
-    *,
-    bread: Bread = "observed",
-) -> HCCovariance:
-    """The named HC covariance of the slopes of an absorbed fit at an admitted point.
-
-    Parameters
-    ----------
-    point : AdmittedPoint
-        The admitted point of the accepted certificate path, which owns the sample
-        (response, offset, raw weights and their kind, scaled slopes and blocks) and
-        the point (``q``, ``theta``, base, working variance or the WLS equation); it
-        is admitted again from its record and must equal the record given bit for
-        bit.  Every component is derived from it: the full nuisance basis of its
-        sample, the observed rows ``b = a r`` and ``C = a c`` and the expected row
-        curvature ``w``, both at its ``q``.
-    method : HC method
-        The exact method string.
-    convention : ResolvedConvention
-        The convention in force for this request.
-    bread : {"observed", "expected"}, optional
-        The observed Hessian ``B' diag(C) B`` (default) or the expected one
-        ``B' diag(a w) B``, both assembled on the sample's full basis.
-
-    Raises
-    ------
-    SpecificationError
-        As :func:`joint_hc`, by the preflight on the full design, before any
-        assembly or solve.
-    ValueError
-        A point that is not the admitted point of its record on its sample, a fit
-        without a slope (whose slope covariance is empty), an unknown method or
-        bread, or a design that is not identified.
-    TypeError
-        Another type of point, or a record that is not of the point's kind.
-    """
-    found = _method(method)
-    if type(point) is not AdmittedPoint:
-        raise TypeError("point must be an AdmittedPoint")
-    if bread not in ("observed", "expected"):
-        raise ValueError("bread must be 'observed' or 'expected'")
-    fresh = _readmitted(point)
-    sample = fresh.sample
-    design = sample.design
-    if design is None:
-        raise ValueError("a fit without a slope has no slope covariance")
-    basis = owned_basis(sample)
-    rows = fresh_rows(fresh)
-    fisher = _expected_curvature(fresh)
-    return _absorbed_composition(
-        design.matrix, basis, rows, fisher, found, convention=convention, bread=bread
-    )
-
-
 __all__ = [
     "HC4M_POWERS",
     "HC4_CAP",
@@ -1227,13 +1074,13 @@ __all__ = [
     "LinearRequest",
     "LinearSolve",
     "Multipliers",
-    "absorbed_hc",
     "adjusted_estimate",
     "hc_covariance",
     "hc_preflight",
     "joint_hc",
     "linear_hc",
     "linear_request",
+    "missing_covariance",
     "multipliers",
     "solve_request",
 ]

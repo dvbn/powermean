@@ -1,4 +1,4 @@
-"""Value admission of current absorbed inference evidence.
+"""Value admission of current absorbed inference evidence (D49/D54/D57/D76).
 
 The closed covariance kernels remain the numerical owners. Here their carried
 records must agree with the actual request, fresh geometry and report map; a
@@ -7,7 +7,7 @@ method name or a covariance shape is not a substitute for those bindings.
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Protocol, cast
 
 import numpy as np
 
@@ -15,6 +15,7 @@ from powermean.data.inference_conventions import ConventionValues
 from powermean.data.request_values import Omitted
 from powermean.data.sample_fe_state import same_bits
 from powermean.model.order_scale import OrderScale
+from powermean.model.variance import FloatArray
 from powermean.solve.absorbed_certificate_geometry import FEGeometry
 from powermean.solve.absorbed_scale_details import FEScaleDetails, record_fields
 from powermean.solve.absorbed_scale_records import CovarianceRecord
@@ -33,6 +34,15 @@ APPLIED = (
     "reference",
     "psd",
 )
+
+
+class _HCGate(Protocol):
+    @property
+    def gate_covariance(self) -> FloatArray:
+        """Covariance used by the coefficient gate."""
+        ...
+
+
 COUNTS = (
     "count",
     "n_slopes",
@@ -152,12 +162,18 @@ def _counts(
         else int(np.count_nonzero(active))
     )
     counts = record_fields(applied["counts"], COUNTS)
+    # A named HC request leaves its singleton rows out of N and of the rank, one
+    # dimension each (rule U1); every other request counts every active row.
+    dropped = getattr(details.hc, "dropped", 0) if context.request.kind == "hc" else 0
     if not (
-        details.units.nobs == sample.count
+        type(dropped) is int
+        and dropped >= 0
+        and details.units.nobs == sample.count
         and np.array_equal(details.units.identifiers, np.flatnonzero(active))
         and np.array_equal(details.units.inactive, np.flatnonzero(~active))
-        and details.count == covariance.count == counts["count"] == expected_n
-        and details.rank == counts["rank"] == geometry.dimension
+        and details.count == covariance.count == counts["count"]
+        and counts["count"] == expected_n - dropped
+        and details.rank == counts["rank"] == geometry.dimension - dropped
         and counts["n_slopes"] == geometry.n_slopes
     ):
         raise ValueError(STALE)
@@ -194,18 +210,35 @@ def _hc(
         "bread",
         "layout",
         "influence",
+        "dropped",
+        "unstable",
+        "undefined",
     )
     hc = record_fields(details.hc, names)
-    leverage = hc["leverage"]
+    leverage, dropped = hc["leverage"], hc["dropped"]
+    if type(dropped) is not int or type(hc["undefined"]) is not int:
+        raise TypeError("the excluded and the undefined rows are exact integers")
+    rank = context.geometry.dimension - dropped
+    # HC0 and HC1 of a nonlinear fit read no leverage and record none.
+    no_hat = (
+        leverage is None
+        and context.request.method in ("HC0", "HC1")
+        and context.geometry.point.variance is not None
+    )
     if not (
         hc["method"] == context.request.method
         and hc["bread"] == context.request.bread
         and hc["layout"] == "absorbed"
         and hc["applied"] == details.applied
         and same_bits(np.asarray(hc["covariance"]), covariance.covariance)
-        and getattr(leverage, "rank", None) == context.geometry.dimension
-        and getattr(leverage, "p", None) == context.geometry.dimension
-        and getattr(leverage, "geometry", None) == "expected"
+        and (
+            no_hat
+            or (
+                getattr(leverage, "rank", None) == rank
+                and getattr(leverage, "p", None) == rank
+                and getattr(leverage, "geometry", None) == "expected"
+            )
+        )
         and details.multiway is None
         and details.adjustment is None
     ):
@@ -227,7 +260,7 @@ def _indices(value: object) -> tuple[int, ...]:
 
 
 def _cluster_ratio(applied: dict[str, object], groups: int) -> tuple[int, int]:
-    """Check the applied convention's exact integer factor witness."""
+    """Check the already approved convention's exact integer factor witness."""
     resolved = record_fields(applied["convention"], RESOLVED)
     values = resolved["values"]
     if type(values) is not ConventionValues:
@@ -350,20 +383,23 @@ def _reported(
     reported: ReportedScale,
     context: ScaleContext,
 ) -> None:
-    """Range-safe direct errors and exact consistency of the reported payloads.
-
-    The reported and the eigenvalue-adjusted payloads must agree exactly.
-    """
+    """Range-safe direct errors and exact reported/D4 payload consistency."""
     if details.adjustment is not None:
         request = context.request
         raw = context.order.covariance(covariance.covariance)
         adjusted: object = getattr(details.adjustment, "adjusted", None)
-        sequence = "legacy" if context.request.convention == "stata" else "modern"
+        sequence = (
+            "fixest"
+            if details.psd == "fixest"
+            else "legacy"
+            if context.request.convention == "stata"
+            else "modern"
+        )
         scales = np.asarray(getattr(details.frame, "scales", None))
         full_scales = np.append(scales, 1.0) if sequence == "legacy" else scales
         if not (
             request.uses_multiway
-            and details.psd == "cgm"
+            and details.psd in ("cgm", "fixest")
             and (isinstance(request.multiway, Omitted) or request.multiway == "cgm")
             and details.frame is not None
             and details.reported_covariance is not None
@@ -380,6 +416,10 @@ def _reported(
         ):
             raise ValueError(STALE)
         variances = np.diag(np.asarray(adjusted, dtype=np.float64))
+    elif getattr(details.hc, "undefined", 0):
+        # An undefined named HC request (a computed hat of one or above) holds a
+        # missing covariance; the gate reads the unadjusted estimate of its rows.
+        variances = np.diag(cast("_HCGate", details.hc).gate_covariance)
     else:
         variances = np.diag(covariance.covariance)
     errors = np.full(variances.shape, np.nan)

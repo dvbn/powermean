@@ -1,9 +1,13 @@
 """The fitted-index Newton direction's assembly, and the same-point effect recovery.
 
-Newton in the fitted index: one weighted absorption per iteration, effects recovered
-at the end.  Reference levels are set by connected component; redundancies are exact
-for one and two blocks, bounded pairwise for three or more.  Internal module:
-``powermean`` exports nothing of it.
+``design/02_computation.md``, Section 5.2 (Newton in the fitted index: one weighted
+absorption per iteration, effects recovered at the end) and
+``design/03_fixed_effects.md``, Section 2 (reference levels by connected component;
+redundancies exact for one and two blocks, bounded pairwise for three or more); the
+M1.12 contract
+(``plan/evidence/M1.12_contract.txt``: the scope, Sections 2 and 3; the mechanics,
+Sections 2 and 3; the engineering and mathematical reviews); decision D51.  Task M1.12,
+private: ``powermean`` exports nothing of it.
 
 The direction.  ``X`` holds the retained scaled slopes, ``D`` the original indicators
 (never formed), ``b = a r`` and ``C = a c`` (``a w`` with the expected curvature) at the
@@ -21,12 +25,12 @@ and its two scalars at the origin are those of the full joint system:
     decrement2  = d_q' ((C / A) d_q),
 
 both formed from the unhalved direction, never from a slope-only view.  In exact
-arithmetic ``d_q`` solves the normal equations of ``[X, D]`` (the Schur algebra); finite
-inner tolerances give an approximate direction,
+arithmetic ``d_q`` solves the normal equations of ``[X, D]`` (the Schur algebra of the
+contract's mathematical review); finite inner tolerances give an approximate direction,
 which the actual line search must accept, and no inner success flag is read as the
 exact normal equations.  The full-RHS solve receives, besides the absolute tolerance of
-the schedule, the forcing factor that its caller issued and the guard of
-its exception: the existing ``absorb_tol_final``, the raw-weight total
+the schedule, the forcing factor that its caller issued (decision D74) and the guard of
+its exception (correction B): the existing ``absorb_tol_final``, the raw-weight total
 ``A`` of the caller's rows record and the existing ``gradient_tol``, passed explicitly
 in one :class:`~powermean.solve.absorbed_rhs.RHSGuard`.  These bounds control the
 nuisance residual only, so the approximate slope absorption still contributes ``D' C
@@ -41,13 +45,13 @@ work start cold.
 
 The automatic start (:meth:`IndexContext.initialized`).  The plain unweighted
 ``log(mean z)`` in every level of the first block, the other blocks zero, then one
-sweep: in the local domain (the first attempt, one block, no slope,
+sweep: in the local domain of decision D75 (the first attempt, one block, no slope,
 exact PPML or the exact NB2 ``kappa = 0`` alias) the local evaluation of that same sweep
 (:mod:`powermean.solve.absorbed_start`), logged as its own record; everywhere else the
 family's accepted profiler, logged as a profile call.  No profile record is fabricated
 for the local start, nor a local record for the profiler.
 
-Recovery.  The authoritative point is ``(gamma, q)``; its base is
+Recovery (mechanics, Section 3).  The authoritative point is ``(gamma, q)``; its base is
 ``fl(X gamma + o)`` and its nuisance index ``eta = q - base`` (checked), never an
 independently updated state.  :func:`recover` absorbs ``eta`` as one column under the
 strictly positive RAW weights ``a``, cold, at the requested final tolerance with the
@@ -65,8 +69,8 @@ whose effects do not yet rebuild ``q`` continues the SAME cold recurrence, insid
 same budget and at the same tolerance, until both reconstructions hold.  An orthogonal
 drift is never absorbed: the budget ends that absorption at a candidate whose own check
 passed, and the explicit check refuses it as before.  ``q`` is never replaced.  The
-record keeps ``eta`` as its own detached read-only copy, complete or partial:
-the evidence cannot change after the recovery.
+record keeps ``eta`` as its own detached read-only copy, complete or partial
+(correction A): the evidence cannot change after the recovery.
 :func:`normalize` then sets, for each connected component and each block ``k >= 2`` in
 block order, the component's smallest level code of block ``k`` as its reference: that
 level's coefficient is subtracted from the component's block-``k`` levels and added to
@@ -82,7 +86,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 from numpy.typing import ArrayLike
@@ -97,7 +101,12 @@ from powermean.fe.absorb_numeric import (
     checked_sum,
     prepare_weights,
 )
-from powermean.fe.connectivity import IndicatorRank, components, indicator_rank
+from powermean.fe.connectivity import (
+    Components,
+    IndicatorRank,
+    components,
+    indicator_rank,
+)
 from powermean.fe.groups import Grouping
 from powermean.fe.profile import RANGE, ProfileState
 from powermean.fe.profile_arithmetic import ProfileProblem, reconstruct_index
@@ -113,7 +122,7 @@ from powermean.solve.absorbed_start import (
     applies,
     local_start,
 )
-from powermean.solve.absorbed import AbsorbedOptions
+from powermean.solve.m1_options import AbsorbedOptions
 from powermean.solve.options import Curvature
 from powermean.solve.point_loss import PointLoss
 from powermean.solve.profiled_linear_loss import Admissions
@@ -133,6 +142,9 @@ from powermean.systems.profiled import (
     curvature_totals,
     profile_point,
 )
+
+if TYPE_CHECKING:
+    from powermean.solve.reduced_execution import ReducedExecution
 
 # The identity of the one column that the recovery absorbs.
 ETA = ("eta",)
@@ -290,11 +302,33 @@ def _plan_normalization(grouping: Grouping) -> _NormalizationPlan:
     for k in range(1, len(grouping.blocks)):
         of = parts.of_levels[k]
         count = grouping.blocks[k].n_levels
-        refs = np.full(parts.n_components, count, dtype=np.intp)
-        np.minimum.at(refs, of, np.arange(count, dtype=np.intp))
         later_of.append(of)
-        references.append(frozen_index(refs))
+        references.append(_reference_codes(of, count, parts.n_components))
     return _NormalizationPlan(first, tuple(later_of), tuple(references))
+
+
+def _reference_codes(members: IndexArray, count: int, n_components: int) -> IndexArray:
+    """The first level code in each component of one block."""
+    refs = np.full(n_components, count, dtype=np.intp)
+    np.minimum.at(refs, members, np.arange(count, dtype=np.intp))
+    return frozen_index(refs)
+
+
+def _move_normalization_anchor(
+    parts: Components, effects: tuple[FloatArray, ...], anchor: int
+) -> tuple[FloatArray, ...]:
+    """Move the first block's component shifts to the reporting anchor."""
+    members = parts.of_levels[0]
+    references = _reference_codes(members, effects[0].size, parts.n_components)
+    shift = effects[0][references]
+    result = list(effects)
+    result[0] = checked_difference(
+        effects[0], shift[members], "normalized coefficients"
+    )
+    result[anchor] = checked_sum(
+        effects[anchor], shift[parts.of_levels[anchor]], "normalized coefficients"
+    )
+    return tuple(result)
 
 
 def _normalize_with_plan(
@@ -453,10 +487,7 @@ def _rebuilds(
             gap = _gap(reconstruct_index(profile, effects), index)
             if gap > tolerance:
                 return False
-            if (
-                normalize is _ACCEPTED_NORMALIZE
-                and components is _ACCEPTED_COMPONENTS
-            ):
+            if normalize is _ACCEPTED_NORMALIZE and components is _ACCEPTED_COMPONENTS:
                 if plan is None:
                     plan = _plan_normalization(profile.grouping)
                 normalization = _normalize_with_plan(plan, effects)
@@ -644,7 +675,7 @@ class IndexWork:
     """Every initializer, absorption, RHS solve and direction of a solve.
 
     ``profiles`` holds the actual calls of the accepted profiler only, and
-    ``initializers`` the local automatic starts only.
+    ``initializers`` the local automatic starts of decision D75 only.
     """
 
     profiles: tuple[ProfileCall, ...]
@@ -711,12 +742,12 @@ class IndexContext:
     rows, for an indication's records; ``log`` the calls of the solve; ``point`` its
     pointwise loss of zero offset, charging ``admissions``, the solve's one budget;
     ``gradient_tol`` the native gradient tolerance of the solver options, read by the
-    guard of the full-RHS exception.  Every initializer, slope
+    guard of the full-RHS exception (correction B).  Every initializer, slope
     absorption and full-RHS call is logged with its own status and work, a call refused
     before the routine counted anything as ``refused`` without work (unavailable, not
     zero), and raised again; a full-RHS call also logs the forcing it received, its
-    cold initial maximum, whether the returned candidate met each bound,
-    and its guard with the exception's evidence.  A direction's slope
+    cold initial maximum, whether the returned candidate met each bound (decision D74),
+    and its guard with the exception's evidence (correction B).  A direction's slope
     absorption (:meth:`_absorb`) returns its fresh record of the curvature weights for
     that direction's full-RHS solve (:meth:`_nuisance`) only, and starts from the warm
     slope state that the direction's evaluator hands it, if any; :meth:`absorb`, the
@@ -739,7 +770,7 @@ class IndexContext:
 
         The plain unweighted mean of ``z`` over the final rows, in every level of the
         first block, the other blocks zero (a level that is not finite refuses before
-        any call); then, in the local domain, the local evaluation of
+        any call); then, in the local domain of decision D75, the local evaluation of
         the one sweep (:meth:`_local`), and otherwise the family's accepted profile with
         one sweep at ``profile_tol``.  A budget status is an initializer, not a
         failure; a range refusal stops the attempt (``FloatingPointError``).
@@ -782,7 +813,7 @@ class IndexContext:
     def _local(
         self, attempt: int, coef: FloatArray, state: ProfileState
     ) -> LocalInitializer:
-        """The local automatic start, logged as its own call.
+        """The local automatic start (decision D75), logged as its own call.
 
         A refusal before its first fresh check is logged ``refused`` without work and
         raised again; a ``range`` result is logged with its work, then stops the attempt
@@ -841,10 +872,16 @@ class IndexContext:
         try:
             reduced = self.problem.__dict__.get("_reduced_execution")
             direct = None
-            if (reduced is not None and index is not None
-                    and _absorb_slopes is _REDUCED_ABSORB):
+            if (
+                reduced is not None
+                and index is not None
+                and _absorb_slopes is _REDUCED_ABSORB
+            ):
                 direct = reduced.project(
-                    weights, index, tolerance=site[3], acceleration=limits[1],
+                    weights,
+                    index,
+                    tolerance=site[3],
+                    acceleration=limits[1],
                     final_observed=site[2] == "final" and self.curvature == "observed",
                 )
             if direct is not None:
@@ -887,10 +924,11 @@ class IndexContext:
     ) -> RHSResult:
         """One logged full-RHS solve of ``rows = (C, b)`` with ``forcing``, as it ends.
 
-        ``forcing`` is the factor its caller issued; the absolute
+        ``forcing`` is the factor its caller issued (decision D74); the absolute
         tolerance is the site's; ``total`` is the raw-weight total ``A`` that the
         caller's rows record formed in the native score arithmetic, which the guard of
-        the exception takes with the existing ``absorb_tol_final`` and ``gradient_tol``.
+        the exception takes with the existing ``absorb_tol_final`` and ``gradient_tol``
+        (correction B).
         """
         return self._nuisance(site, rows, forcing, total, prepared=None)
 
@@ -915,11 +953,16 @@ class IndexContext:
         limits = (self.controls.absorb_max_sweeps, self.controls.absorb_acceleration)
         guard = RHSGuard(self.controls.absorb_tol_final, total, self.gradient_tol)
         try:
-            reduced = self.problem.__dict__.get("_reduced_execution")
+            reduced: ReducedExecution | None = self.problem.__dict__.get(
+                "_reduced_execution"
+            )
             direct = None
-            if (reduced is not None and prepared is not None
-                    and solve_rhs is _REDUCED_RHS
-                    and nuisance_rhs is _REDUCED_NUISANCE):
+            if (
+                reduced is not None
+                and prepared is not None
+                and solve_rhs is _REDUCED_RHS
+                and nuisance_rhs is _REDUCED_NUISANCE
+            ):
                 direct = reduced.nuisance(
                     rows[1], prepared, target=(site[3], forcing, guard), limits=limits
                 )

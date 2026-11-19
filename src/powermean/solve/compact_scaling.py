@@ -40,19 +40,33 @@ def _mean(first: FloatArray, second: FloatArray) -> FloatArray:
     """The existing range-safe pair mean, with no tolerance or repair."""
     with np.errstate(over="ignore", under="ignore"):
         total = first + second
-        found: FloatArray = np.where(np.isfinite(total), total / 2,
-                                    first / 2 + second / 2)
+        found: FloatArray = np.where(
+            np.isfinite(total), total / 2, first / 2 + second / 2
+        )
     return found
 
 
-def _ordinary(matrix: CscStorage, rows: IndexArray, cols: IndexArray,
-              scale: FloatArray) -> CscStorage:
+def _ordinary(
+    matrix: CscStorage, rows: IndexArray, cols: IndexArray, scale: FloatArray
+) -> CscStorage:
     """Scale one partition, keeping its exact stored structure and operation order."""
     source = matrix.matrix
     with np.errstate(all="ignore"):
-        values = (source.data / scale[rows[source.indices]]) / scale[cols[source.columns]]
-    return CscStorage(matrix.shape, matrix.pointers, matrix.rows,
-                      FloatStorage.store(_finite(values)))
+        if (
+            type(source) is SparseMatrix
+            and vars(SparseMatrix).get("columns") is _COLUMNS
+        ):
+            row_scale = scale[rows]
+            values = source.data / row_scale[source.indices]
+            column_scale = np.repeat(scale[cols], np.diff(source.indptr))
+            np.divide(values, column_scale, out=values)
+        else:
+            values = (source.data / scale[rows[source.indices]]) / scale[
+                cols[source.columns]
+            ]
+    return CscStorage(
+        matrix.shape, matrix.pointers, matrix.rows, FloatStorage.store(_finite(values))
+    )
 
 
 class _Csc(Protocol):
@@ -100,25 +114,37 @@ _STORAGE_OF = vars(CscStorage)["of"]
 
 def _stored(matrix: _Csc) -> CscStorage:
     """Use the same public-value constructors on already canonical buffers."""
-    return matrices.CscStorage.of(matrices.SparseMatrix(
-        matrix.shape, np.asarray(matrix.indptr, dtype=np.intp),
-        np.asarray(matrix.indices, dtype=np.intp),
-        np.asarray(matrix.data, dtype=np.float64),
-    ))
+    return matrices.CscStorage.of(
+        matrices.SparseMatrix(
+            matrix.shape,
+            np.asarray(matrix.indptr, dtype=np.intp),
+            np.asarray(matrix.indices, dtype=np.intp),
+            np.asarray(matrix.data, dtype=np.float64),
+        )
+    )
 
 
-def _paired(left: CscStorage, right: CscStorage, rows: IndexArray,
-            cols: IndexArray, scale: FloatArray) -> tuple[CscStorage, CscStorage]:
+def _paired(
+    left: CscStorage,
+    right: CscStorage,
+    rows: IndexArray,
+    cols: IndexArray,
+    scale: FloatArray,
+) -> tuple[CscStorage, CscStorage]:
     """Align canonical CSC slots; keep the exact safe mean and full-coordinate order."""
     first, second = left.matrix, right.matrix
-    if (type(left) is not CscStorage or type(right) is not CscStorage
-            or type(first) is not SparseMatrix or type(second) is not SparseMatrix
-            or canonical_partition is not _CANONICAL_PARTITION
-            or vars(SparseMatrix).get("columns") is not _COLUMNS
-            or vars(CscStorage).get("of") is not _STORAGE_OF
-            or matrices.CscStorage is not CscStorage
-            or matrices.SparseMatrix is not SparseMatrix
-            or right.shape != (left.shape[1], left.shape[0])):
+    if (
+        type(left) is not CscStorage
+        or type(right) is not CscStorage
+        or type(first) is not SparseMatrix
+        or type(second) is not SparseMatrix
+        or canonical_partition is not _CANONICAL_PARTITION
+        or vars(SparseMatrix).get("columns") is not _COLUMNS
+        or vars(CscStorage).get("of") is not _STORAGE_OF
+        or matrices.CscStorage is not CscStorage
+        or matrices.SparseMatrix is not SparseMatrix
+        or right.shape != (left.shape[1], left.shape[0])
+    ):
         return _paired_entries(left, right, first, second, rows, cols, scale)
     n_first, n_second = first.data.size, second.data.size
     stride = n_first + 1
@@ -126,13 +152,22 @@ def _paired(left: CscStorage, right: CscStorage, rows: IndexArray,
         return _paired_entries(left, right, first, second, rows, cols, scale)
     # Every tag is positive, so the union retains even explicit zero-valued slots.
     # At most one slot from either canonical input occupies a union coordinate.
-    a = _sparse.csc_array((
-        np.arange(1, n_first + 1, dtype=np.int64), first.indices, first.indptr,
-    ), shape=left.shape)
-    b = _sparse.csc_array((
-        stride * np.arange(1, n_second + 1, dtype=np.int64),
-        second.indices, second.indptr,
-    ), shape=right.shape)
+    a = _sparse.csc_array(
+        (
+            np.arange(1, n_first + 1, dtype=np.int64),
+            first.indices,
+            first.indptr,
+        ),
+        shape=left.shape,
+    )
+    b = _sparse.csc_array(
+        (
+            stride * np.arange(1, n_second + 1, dtype=np.int64),
+            second.indices,
+            second.indptr,
+        ),
+        shape=right.shape,
+    )
     union = a + b.transpose().tocsc()
     del a, b
     union.sort_indices()
@@ -153,7 +188,8 @@ def _paired(left: CscStorage, right: CscStorage, rows: IndexArray,
     del x, y, tags, row, col, lo, hi
     # Do not elide zeros before division: a stored 0/0 must still refuse.
     forward = _sparse.csc_array(
-        (means, union.indices, union.indptr), shape=left.shape,
+        (means, union.indices, union.indptr),
+        shape=left.shape,
     )
     del means, union
     forward.eliminate_zeros()
@@ -164,8 +200,13 @@ def _paired(left: CscStorage, right: CscStorage, rows: IndexArray,
 
 
 def _paired_entries(
-    left: CscStorage, right: CscStorage, first: SparseMatrix, second: SparseMatrix,
-    rows: IndexArray, cols: IndexArray, scale: FloatArray,
+    left: CscStorage,
+    right: CscStorage,
+    first: SparseMatrix,
+    second: SparseMatrix,
+    rows: IndexArray,
+    cols: IndexArray,
+    scale: FloatArray,
 ) -> tuple[CscStorage, CscStorage]:
     """Original coordinate producer for foreign callbacks or unencodable slot tags."""
     r = np.concatenate((first.indices, second.columns))
@@ -205,13 +246,22 @@ def scaled_parts(raw: MatrixParts, scale: FloatArray, kind: MatrixKind) -> Matri
         with np.errstate(all="ignore"):
             d = (_mean(diagonal, diagonal) / scale[kept]) / scale[kept]
         left, right = _paired(raw.left, raw.right, remaining, kept, scale)
-        remainder, _ = _paired(raw.remainder, raw.remainder, remaining, remaining, scale)
+        remainder, _ = _paired(
+            raw.remainder, raw.remainder, remaining, remaining, scale
+        )
         stored = IndexStorage.store(np.flatnonzero(d != 0).astype(np.intp))
     else:
         raise ValueError("scale an ordinary or curvature view")
     quantity = "Hessian" if kind == "ordinary" else "curvature"
-    return MatrixParts(raw.block, raw.remaining, FloatStorage.store(_finite(d, quantity)),
-                       stored, left, right, remainder)
+    return MatrixParts(
+        raw.block,
+        raw.remaining,
+        FloatStorage.store(_finite(d, quantity)),
+        stored,
+        left,
+        right,
+        remainder,
+    )
 
 
 def equilibration_parts(parts: MatrixParts) -> FloatArray:
@@ -221,6 +271,7 @@ def equilibration_parts(parts: MatrixParts) -> FloatArray:
         absolute = np.abs(values)
         np.maximum.at(rowmax, rows, absolute)
         np.maximum.at(colmax, cols, absolute)
+        del rows, cols, values, absolute
     scale = np.sqrt(np.maximum(rowmax, colmax))
     if np.any(scale == 0) or not np.isfinite(scale).all():
         raise ValueError("zero row/column in the Hessian")

@@ -1,10 +1,13 @@
 """Checked arithmetic and the LAPACK boundary of the collinearity analysis.
 
-Internal module: the numerical operations that
-:mod:`powermean.data.collinearity_geometry` and :mod:`powermean.data.collinearity` run,
-the record of every LAPACK attempt and the exact integer domains of the records.
-Nothing here absorbs, ranks a subset, decides an omission, fits or forms an indicator
-matrix.
+``design/02_computation.md``, Sections 3 and 8.4; the adopted contract
+``plan/evidence/M1.9_contract.txt`` (proposal C with the retained arithmetic of
+proposal A) and its corrections A and B (``plan/evidence/M1.9_revision_A.txt`` and
+``M1.9_revision_B.txt``); decision D51.  Task M1.9, private: the numerical operations
+that :mod:`powermean.data.collinearity_geometry` and :mod:`powermean.data.collinearity`
+run, the record of every LAPACK attempt and the exact integer domains of the
+records.  Nothing here absorbs, ranks a subset, decides an omission, fits or forms an
+indicator matrix.
 
 Coordinates.  Columns are scaled by the powers of two of
 :func:`powermean.data.design.column_scale` only if multiplying back restores every
@@ -13,8 +16,9 @@ the global helper, whose domain is unchanged.
 
 Numerical rank.  The number of singular values (NumPy's SVD, ``compute_uv=False``,
 ``hermitian=False``) strictly greater than a cutoff; equality is numerical zero.  A
-matrix's own cutoff is ``eps max(rows, columns) sigma_max``, the rule of
-``solve/linear.py`` and of NumPy's ``matrix_rank``, which detects numerical, not exact,
+matrix's own cutoff is ``eps max(rows, columns) sigma_max``, the rule of S6
+``design/fixed.py`` (lines 63 to 74), of the accepted ``solve/linear.py`` (lines 22
+to 40) and of NumPy's ``matrix_rank``, which detects numerical, not exact,
 dependence.
 
 The LAPACK boundary.  Every SVD, pivoted economic QR (LAPACK ``dgeqp3``) and

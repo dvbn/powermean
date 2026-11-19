@@ -1,21 +1,26 @@
 """The sources of the blocks of the ordered sample and the comparison of two groupings.
 
-Internal module: no pandas, Formulaic or ``solve``.  :func:`same_bits` is the comparison
-of two arrays by shape and bytes that this module and
-:mod:`powermean.data.sample_fe_state` use; that module still provides every name defined
-here, the very same object, and this one imports neither it nor a later stage.
+``design/02_computation.md``, Sections 2 and 8.4; decisions D51 and D66; the reviewed
+outline ``plan/evidence/M1.10_contract.txt``, Section 3, and its corrections B and C
+(``plan/evidence/M1.10_revision_B.txt`` and ``M1.10_revision_C.txt``).  Task M1.10,
+private: no pandas, Formulaic or ``solve``.  Correction D
+(``plan/evidence/M1.10_revision_D.txt``) moved this topic here unchanged from
+:mod:`powermean.data.sample_fe_state`, with :func:`same_bits`, the comparison of two
+arrays by shape and bytes that both modules use; that module still provides every
+moved name, the very same object, and this one imports neither it nor a later stage.
 
-Sources of the blocks.  The labels of the blocks are owned copies
+Sources of the blocks (correction C).  The labels of the blocks are owned copies
 (:class:`~powermean.data.raw.Column`): each access hands out fresh copies, so a label
-whose equality is its identity never equals another reading of itself.  Such labels are
-admitted by the grouping and stay admitted here through their actual construction
-instead.  A :class:`Source` keeps the owned label columns of every component, the very
-records of the prepared effects, and the rows it encodes; :class:`Derived` blocks are
-the encoding of those columns on some of its rows, with the source level of each level,
-checked against the source's own codes.  Two groupings are one level map
-(:func:`same_blocks`) when they are the same record, when they derive from one source on
-the same rows with the same source levels, or when their labels are equal as the
-encoding equates them; never by identity, bytes, fingerprint or string of a label.
+whose equality is its identity never equals another reading of itself.  Such labels
+are admitted by the accepted grouping and stay admitted here through their actual
+construction instead.  A :class:`Source` keeps the owned label columns of every
+component, the very records of the prepared effects, and the rows it encodes;
+:class:`Derived` blocks are the accepted encoding of those columns on some of its rows,
+with the source level of each level, checked against the source's own codes.  Two
+groupings are one level map (:func:`same_blocks`) when they are the same record, when
+they derive from one source on the same rows with the same source levels, or when
+their labels are equal as the accepted encoding equates them; never by identity, bytes,
+fingerprint or string of a label.
 """
 
 from __future__ import annotations
@@ -37,6 +42,7 @@ from powermean.fe.groups import (
     Block,
     Grouping,
     _block,
+    _distinct_integers,
     _owned_block,
     _owned_encoding_original,
     _owned_interaction,
@@ -62,14 +68,16 @@ def same_bits(a: NDArray[Any], b: NDArray[Any]) -> bool:
 def _encoded(
     terms: tuple[tuple[str, ...], ...], columns: Mapping[str, Column], rows: IndexArray
 ) -> tuple[Block, ...]:
-    """The encoding of every term on ``rows``: one name, or ``a^b``.
+    """The accepted encoding of every term on ``rows``: one name, or ``a^b``.
 
     Each component by :func:`~powermean.fe.groups.encode_block` on its owned labels of
     these rows, an interaction by :func:`~powermean.fe.groups.interaction`; codes by
-    first occurrence on these rows.  Every term reads each of its components afresh from
-    the live column, where ``take`` would read it (:func:`_component`): a caller's label
-    callback, run while an earlier component or term is encoded, may have replaced a
-    column, so no read serves another term.
+    first occurrence on these rows.  Moved here from
+    :meth:`powermean.data.sample_fe.EffectColumns.encode` (correction C).  Every term
+    reads each of its components afresh from the live column, where ``take`` would
+    read it (:func:`_component`): a caller's label callback, run while an earlier
+    component or term is encoded, may have replaced a column, so no read serves
+    another term.
     """
     blocks: list[Block] = []
     for term in terms:
@@ -161,7 +169,7 @@ class Source:
         ):
             raise ValueError("provide exactly one column per component of the terms")
         encoded = _exact_index(rows, "rows of the blocks", upper=nobs)
-        if np.unique(encoded).size != encoded.size:
+        if not _distinct_integers(encoded):
             raise ValueError("the rows of the blocks must be distinct")
         kept = MappingProxyType({name: columns[name] for name in names})
         object.__setattr__(self, "terms", found)
@@ -173,8 +181,9 @@ class Source:
         object.__setattr__(self, "blocks", blocks)
         # These are the complete original columns used by this first encoding,
         # not level-code compression or a remembered eligibility assertion.
-        object.__setattr__(self, "_component_runs",
-                           runs if matching_runs(runs, kept) else None)
+        object.__setattr__(
+            self, "_component_runs", runs if matching_runs(runs, kept) else None
+        )
 
     def __getattribute__(self, name: str) -> Any:
         """Keep original stable logical fields without forcing numeric readers."""
@@ -182,9 +191,12 @@ class Source:
             state = object.__getattribute__(self, "__dict__")
             if "_native_columns" in state:
                 if name == "columns" and state.get("columns") is None:
-                    columns = MappingProxyType(_storage.object_columns(
-                        state["_native_columns"], state["_native_runs"],
-                    ))
+                    columns = MappingProxyType(
+                        _storage.object_columns(
+                            state["_native_columns"],
+                            state["_native_runs"],
+                        )
+                    )
                     object.__setattr__(self, "columns", columns)
                     object.__setattr__(self, "_object_columns", columns)
                 elif name == "_component_runs" and state.get("_component_runs") is None:
@@ -196,28 +208,34 @@ class Source:
         state = object.__getstate__(self)
         if type(self) is not _SOURCE_RECORD or "_native_columns" not in vars(self):
             return state
-        state = dict(vars(self), columns=self.columns, _component_runs=self._component_runs)
-        return {name: value for name, value in state.items()
-                if name not in ("_native_columns", "_native_runs", "_object_columns")}
+        state = dict(
+            vars(self), columns=self.columns, _component_runs=self._component_runs
+        )
+        return {
+            name: value
+            for name, value in state.items()
+            if name not in ("_native_columns", "_native_runs", "_object_columns")
+        }
 
 
 def _native_source_parts(
     source: Source,
 ) -> tuple[Mapping[str, Column], dict[str, ComponentRun]] | None:
-    """The actual internal native owner, not a public field or a trust assertion."""
+    """The actual private native owner, not a public field or a trust assertion."""
     if type(source) is not Source or not _owned_source_original():
         return None
     state = vars(source)
     columns, runs = state.get("_native_columns"), state.get("_native_runs")
-    if (type(columns) is not MappingProxyType
-            or not matching_runs(runs, columns)):
+    if type(columns) is not MappingProxyType or not matching_runs(runs, columns):
         return None
-    shown = state.get("columns")
+    columns = cast("Mapping[str, Column]", columns)
+    shown = cast("Mapping[str, Column] | None", state.get("columns"))
     if shown is not None:
         if shown is not state.get("_object_columns"):
             return None
-        if shown.keys() != columns.keys() or any(
-            shown[name] is not runs[name].object_column() for name in columns
+        object_columns = cast("Mapping[str, Column]", shown)
+        if object_columns.keys() != columns.keys() or any(
+            object_columns[name] is not runs[name].object_column() for name in columns
         ):
             return None
     elif "_object_columns" in state:
@@ -243,12 +261,12 @@ class Derived(Grouping):
     """The blocks of a :class:`Source` on some of its rows, with their source levels.
 
     ``source`` is the source; ``positions`` exact distinct rows of it; the blocks are
-    the encoding of the source's owned columns on those rows (codes by first occurrence
-    there, each level the label of its first row, as the source's own encoding of these
-    rows would give); ``ordinals`` holds per block the source level of each level
-    (:func:`_ordinals`).  Blocks and ordinals are derived, never arguments, also by
-    ``dataclasses.replace``.  ``ValueError`` for rows that are not the source's or an
-    encoding that is not the source's partition there.
+    the accepted encoding of the source's owned columns on those rows (codes by first
+    occurrence there, each level the label of its first row, as the source's own
+    encoding of these rows would give); ``ordinals`` holds per block the source level of
+    each level (:func:`_ordinals`).  Blocks and ordinals are derived, never arguments,
+    also by ``dataclasses.replace``.  ``ValueError`` for rows that are not the source's
+    or an encoding that is not the source's partition there.
     """
 
     blocks: tuple[Block, ...] = field(init=False)
@@ -263,27 +281,38 @@ class Derived(Grouping):
         place = np.full(source.nobs, -1, dtype=np.intp)
         place[source.rows] = np.arange(source.rows.size, dtype=np.intp)
         at = place[rows]
-        if (at < 0).any() or np.unique(rows).size != rows.size:
+        if (at < 0).any() or not _distinct_integers(rows):
             raise ValueError("derived blocks are on distinct rows of their source")
         blocks = source.blocks
         ordinals = tuple(
             frozen_index(np.arange(b.n_levels, dtype=np.intp)) for b in blocks
         )
         if not same_bits(rows, source.rows):
-            native = (_native_source_parts(source)
-                      if type(source) is Source
-                      and "_native_columns" in object.__getattribute__(source, "__dict__")
-                      and _native_source_parts is _NATIVE_SOURCE_PARTS else None)
-            blocks = None
+            native = (
+                _native_source_parts(source)
+                if type(source) is Source
+                and "_native_columns" in object.__getattribute__(source, "__dict__")
+                and _native_source_parts is _NATIVE_SOURCE_PARTS
+                else None
+            )
+            refreshed: tuple[Block, ...] | None
             if native is not None:
                 try:
-                    blocks = _owned_encoded(
-                        source.terms, native[0], rows, runs=native[1],
+                    refreshed = _owned_encoded(
+                        source.terms,
+                        native[0],
+                        rows,
+                        runs=native[1],
                     )
                 except MemoryError:
-                    pass
-            if blocks is None:
-                blocks = _encoded(source.terms, source.columns, rows)
+                    refreshed = None
+            else:
+                refreshed = None
+            blocks = (
+                _encoded(source.terms, source.columns, rows)
+                if refreshed is None
+                else refreshed
+            )
             ordinals = tuple(
                 _ordinals(block, origin, at)
                 for block, origin in zip(blocks, source.blocks, strict=True)
@@ -318,10 +347,10 @@ def restrict(source: Grouping, positions: IndexArray, nobs: int) -> Grouping:
     """The blocks of ``source`` on its rows ``positions``, of ``nobs`` input rows.
 
     A :class:`Derived` source gives the :class:`Derived` blocks of its own source on
-    those rows: its checked relation.  Another ``source`` is on increasing rows; each
-    row's level there is recoded by first occurrence by
-    :func:`~powermean.fe.groups.encode_block`, and each block keeps the source's labels
-    of those levels in that order: the original level map.
+    those rows: its checked relation (correction C).  Another ``source`` is on
+    increasing rows; each row's level there is recoded by first occurrence by the
+    accepted :func:`~powermean.fe.groups.encode_block`, and each block keeps the
+    source's labels of those levels in that order: the original level map.
     """
     if isinstance(source, Derived):
         return Derived(source.source, positions)
@@ -342,11 +371,11 @@ def same_blocks(a: Grouping | None, b: Grouping | None) -> bool:
 
     Names in formula order, positions, codes and counts bit for bit, and one level map:
     the same record, grouping or block (one owned map is itself); blocks derived from
-    one source with the same source levels (:class:`Derived`); or each block's ordered
-    level labels equal as the encoding equates labels: Python equality of the hashable
-    labels, an interaction's tuples element by element (``1``, ``1.0`` and ``True`` are
-    one level).  No label identity, bytes, fingerprint or string coercion; independent
-    copies of a label equal only by identity are not one.
+    one source with the same source levels (:class:`Derived`, correction C); or each
+    block's ordered level labels equal as the accepted encoding equates labels: Python
+    equality of the hashable labels, an interaction's tuples element by element (``1``,
+    ``1.0`` and ``True`` are one level).  No label identity, bytes, fingerprint or
+    string coercion; independent copies of a label equal only by identity are not one.
     """
     if a is None or b is None:
         return a is None and b is None
@@ -365,8 +394,11 @@ def same_blocks(a: Grouping | None, b: Grouping | None) -> bool:
 
 
 def _owned_encoded(
-    terms: tuple[tuple[str, ...], ...], columns: Mapping[str, Column], rows: IndexArray,
-    *, runs: dict[str, ComponentRun] | None = None,
+    terms: tuple[tuple[str, ...], ...],
+    columns: Mapping[str, Column],
+    rows: IndexArray,
+    *,
+    runs: dict[str, ComponentRun] | None = None,
     encoder: KeyEncoder | None = None,
 ) -> tuple[Block, ...] | None:
     """Native encodings once, retaining generic reads for every unknown label."""
@@ -380,8 +412,9 @@ def _owned_encoded(
             if made is None:
                 return None
             parts.append(_owned_block(name, *made))
-        block = (parts[0] if len(parts) == 1
-                 else _owned_interaction(parts, "^".join(term)))
+        block = (
+            parts[0] if len(parts) == 1 else _owned_interaction(parts, "^".join(term))
+        )
         if block is None:
             return None
         blocks.append(block)
@@ -389,9 +422,12 @@ def _owned_encoded(
 
 
 def _native_encoded(
-    terms: tuple[tuple[str, ...], ...], columns: Mapping[str, Column],
-    rows: IndexArray, runs: dict[str, ComponentRun],
-    *, encoder: KeyEncoder | None = None,
+    terms: tuple[tuple[str, ...], ...],
+    columns: Mapping[str, Column],
+    rows: IndexArray,
+    runs: dict[str, ComponentRun],
+    *,
+    encoder: KeyEncoder | None = None,
 ) -> tuple[Block, ...] | None:
     """Encode once per integral component and term in this actual owned sample.
 
@@ -412,7 +448,9 @@ def _native_encoded(
                 part = held.get(name)
                 if part is None:
                     values = cast("np.ndarray", columns[name]._stored)[rows]
-                    codes, first = (key_codes if encoder is None else encoder)((values,))
+                    codes, first = (key_codes if encoder is None else encoder)(
+                        (values,)
+                    )
                     part = _owned_block(name, codes, runs[name].labels(rows[first]))
                 uses[name] -= 1
                 if uses[name]:
@@ -420,6 +458,7 @@ def _native_encoded(
                 else:
                     held.pop(name, None)
                 parts.append(part)
+            block: Block | None
             if len(parts) == 1:
                 block = parts[0]
             elif encoder is None:
@@ -428,10 +467,13 @@ def _native_encoded(
                 codes, first = encoder([part.codes for part in parts])
                 labels = [part._levels._stored for part in parts]
                 heads = [part.codes[first].tolist() for part in parts]
-                places = [[values[k] for k in head]
-                          for values, head in zip(labels, heads, strict=True)]
-                block = _owned_block("^".join(term), codes,
-                                     list(zip(*places, strict=True)))
+                places = [
+                    [values[k] for k in head]
+                    for values, head in zip(labels, heads, strict=True)
+                ]
+                block = _owned_block(
+                    "^".join(term), codes, list(zip(*places, strict=True))
+                )
             if block is None:
                 break
             blocks.append(block)
@@ -447,8 +489,12 @@ def _native_encoded(
 
 
 def _owned_derived(
-    terms: tuple[tuple[str, ...], ...], columns: Mapping[str, Column],
-    nobs: int, positions: IndexArray, *, _runs: dict[str, ComponentRun] | None = None,
+    terms: tuple[tuple[str, ...], ...],
+    columns: Mapping[str, Column],
+    nobs: int,
+    positions: IndexArray,
+    *,
+    _runs: dict[str, ComponentRun] | None = None,
     _encoder: KeyEncoder | None = None,
 ) -> Derived | None:
     """One actual owned first encoding; Source/Derived public admission stays intact.
@@ -470,18 +516,29 @@ def _owned_derived(
     rows = _exact_index(positions, "rows of the blocks", upper=nobs)
     if not bool(np.all(rows[1:] > rows[:-1])) and np.unique(rows).size != rows.size:
         raise ValueError("the rows of the blocks must be distinct")
-    blocks = (_owned_encoded(terms, items, rows) if _runs is None
-              else _owned_encoded(terms, items, rows, runs=runs, encoder=_encoder))
+    blocks = (
+        _owned_encoded(terms, items, rows)
+        if _runs is None
+        else _owned_encoded(terms, items, rows, runs=runs, encoder=_encoder)
+    )
     if blocks is None:
         return None
     origin = object.__new__(Source)
     for name, value in (
-        ("terms", terms), ("columns", MappingProxyType({
-            name: items[name] for name in dict.fromkeys(
-                name for term in terms for name in term
-            )
-        })),
-        ("nobs", nobs), ("rows", rows), ("blocks", blocks), ("_component_runs", runs),
+        ("terms", terms),
+        (
+            "columns",
+            MappingProxyType(
+                {
+                    name: items[name]
+                    for name in dict.fromkeys(name for term in terms for name in term)
+                }
+            ),
+        ),
+        ("nobs", nobs),
+        ("rows", rows),
+        ("blocks", blocks),
+        ("_component_runs", runs),
     ):
         object.__setattr__(origin, name, value)
     if _runs is not None:
@@ -490,24 +547,39 @@ def _owned_derived(
         object.__setattr__(origin, "_native_columns", MappingProxyType(dict(items)))
         object.__setattr__(origin, "_native_runs", runs)
     result = object.__new__(Derived)
-    for name, value in (
-        ("source", origin), ("blocks", blocks), ("positions", rows.view()),
-        ("ordinals", tuple(frozen_index(np.arange(b.n_levels, dtype=np.intp))
-                           for b in blocks)),
+    for name, field_value in (
+        ("source", origin),
+        ("blocks", blocks),
+        ("positions", rows.view()),
+        (
+            "ordinals",
+            tuple(frozen_index(np.arange(b.n_levels, dtype=np.intp)) for b in blocks),
+        ),
     ):
-        object.__setattr__(result, name, value)
+        object.__setattr__(result, name, field_value)
     return result
 
 
 def _owned_input(
-    terms: tuple[tuple[str, ...], ...], columns: Mapping[str, Column], nobs: int,
+    terms: tuple[tuple[str, ...], ...],
+    columns: Mapping[str, Column],
+    nobs: int,
 ) -> bool:
     """Admit only actual exact containers; unknown/stale fields keep old checks."""
-    if (type(terms) is not tuple or not terms or type(nobs) is not int
-            or type(columns) is not _OwnedMapping or type(columns._items) is not dict):
+    if (
+        type(terms) is not tuple
+        or not terms
+        or type(nobs) is not int
+        or type(columns) is not _OwnedMapping
+        or type(columns._items) is not dict
+    ):
         return False
-    if any(type(term) is not tuple or len(term) not in (1, 2)
-           or any(type(name) is not str for name in term) for term in terms):
+    if any(
+        type(term) is not tuple
+        or len(term) not in (1, 2)
+        or any(type(name) is not str for name in term)
+        for term in terms
+    ):
         return False
     items = cast("_OwnedMapping[Column]", columns)._items
     if any(type(name) is not str for name in items):
@@ -516,8 +588,9 @@ def _owned_input(
     return (
         set(items) == set(names)
         and len({"^".join(term) for term in terms}) == len(terms)
-        and all(type(column) is Column and column.size == nobs
-                for column in items.values())
+        and all(
+            type(column) is Column and column.size == nobs for column in items.values()
+        )
     )
 
 
@@ -525,8 +598,10 @@ def _owned_source_original() -> bool:
     """One existing-style identity boundary, not per-row reauthentication."""
     return (
         all(globals()[name] is value for name, value in _OWNED_SOURCE_GLOBALS)
-        and all(vars(owner).get(name) is value
-                for owner, name, value in _OWNED_SOURCE_METHODS)
+        and all(
+            vars(owner).get(name) is value
+            for owner, name, value in _OWNED_SOURCE_METHODS
+        )
         and _storage.original_producers is _STORAGE_ORIGINAL
         and _storage.original_producers()
         and _owned_encoding_original()
@@ -534,28 +609,92 @@ def _owned_source_original() -> bool:
 
 
 _OWNED_SOURCE_GLOBALS = tuple(
-    (name, globals()[name]) for name in (
-        "Source", "Derived", "Grouping", "Column", "_OwnedMapping", "MappingProxyType",
+    (name, globals()[name])
+    for name in (
+        "Source",
+        "Derived",
+        "Grouping",
+        "Column",
+        "_OwnedMapping",
+        "MappingProxyType",
         "_encoded",
-        "_component", "_stored_codes", "_ordinals", "same_bits", "_exact_index",
-        "_inverse", "frozen_index", "_block", "encode_block", "interaction",
-        "plain_codes", "plain_kind", "key_codes", "runs_for", "matching_runs",
-        "_owned_block", "_owned_interaction", "_owned_encoding_original",
-        "_owned_encoded", "_owned_derived", "_owned_input", "_owned_source_original",
-        "_native_encoded", "_native_source_parts",
+        "_distinct_integers",
+        "_component",
+        "_stored_codes",
+        "_ordinals",
+        "same_bits",
+        "_exact_index",
+        "_inverse",
+        "frozen_index",
+        "_block",
+        "encode_block",
+        "interaction",
+        "plain_codes",
+        "plain_kind",
+        "key_codes",
+        "runs_for",
+        "matching_runs",
+        "_owned_block",
+        "_owned_interaction",
+        "_owned_encoding_original",
+        "_owned_encoded",
+        "_owned_derived",
+        "_owned_input",
+        "_owned_source_original",
+        "_native_encoded",
+        "_native_source_parts",
     )
 )
 _OWNED_SOURCE_METHODS = tuple(
-    (owner, name, vars(owner).get(name)) for owner, names in (
-        (Source, ("__new__", "__init__", "__getattribute__", "__getattr__", "__getstate__",
-                  "terms", "columns", "nobs", "rows", "blocks", "_component_runs")),
-        (Derived, ("__new__", "__init__", "__getattribute__", "__getattr__",
-                   "source", "blocks", "positions", "ordinals")),
-        (Grouping, ("__new__", "__init__", "__post_init__",
-                    "__getattribute__", "__getattr__", "blocks", "positions")),
-        (_OwnedMapping, ("__getattribute__", "__getattr__", "__iter__",
-                         "__getitem__", "__len__")),
-    ) for name in names
+    (owner, name, vars(owner).get(name))
+    for owner, names in (
+        (
+            Source,
+            (
+                "__new__",
+                "__init__",
+                "__getattribute__",
+                "__getattr__",
+                "__getstate__",
+                "terms",
+                "columns",
+                "nobs",
+                "rows",
+                "blocks",
+                "_component_runs",
+            ),
+        ),
+        (
+            Derived,
+            (
+                "__new__",
+                "__init__",
+                "__getattribute__",
+                "__getattr__",
+                "source",
+                "blocks",
+                "positions",
+                "ordinals",
+            ),
+        ),
+        (
+            Grouping,
+            (
+                "__new__",
+                "__init__",
+                "__post_init__",
+                "__getattribute__",
+                "__getattr__",
+                "blocks",
+                "positions",
+            ),
+        ),
+        (
+            _OwnedMapping,
+            ("__getattribute__", "__getattr__", "__iter__", "__getitem__", "__len__"),
+        ),
+    )
+    for name in names
 )
 _STORAGE_ORIGINAL = _storage.original_producers
 _NATIVE_SOURCE_PARTS = _native_source_parts

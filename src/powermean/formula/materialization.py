@@ -1,6 +1,7 @@
 """Explicit native pandas materialization bridge across Formulaic and pandas versions.
 
-Formulaic 1.0.0 registers ``PandasMaterializer``
+``DESIGN.md``, Section 4.2; ``design/06_reuse_map.md``, the rows of ``formula/``;
+decisions D51 and D56; task M1.49.  Formulaic 1.0.0 registers ``PandasMaterializer``
 only for ``pandas.core.frame.DataFrame`` and detects categorical series only for
 ``object`` and ``CategoricalDtype``.  Under pandas 3, ``DataFrame.__module__`` is
 ``"pandas"`` and default string series have dtype ``"str"`` (``na_value=nan``), while
@@ -25,7 +26,7 @@ from __future__ import annotations
 from collections.abc import Hashable, Iterable, Mapping, Sequence
 from copy import copy, deepcopy
 from dataclasses import dataclass
-from typing import cast
+from typing import Literal, cast
 
 import pandas as pd
 
@@ -63,10 +64,12 @@ class _PandasMaterializer(PandasMaterializer):
         *,
         context: Mapping[str, object],
         learned: Mapping[str, CategoricalEncoding] | None = None,
+        argument: Literal["configurations", "data"] = "configurations",
     ) -> None:
-        """Bind an optional contrast-only frozen categorical policy to this call."""
+        """Use the fitted categorical encoding for the named input when supplied."""
         super().__init__(data, context=context)
         self._learned = learned
+        self._argument = argument
 
     @override(force=True)
     def _evaluate_factor(
@@ -78,7 +81,12 @@ class _PandasMaterializer(PandasMaterializer):
             # Formulaic's pooled evaluation spec need not hold encoder_state.
             factor = copy(factor)
             factor.kind = learned.kind
-        return super()._evaluate_factor(factor, spec, drop_rows)
+        evaluated = super()._evaluate_factor(factor, spec, drop_rows)
+        if learned is not None and factor.eval_method.value == "lookup":
+            # Formulaic 1.0 determines rank from the incoming dtype. A fitted
+            # categorical column still spans the intercept on numeric inputs.
+            evaluated.metadata.spans_intercept = True
+        return evaluated
 
     @override(force=True)
     def _encode_evaled_factor(
@@ -89,19 +97,9 @@ class _PandasMaterializer(PandasMaterializer):
         reduced_rank: bool = False,
     ) -> dict[str, object]:
         """Refuse unlearned values using the fitted kind, never an input dtype."""
-        if self._learned is not None:
-            learned = self._learned.get(factor.expr)
-            if learned is not None:
-                outside = _unlearned(factor.values, learned.levels)
-                if outside:
-                    raise SpecificationError(
-                        "specification.invalid_value",
-                        {
-                            "argument": "configurations",
-                            "value": {factor.expr: outside},
-                            "valid": "levels of the fitted categorical encoding",
-                        },
-                    )
+        learned = None if self._learned is None else self._learned.get(factor.expr)
+        if learned is not None:
+            factor = _checked_factor(factor, learned, argument=self._argument)
         return super()._encode_evaled_factor(factor, spec, drop_rows, reduced_rank)
 
     @override
@@ -152,24 +150,42 @@ def owned_spec(spec: Spec) -> Spec:
     )
 
 
-def _unlearned(values: object, levels: tuple[Hashable, ...]) -> list[object]:
-    """Values without a fitted level, using the encoder's categorical index."""
-    data = pd.Series(getattr(values, "__wrapped__", values))
-    codes = pd.CategoricalDtype(list(levels)).categories.get_indexer(pd.Index(data))
-    return [
-        value
-        for value, code in zip(data.tolist(), codes.tolist(), strict=True)
-        if code < 0
-    ]
+def _checked_factor(
+    factor: EvaluatedFactor,
+    learned: CategoricalEncoding,
+    *,
+    argument: Literal["configurations", "data"],
+) -> EvaluatedFactor:
+    """Check observed labels before Formulaic encodes them against its fitted levels."""
+    data = pd.Series(factor.values.__wrapped__)
+    observed = data.dropna() if argument == "data" else data
+    levels = pd.CategoricalDtype(list(learned.levels)).categories
+    codes = levels.get_indexer(pd.Index(observed))
+    if (codes < 0).any():
+        raise SpecificationError(
+            "specification.invalid_value",
+            {
+                "argument": argument,
+                "value": {
+                    factor.expr: observed.iloc[(codes < 0).nonzero()[0]].tolist()
+                },
+                "valid": "levels of the fitted categorical encoding",
+            },
+        )
+    if argument == "data" and isinstance(data.dtype, pd.CategoricalDtype):
+        # pandas can refuse a category listed only in the new dtype. At this
+        # point every observed label belongs to the fitted encoding.
+        values = type(factor.values)(
+            data.cat.set_categories(levels), metadata=factor.metadata
+        )
+        return factor.replace(values=values)
+    return factor
 
 
-def materialize_contrast(spec: Spec, data: pd.DataFrame) -> object:
-    """Replay two rows once, with local fitted state and null-row accounting.
-
-    The supplied spec is the Design's separate fit-time metadata snapshot, never
-    the live spec used by fit/predict. Drop accounting and the model matrix share
-    one Formulaic evaluation. The caller refuses a dropped or nonfinite row.
-    """
+def materialize_fitted(
+    spec: Spec, data: pd.DataFrame, *, argument: Literal["configurations", "data"]
+) -> object:
+    """Replay the fitted state once with categorical checks and null-row positions."""
     local = owned_spec(spec)
     levels = {
         expr: CategoricalEncoding(
@@ -178,5 +194,7 @@ def materialize_contrast(spec: Spec, data: pd.DataFrame) -> object:
         for expr, (kind, state) in local.encoder_state.items()
         if kind.value == "categorical" and "categories" in state
     }
-    materializer = _PandasMaterializer(data, context={}, learned=levels)
+    materializer = _PandasMaterializer(
+        data, context={}, learned=levels, argument=argument
+    )
     return materializer.get_model_matrix(local, na_action="drop")

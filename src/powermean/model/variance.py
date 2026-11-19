@@ -5,19 +5,26 @@ about the distribution of the outcome.  Every system receives a variance object 
 evaluates it at the index ``q = log m``: ``log V``, its first derivative ``e`` (the
 elasticity of ``V`` with respect to ``m``) and its second derivative.
 
-Both shares of NB2 are evaluated from the smaller tail, never as one minus a rounded
-share, so that at a log-odds of 40 the derivative ``exp(-40)`` is still representable
-while the elasticity rounds to 2.
+Design: ``design/01_statistical_core.md``, Section 4.  Port of ``variance.py`` of
+expreg (source S7 of ``design/06_reuse_map.md``): the protocol, the two families,
+the validation of parameters and inputs, ``log_value``, ``elasticity`` and
+``to_dict`` keep that source's structure, names and arithmetic.  The second
+derivative ``elasticity_derivative`` and the share arithmetic ``_logistic_shares``
+come from ``families.py`` of pyiols (source S6).  Both shares of NB2 are evaluated
+from the smaller tail, never as one minus a rounded share, so that at a log-odds of
+40 the derivative ``exp(-40)`` is still representable while the elasticity rounds to
+2.  ``PROVENANCE.md`` records the sources and the changes.
 
-The internal ``PowerVariance`` class admits any finite real ``tau`` for full-family
-estimation; the public restriction, ``tau`` in ``[1, 2]``, remains enforced at the
-public interface boundary.  An unrepresentable log variance is a ``FloatingPointError``.
-No mixture family is included.
+The internal ``PowerVariance`` class admits any finite real ``tau`` for M2 full-family
+estimation; the public restriction of the first milestone, ``tau`` in ``[1, 2]``,
+remains enforced at the public interface boundary (decision D41).  An unrepresentable
+log variance is a ``FloatingPointError``.  No mixture family is included.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from fractions import Fraction
 from numbers import Real
 from typing import Protocol, runtime_checkable
 
@@ -121,6 +128,103 @@ class PowerVariance:
     def to_dict(self) -> dict[str, str | float]:
         """The family and ``tau``."""
         return {"type": "PowerVariance", "tau": self.tau}
+
+
+def _mean(z: FloatArray, weights: FloatArray | None) -> float:
+    """Use NumPy's mean on ordinary inputs and recover its range failures.
+
+    A lost weighted product or overflowing weight total can leave a finite mean.
+    Detect the arithmetic failure at its source before accepting that result.
+    """
+    with np.errstate(over="raise", under="raise", invalid="ignore"):
+        try:
+            return float(np.average(z, weights=weights))
+        except FloatingPointError:
+            pass
+
+    values = np.asarray(z, dtype=np.float64)
+    mass = None if weights is None else np.asarray(weights, dtype=np.float64)
+    if not np.isfinite(values).all() or (
+        mass is not None and not np.isfinite(mass).all()
+    ):
+        with np.errstate(over="ignore", under="ignore", invalid="ignore"):
+            return float(np.average(values, weights=mass))
+
+    if mass is not None:
+        active = mass != 0
+        values, mass = values[active], mass[active]
+    with np.errstate(over="raise", under="raise"):
+        try:
+            scaled, exponent = _reversible_scale(values)
+            scaled_mass = None
+            if mass is not None:
+                scaled_mass, _ = _reversible_scale(mass)
+            centre = min(
+                float(np.average(scaled, weights=scaled_mass)), float(np.max(scaled))
+            )
+            return float(np.ldexp(centre, exponent))
+        except FloatingPointError:
+            # Opposed scales can lose a tiny weight on a large outcome even
+            # after rescaling both arrays. Round only the final ratio here.
+            return _exact_mean(values, mass)
+
+
+def _reversible_scale(values: FloatArray) -> tuple[FloatArray, int]:
+    """Scale by a power of two only when every input survives exactly.
+
+    Some NumPy implementations of ldexp return rounded subnormals or zero
+    without raising underflow. Reversing the shift checks both cases.
+    """
+    exponent = int(np.frexp(np.max(np.abs(values)))[1])
+    scaled = np.ldexp(values, -exponent)
+    if not np.array_equal(np.ldexp(scaled, exponent), values):
+        raise FloatingPointError("binary rescaling lost a weighted-mean input")
+    return scaled, exponent
+
+
+def _exact_mean(values: FloatArray, mass: FloatArray | None) -> float:
+    """Recover the mean of finite doubles when common binary scales are insufficient."""
+    if mass is None:
+        return float(
+            sum((Fraction(float(x)) for x in values), Fraction()) / values.size
+        )
+    numerator, denominator = Fraction(), Fraction()
+    for value, weight in zip(values, mass, strict=True):
+        w = Fraction(float(weight))
+        numerator += Fraction(float(value)) * w
+        denominator += w
+    return float(numerator / denominator)
+
+
+def score_unit(z: FloatArray, weights: FloatArray | None, variance: object) -> float:
+    """The unit of the averaged score of a fit: ``mean(z) ** (2 - tau)``.
+
+    Under a power variance the averaged score and the Newton decrement are homogeneous
+    of degree ``2 - tau`` in the unit of the outcome ``z`` (degree 0 at ``tau = 2``).
+    A rule that compares the score with a pure number divides it by this unit first,
+    so that it decides the same whatever the unit.  1 for any other variance, and for
+    a mean that is not positive and finite.
+    """
+    if type(variance) is not PowerVariance or variance.tau == 2:
+        return 1.0
+    mean = _mean(z, weights)
+    if not (np.isfinite(mean) and mean > 0):
+        return 1.0
+    return float(mean ** (2.0 - variance.tau))
+
+
+def cancelled_score_unit(z: FloatArray, weights: FloatArray | None) -> float:
+    """The unit of the cancelled moment of a fit: ``mean(z)``.
+
+    The cancelled moment ``S = B' rho``, ``rho = t - pi T_g`` with ``t = a m z / V``,
+    and its negative Jacobian are linear in the outcome ``z`` whatever the working
+    variance, because the cancelled effect, not the index, carries the level of the
+    outcome.  1 for a mean that is not positive and finite.
+    """
+    mean = _mean(z, weights)
+    if not (np.isfinite(mean) and mean > 0):
+        return 1.0
+    return mean
 
 
 @dataclass(frozen=True)

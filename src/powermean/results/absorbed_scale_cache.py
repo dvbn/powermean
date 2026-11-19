@@ -1,8 +1,10 @@
 """Owned snapshots of covariance requests and pre-discard initial scale evaluations.
 
-This module defines :class:`RetainedCovarianceRequest`,
-:func:`snapshot_covariance_request`, :class:`RetainedInitialScaleCache`, and
-:func:`snapshot_initial_scale`.
+``design/02_computation.md``, Section 7; ``design/03_fixed_effects.md``, Sections 2 and
+4; ``design/11_api.md``; ``plan/evidence/M1.15_contract.txt``, items 4, 8, 9 and 10;
+``brief/layout_C_ownership.txt`` (P14); decisions D49, D51, D54 and D55.  This module
+defines :class:`RetainedCovarianceRequest`, :func:`snapshot_covariance_request`,
+:class:`RetainedInitialScaleCache`, and :func:`snapshot_initial_scale`.
 """
 
 from __future__ import annotations

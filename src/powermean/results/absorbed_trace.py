@@ -1,8 +1,11 @@
 """Detached snapshots of recorded trace events, traces, and trigger records.
 
-This module defines the explicit finite detached DTOs for recorded trace events, traces,
-and triggers without importing ``powermean.interface`` or using structural
-``_OutcomeView`` protocols.  Coordinator outcome and invocation records live in
+``design/02_computation.md``, Sections 2 to 4 and 8.4;
+``plan/evidence/M1.15_contract.txt``, items 2, 3 and 7;
+decisions D51 and D68 to D72.  This module defines the explicit finite detached DTOs
+for recorded trace events, traces, and triggers without importing
+``powermean.interface`` or using structural ``_OutcomeView`` protocols.  Coordinator
+outcome and invocation records live in
 :mod:`powermean.results.absorbed_outcome_records`.
 """
 

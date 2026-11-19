@@ -1,7 +1,10 @@
 """The state of the ordered sample: the positional row ledger and the completed sample.
 
-Internal module: no pandas, Formulaic or ``solve``.  :mod:`powermean.data.sample_fe`
-(blocks and steps 5 and 6) still provides these names.
+``design/02_computation.md``, Section 2, steps 1 to 9, and Section 8.4; decisions D14,
+D51 and D66; the reviewed outline ``plan/evidence/M1.10_contract.txt``, Section 3, and
+its corrections A and B (``plan/evidence/M1.10_revision_A.txt`` and
+``M1.10_revision_B.txt``).  Task M1.10, private: no pandas, Formulaic or ``solve``.
+:mod:`powermean.data.sample_fe` (blocks and steps 5 and 6) still provides these names.
 
 Rows.  :class:`RowLedger` keeps one code per input row (:data:`FE_REASONS`: the four
 reasons of steps 1 to 4, unchanged, then ``singleton``, ``separated_by_fixed_effect``
@@ -11,33 +14,34 @@ frequency weights, the exact count of each row of steps 3 and 4.  Physical count
 exact replica totals are distinct.  A row leaves once: :meth:`RowLedger.exclude`
 refuses a row that is not current, so nothing overwrites a first cause.
 
-Ownership.  Records own read-only arrays, also when constructed or replaced directly;
-every index is an exact integer checked before it is narrowed or used
-(:func:`powermean.data.retained._exact_index`).  A ledger's current rows are those of
-code zero, increasing, with their exact inverse; a block is given exactly for steps 5
-and 6; replica counts are zero exactly on the rows of steps 1 to 4, else exact counts of
-at most ``2**53``, also in total.  Step 2's account holds the seven groups of
-:data:`~powermean.data.accounting.MISSING_GROUPS`, exact Boolean masks of every input
-row that may overlap, their union the rows coded missing; the ledger keeps its own
-read-only copy and is compared with a context group by group.
+Ownership (correction A).  Records own read-only arrays, also when constructed or
+replaced directly; every index is an exact integer checked before it is narrowed or
+used (:func:`powermean.data.retained._exact_index`).  A ledger's current rows are those
+of code zero, increasing, with their exact inverse; a block is given exactly for steps
+5 and 6; replica counts are zero exactly on the rows of steps 1 to 4, else exact counts
+of at most ``2**53``, also in total.  Step 2's account (correction B) holds the seven
+groups of :data:`~powermean.data.accounting.MISSING_GROUPS`, exact Boolean masks of
+every input row that may overlap, their union the rows coded missing; the ledger keeps
+its own read-only copy and is compared with a context group by group.
 
 The sample (step 9).  :class:`FESample` is bound to the prepared base of every input
-row: its account of step 2 is the base's, its numeric record the base's record at its
-final positions (outcome, typed weights, the offset formed once, every original column
-and name, positions as labels), its transformed problem that record's transform at its
-order and its scaled design step 9 of that record's active columns, bit for bit, and it
-keeps those canonical records, never a caller's; its metadata is the base's at its
-positions, its conditioning its ledger's step 3 history.  Its blocks are those of
-``source``, the blocks of the rows of steps 3 and 4, on its final rows
-(:func:`restrict`), original level labels included; ``None`` for both declares no
-blocks.  The outcome that holds it binds that source to its prepared effects, the
-request and the diagnostics.
+row: its account of step 2 is the base's, its numeric record the base's accepted record
+at its final positions (outcome, typed weights, the offset formed once, every original
+column and name, positions as labels), its transformed problem that record's accepted
+transform at its order and its scaled design step 9 of that record's active columns,
+bit for bit, and it keeps those canonical records, never a caller's; its metadata is
+the base's at its positions, its conditioning its ledger's step 3 history.  Its blocks
+(correction B) are those of ``source``, the blocks of the rows of steps 3 and 4, on its
+final rows (:func:`restrict`), original level labels included; ``None`` for both
+declares no blocks.  The outcome that holds it binds that source to its prepared
+effects, the request and the diagnostics.
 
-Sources of the blocks.  :mod:`powermean.data.sample_fe_source` is their topic:
-:class:`Source`, :class:`Derived`, :func:`restrict`, :func:`same_blocks` and
-:func:`same_bits`, defined there with their internal helpers; this module still provides
-each of their names, the very same object.  The sample keeps its source on its final
-rows, the canonical blocks, never a caller's grouping.
+Sources of the blocks (correction C).  :mod:`powermean.data.sample_fe_source` is their
+topic (correction D, ``plan/evidence/M1.10_revision_D.txt``): :class:`Source`,
+:class:`Derived`, :func:`restrict`, :func:`same_blocks` and :func:`same_bits`, moved
+there unchanged with their private helpers; this module still provides each of their
+names, the very same object.  The sample keeps its source on its final rows, the
+canonical blocks, never a caller's grouping.
 """
 
 from __future__ import annotations
@@ -54,6 +58,7 @@ from powermean.data.accounting import (
     MISSING,
     MISSING_GROUPS,
     RETAINED,
+    SEPARATED,
     ZERO_OUTCOME,
     ZERO_WEIGHT,
     CodeArray,
@@ -74,6 +79,7 @@ from powermean.data.sample_fe_source import (
     _encoded,
     _one_source,
     _ordinals,
+    _owned_source_original,
     restrict,
     same_bits,
     same_blocks,
@@ -88,8 +94,8 @@ from powermean.model.order import (
 )
 from powermean.model.order_scale import OrderScale, _mean_order
 
-# The names of this module and of the sources of the blocks defined in
-# data/sample_fe_source.py: their import routes from here are kept.
+# The names of this module and of the sources of the blocks that correction D moved
+# from it to data/sample_fe_source.py: their import routes from here are kept.
 __all__ = [
     "BOUND",
     "FE_REASONS",
@@ -126,7 +132,7 @@ FE_REASONS: tuple[str, ...] = (
     "separated_by_fixed_effect",
     "separated",
 )
-SINGLETON, FIXED_EFFECT, SEPARATED = 5, 6, 7
+SINGLETON, FIXED_EFFECT = 5, 6
 NO_BLOCK = -1  # the block of a row that step 5 or 6 did not exclude
 LARGEST = int(np.iinfo(np.intp).max)  # no index beyond it is representable
 LEDGER = "the ledger's codes, rows, inverse, blocks, missing rows and counts disagree"
@@ -258,7 +264,7 @@ class RowLedger:
         return None if code == RETAINED else FE_REASONS[code - 1]
 
     def table(self, names: Sequence[str]) -> tuple[tuple[str, int], ...]:
-        """The physical counts in the order of the steps; steps 5, 6 by block.
+        """The physical counts in the order of file 02, Section 2; steps 5, 6 by block.
 
         ``names`` are the block names, in formula order.
         """
@@ -378,24 +384,25 @@ def _same_design(a: ScaledDesign | None, b: ScaledDesign | None) -> bool:
 
 # The canonical transform, scaled design and blocks that a bound sample keeps.
 Canonical = tuple[TransformedProblem, ScaledDesign | None, Grouping | None]
+_RESTRICT = restrict
 
 
 @dataclass(frozen=True, eq=False)
 class FESample:
-    """The completed ordered sample: rows, problem, columns and maps.
+    """The completed ordered sample (task M1.10): rows, problem, columns and maps.
 
     ``omega``, ``positive_only``, ``conditioned`` as for an order; ``ledger`` every
     input row's first exclusion or final position; ``base`` the prepared base of every
     input row; ``data`` the final rows with every original candidate column, unscaled,
-    labeled by their positions, weights of their kind; ``problem`` the transform of the
-    final rows; ``source`` the blocks on the rows of steps 3 and 4 (codes and level
-    labels) or ``None``; ``grouping`` the blocks on the final rows or ``None``;
-    ``reasons`` per original column, ``None`` when active, else its collinearity reason;
-    ``active`` the original indices of the active columns, increasing, possibly empty;
-    ``design`` step 9 on the active columns, ``None`` without one.  ``ValueError``
-    unless every part is bound (module docstring); the record keeps the canonical
-    transform, design and blocks that it is bound to (the blocks: its source on its
-    final rows, :func:`restrict`).
+    labeled by their positions, weights of their kind; ``problem`` the accepted
+    transform of the final rows; ``source`` the blocks on the rows of steps 3 and 4
+    (codes and level labels) or ``None``; ``grouping`` the blocks on the final rows or
+    ``None``; ``reasons`` per original column, ``None`` when active, else its
+    collinearity reason; ``active`` the original indices of the active columns,
+    increasing, possibly empty; ``design`` step 9 on the active columns, ``None``
+    without one.  ``ValueError`` unless every part is bound (module docstring); the
+    record keeps the canonical transform, design and blocks that it is bound to (the
+    blocks: its source on its final rows, :func:`restrict`, correction C).
     """
 
     omega: float
@@ -455,7 +462,8 @@ class FESample:
             return None
         if not same_missing(ledger.missing, self.base.missing):
             return None
-        if not self._blocks():
+        bound_blocks, grouping = self._blocks()
+        if not bound_blocks:
             return None
         if not same_data(data, _regression_data(self.base.inputs, positions)):
             return None
@@ -465,11 +473,20 @@ class FESample:
         if not same or not _same_design(self.design, design):
             return None
         source = self.source
-        blocks = None if source is None else restrict(source, positions, ledger.nobs)
-        return problem, design, blocks
+        if source is not None and not (
+            restrict is _RESTRICT
+            and type(source) is Derived
+            and type(source.source) is Source
+            and _owned_source_original()
+            and np.array_equal(source.source.rows, positions)
+        ):
+            # Subset restriction can reread user labels. Keep the canonical
+            # reconstruction after the rest of binding on that path.
+            grouping = restrict(source, positions, ledger.nobs)
+        return problem, design, grouping
 
-    def _blocks(self) -> bool:
-        """None without a source (and no first-cause block), else the source restricted.
+    def _blocks(self) -> tuple[bool, Grouping | None]:
+        """Check and return the canonical restriction of the sample's source.
 
         The source holds exactly the rows of steps 3 and 4 (codes 0 and 5 to 7), so the
         final rows (code 0) are an exact subset of them.
@@ -477,14 +494,14 @@ class FESample:
         ledger, source, grouping = self.ledger, self.source, self.grouping
         if source is None or grouping is None:
             free = not (ledger.blocks >= 0).any()
-            return source is None and grouping is None and free
+            return source is None and grouping is None and free, None
         eligible = (ledger.codes == RETAINED) | (ledger.codes > ZERO_WEIGHT)
         if not same_bits(source.positions, np.flatnonzero(eligible)):
-            return False
+            return False, None
         if int(ledger.blocks.max()) >= len(source.blocks):
-            return False
+            return False, None
         found = restrict(source, ledger.positions, ledger.nobs)
-        return same_blocks(grouping, found)
+        return same_blocks(grouping, found), found
 
     @property
     def positions(self) -> IndexArray:
@@ -551,9 +568,15 @@ def final_sample(
 
 
 def _final_owned_sample(
-    rows: OrderRows, ledger: RowLedger, *, base: SampleBase, data: RegressionData,
-    problem: TransformedProblem, groups: tuple[Grouping | None, Grouping | None],
-    reasons: Sequence[str | None], prepared_design: ScaledDesign | None = None,
+    rows: OrderRows,
+    ledger: RowLedger,
+    *,
+    base: SampleBase,
+    data: RegressionData,
+    problem: TransformedProblem,
+    groups: tuple[Grouping | None, Grouping | None],
+    reasons: Sequence[str | None],
+    prepared_design: ScaledDesign | None = None,
 ) -> FESample:
     """Compose a private coordinator's actual already checked canonical parts.
 
@@ -563,19 +586,29 @@ def _final_owned_sample(
     """
     source, grouping = groups
     reasons = tuple(reasons)
-    active = frozen_index(np.asarray(
-        [j for j, reason in enumerate(reasons) if reason is None], dtype=np.intp
-    ))
+    active = frozen_index(
+        np.asarray(
+            [j for j, reason in enumerate(reasons) if reason is None], dtype=np.intp
+        )
+    )
     design = (
-        prepared_design if prepared_design is not None and active.size == data.nparams
+        prepared_design
+        if prepared_design is not None and active.size == data.nparams
         else scaled(data, active)
     )
     result = object.__new__(FESample)
     for name, value in (
-        ("omega", rows.omega), ("positive_only", rows.positive_only),
-        ("conditioned", rows.conditioned), ("ledger", ledger), ("base", base),
-        ("data", data), ("problem", problem), ("source", source),
-        ("grouping", grouping), ("reasons", reasons), ("active", active),
+        ("omega", rows.omega),
+        ("positive_only", rows.positive_only),
+        ("conditioned", rows.conditioned),
+        ("ledger", ledger),
+        ("base", base),
+        ("data", data),
+        ("problem", problem),
+        ("source", source),
+        ("grouping", grouping),
+        ("reasons", reasons),
+        ("active", active),
         ("design", design),
     ):
         object.__setattr__(result, name, value)

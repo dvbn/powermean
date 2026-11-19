@@ -10,11 +10,11 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import cast
+from importlib import import_module
+from typing import TYPE_CHECKING, Protocol, cast
 
 import numpy as np
 from numpy.typing import NDArray
-from scipy.sparse import csc_array
 
 from powermean.fe import absorb_numeric as _numeric
 from powermean.fe._cancel_storage import FloatStorage, IndexStorage
@@ -30,6 +30,26 @@ from powermean.solve.compact_matrix import (
     MatrixParts,
     canonical_partition,
 )
+
+if TYPE_CHECKING:
+
+    class _SlotMatrix(Protocol):
+        indices: IndexArray
+        data: IndexArray
+
+        def sort_indices(self) -> None: ...
+
+    class _SlotConstructor(Protocol):
+        def __call__(
+            self,
+            buffers: tuple[IndexArray, IndexArray, IndexArray],
+            /,
+            *,
+            shape: tuple[int, int],
+        ) -> _SlotMatrix: ...
+
+
+csc_array: _SlotConstructor = import_module("scipy.sparse").csc_array
 
 
 def kept_block(basis: CertificateBasis, n_slopes: int) -> tuple[int, int] | None:
@@ -64,7 +84,10 @@ class CompactEntries:
         self._scatter(rows, cols, values)
 
     def _scatter(
-        self, rows: IndexArray, cols: IndexArray, values: FloatArray,
+        self,
+        rows: IndexArray,
+        cols: IndexArray,
+        values: FloatArray,
     ) -> tuple[FloatArray, IndexArray, tuple[_Selection, ...]]:
         """Classify once for both the numeric partitions and optional source slots."""
         rows, cols = np.asarray(rows, dtype=np.intp), np.asarray(cols, dtype=np.intp)
@@ -74,8 +97,10 @@ class CompactEntries:
         ra, ca = bool(np.all(rb)), bool(np.all(cb))
         rn, cn = not np.any(rb), not np.any(cb)
         whole = slice(None)
-        aligned = (rows.ndim == cols.ndim == values.ndim == 1
-                   and rows.shape == cols.shape == values.shape)
+        aligned = (
+            rows.ndim == cols.ndim == values.ndim == 1
+            and rows.shape == cols.shape == values.shape
+        )
         selections: tuple[_Selection, ...]
         if aligned and ra and ca:
             selections = (whole, None, None, None)
@@ -98,16 +123,23 @@ class CompactEntries:
             self.diagonal[positions], self.seen[positions] = values[diagonal], True
         count = stop - start
         for selected, target, row_inside, col_inside in zip(
-            selections[1:], (self.left, self.right, self.remainder),
-            (False, True, False), (True, False, False), strict=True,
+            selections[1:],
+            (self.left, self.right, self.remainder),
+            (False, True, False),
+            (True, False, False),
+            strict=True,
         ):
             if selected is not None:
                 rr, cc = rows[selected], cols[selected]
                 rr = rr - start if row_inside else rr - np.where(rr >= stop, count, 0)
                 cc = cc - start if col_inside else cc - np.where(cc >= stop, count, 0)
-                target.append((rr, cc,
-                               values.copy() if isinstance(selected, slice)
-                               else values[selected]))
+                if isinstance(selected, slice):
+                    # The entire batch occupies this one partition. Return
+                    # the same detached values to the optional route recorder.
+                    values = values.copy()
+                    target.append((rr, cc, values))
+                else:
+                    target.append((rr, cc, values[selected]))
         return values, positions, selections
 
     def _matrix(self, batches: list[Entries], shape: tuple[int, int]) -> CscStorage:
@@ -121,11 +153,16 @@ class CompactEntries:
         """Own the exact disjoint partition bytes and release construction batches."""
         start, stop = self.block
         m, r = stop - start, self.size - (stop - start)
-        remaining = np.concatenate((np.arange(start), np.arange(stop, self.size))).astype(np.intp)
+        remaining = np.concatenate(
+            (np.arange(start), np.arange(stop, self.size))
+        ).astype(np.intp)
         parts = MatrixParts(
-            self.block, IndexStorage.store(remaining), FloatStorage.store(self.diagonal),
+            self.block,
+            IndexStorage.store(remaining),
+            FloatStorage.store(self.diagonal),
             IndexStorage.store(np.flatnonzero(self.diagonal != 0).astype(np.intp)),
-            self._matrix(self.left, (r, m)), self._matrix(self.right, (m, r)),
+            self._matrix(self.left, (r, m)),
+            self._matrix(self.right, (m, r)),
             self._matrix(self.remainder, (r, r)),
         )
         self.left.clear()
@@ -151,18 +188,23 @@ class JointLayout:
         for g, first in enumerate(blocks):
             for h in range(g + 1, len(blocks)):
                 layout = None
-                if (native_pair_layout is _PAIR_LAYOUT
-                        and native_pair_inputs is _PAIR_INPUTS
-                        and _numeric._input_original is _PAIR_ORIGINAL
-                        and _PAIR_ORIGINAL()
-                        and native_pair_inputs(blocks, first, h)):
+                if (
+                    native_pair_layout is _PAIR_LAYOUT
+                    and native_pair_inputs is _PAIR_INPUTS
+                    and _numeric._input_original is _PAIR_ORIGINAL
+                    and _PAIR_ORIGINAL()
+                    and native_pair_inputs(blocks, first, h)
+                ):
                     layout = _combined_pair_layout(first.codes, blocks[h].codes)
                 native = layout is not None
                 if layout is None:
                     keys = np.column_stack((first.codes, blocks[h].codes))
                     layout = native_pair_layout(keys, first.codes, blocks[h].codes)
-                    layout = (np.unique(keys, axis=0, return_inverse=True)
-                              if layout is None else layout)
+                    layout = (
+                        np.unique(keys, axis=0, return_inverse=True)
+                        if layout is None
+                        else layout
+                    )
                 pairs, inverse = layout
                 rows = basis.positions[g][pairs[:, 0]]
                 cols = basis.positions[h][pairs[:, 1]]
@@ -170,20 +212,36 @@ class JointLayout:
                 # Only adjacent equal incidences: at most one linear comparison
                 # per pair, never a quadratic search over all block-pair layouts.
                 previous = self.pairs[-1] if self.pairs else None
-                shared = (previous[0] if native and previous is not None
-                          and previous[3] == len(pairs)
-                          and np.array_equal(inverse, previous[0].view()) else
-                          IndexStorage.store(inverse))
-                self.pairs.append((
-                    shared, IndexStorage.store(rows), IndexStorage.store(cols), len(pairs),
-                ))
+                shared = (
+                    previous[0]
+                    if native
+                    and previous is not None
+                    and previous[3] == len(pairs)
+                    and np.array_equal(inverse, previous[0].view())
+                    else IndexStorage.store(inverse)
+                )
+                self.pairs.append(
+                    (
+                        shared,
+                        IndexStorage.store(rows),
+                        IndexStorage.store(cols),
+                        len(pairs),
+                    )
+                )
 
     def add_pairs(
-        self, curvature: FloatArray, entries: CompactEntries, *, shared: bool = False,
+        self,
+        curvature: FloatArray,
+        entries: CompactEntries,
+        *,
+        shared: bool = False,
     ) -> None:
         """Fresh checked pair sums; only the owned consumer shares equal incidence."""
-        batches = (self._pair_values(curvature, shared=True) if shared
-                   else self._pair_values(curvature))
+        batches = (
+            self._pair_values(curvature, shared=True)
+            if shared
+            else self._pair_values(curvature)
+        )
         for rows, cols, sums in batches:
             kept = (rows >= 0) & (cols >= 0)
             rr, cc = self.n_slopes + rows[kept], self.n_slopes + cols[kept]
@@ -191,7 +249,10 @@ class JointLayout:
             entries.add(cc, rr, sums[kept])
 
     def _pair_values(
-        self, curvature: FloatArray, *, shared: bool = False,
+        self,
+        curvature: FloatArray,
+        *,
+        shared: bool = False,
     ) -> Iterator[tuple[IndexArray, IndexArray, FloatArray]]:
         """Reuse only a same-call sum of the exact same immutable incidence."""
         previous = None
@@ -204,13 +265,20 @@ class JointLayout:
 
 
 def _combined_pair_layout(
-    left: IndexArray, right: IndexArray,
+    left: IndexArray,
+    right: IndexArray,
 ) -> tuple[IndexArray, IndexArray] | None:
     """Canonical pair tuples from a temporary injective key, or the old fallback."""
-    if not (type(left) is np.ndarray and type(right) is np.ndarray
-            and left.dtype == right.dtype == np.dtype(np.intp)
-            and left.ndim == right.ndim == 1 and left.shape == right.shape
-            and left.size and left.flags.c_contiguous and right.flags.c_contiguous):
+    if not (
+        type(left) is np.ndarray
+        and type(right) is np.ndarray
+        and left.dtype == right.dtype == np.dtype(np.intp)
+        and left.ndim == right.ndim == 1
+        and left.shape == right.shape
+        and left.size
+        and left.flags.c_contiguous
+        and right.flags.c_contiguous
+    ):
         return None
     if int(left.min()) < 0 or int(right.min()) < 0:
         return None
@@ -238,7 +306,9 @@ class _CscRoute:
 
     @classmethod
     def compile(
-        cls, batches: list[Entries], sources: list[IndexArray],
+        cls,
+        batches: list[Entries],
+        sources: list[IndexArray],
         shape: tuple[int, int],
     ) -> _CscRoute | None:
         """Sort potential slots once; unknown duplicates keep generic zero rules."""
@@ -246,50 +316,82 @@ class _CscRoute:
         cols = np.concatenate([np.zeros(0, dtype=np.intp), *(b[1] for b in batches)])
         slots = np.concatenate([np.zeros(0, dtype=np.intp), *sources])
         native = (
-            all(type(a) is np.ndarray and a.dtype == np.dtype(np.intp)
-                and a.ndim == 1 for a in (rows, cols, slots))
-            and rows.shape == cols.shape == slots.shape and rows.size > 0
-            and type(shape) is tuple and len(shape) == 2
+            all(
+                type(a) is np.ndarray and a.dtype == np.dtype(np.intp) and a.ndim == 1
+                for a in (rows, cols, slots)
+            )
+            and rows.shape == cols.shape == slots.shape
+            and rows.size > 0
+            and type(shape) is tuple
+            and len(shape) == 2
             and all(type(d) is int for d in shape)
             and 0 < min(shape) <= max(shape) <= np.iinfo(np.int32).max
-            and int(cols.min()) >= 0 and int(cols.max()) < shape[1]
+            and int(cols.min()) >= 0
+            and int(cols.max()) < shape[1]
         )
         if native:
-            pointers = np.concatenate(([0], np.cumsum(
-                np.bincount(cols, minlength=shape[1]),
-            )))
+            pointers = np.concatenate(
+                (
+                    [0],
+                    np.cumsum(
+                        np.bincount(cols, minlength=shape[1]),
+                    ),
+                )
+            )
             # Compressed construction/sort never coalesces duplicate entries or
             # interprets source slots as numerical Hessian values.
             order = np.argsort(cols, kind="stable")
-            matrix = csc_array((slots[order], rows[order], pointers), shape=shape)
+            del cols
+            slots = slots[order]
+            rows = rows[order]
+            del order
+            matrix = csc_array((slots, rows, pointers), shape=shape)
+            del rows, slots
             matrix.sort_indices()
             rows, slots = matrix.indices, matrix.data
-            cols = cols[order]
+            repeated = rows[:-1] == rows[1:]
+            # Ignore consecutive equal row indices across column boundaries.
+            # Interior pointers may repeat when there are empty columns.
+            boundaries = pointers[(pointers > 0) & (pointers < rows.size)]
+            repeated[boundaries - 1] = False
+            if repeated.any():
+                return None
         else:
             order = np.lexsort((rows, cols))
             rows, cols, slots = rows[order], cols[order], slots[order]
-        if np.any((np.diff(rows) == 0) & (np.diff(cols) == 0)):
-            return None
-        if not native:
-            pointers = np.concatenate(([0], np.cumsum(
-                np.bincount(cols, minlength=shape[1]),
-            )))
-        return cls(shape, IndexStorage.store(np.asarray(slots, dtype=np.intp)),
-                   IndexStorage.store(np.asarray(pointers, dtype=np.intp)),
-                   IndexStorage.store(np.asarray(rows, dtype=np.intp)))
+            if np.any((np.diff(rows) == 0) & (np.diff(cols) == 0)):
+                return None
+            pointers = np.concatenate(
+                (
+                    [0],
+                    np.cumsum(
+                        np.bincount(cols, minlength=shape[1]),
+                    ),
+                )
+            )
+        return cls(
+            shape,
+            IndexStorage.store(np.asarray(slots, dtype=np.intp)),
+            IndexStorage.store(np.asarray(pointers, dtype=np.intp)),
+            IndexStorage.store(np.asarray(rows, dtype=np.intp)),
+        )
 
     def pack(self, values: FloatArray) -> CscStorage:
         """Fresh RAW-zero selection; retain full structure only for all live slots."""
         selected = values[self.sources.view()]
         keep = selected != 0
         if np.all(keep):
-            return CscStorage(self.shape, self.pointers, self.rows,
-                              FloatStorage.store(selected))
+            return CscStorage(
+                self.shape, self.pointers, self.rows, FloatStorage.store(selected)
+            )
         counts = np.concatenate(([0], np.cumsum(keep)))
         pointers = np.asarray(counts[self.pointers.view()], dtype=np.intp)
-        return CscStorage(self.shape, IndexStorage.store(pointers),
-                          IndexStorage.store(self.rows.view()[keep]),
-                          FloatStorage.store(selected[keep]))
+        return CscStorage(
+            self.shape,
+            IndexStorage.store(pointers),
+            IndexStorage.store(self.rows.view()[keep]),
+            FloatStorage.store(selected[keep]),
+        )
 
 
 @dataclass(frozen=True, eq=False)
@@ -308,11 +410,17 @@ class _JointStructure:
         """Form fresh owned numeric partitions in the original FULL coordinates."""
         diagonal = values[self.diagonal.view()]
         left, right, remainder = (route.pack(values) for route in self.partitions)
-        return CompactMatrix(MatrixParts(
-            self.block, self.remaining, FloatStorage.store(diagonal),
-            IndexStorage.store(np.flatnonzero(diagonal != 0).astype(np.intp)),
-            left, right, remainder,
-        ))
+        return CompactMatrix(
+            MatrixParts(
+                self.block,
+                self.remaining,
+                FloatStorage.store(diagonal),
+                IndexStorage.store(np.flatnonzero(diagonal != 0).astype(np.intp)),
+                left,
+                right,
+                remainder,
+            )
+        )
 
 
 class _ValueEntries:
@@ -326,7 +434,7 @@ class _ValueEntries:
     def add(self, values: FloatArray) -> None:
         """Copy one fresh checked batch; never retain a changing reducer buffer."""
         stop = self.offset + values.size
-        self.values[self.offset:stop] = values
+        self.values[self.offset : stop] = values
         self.offset = stop
 
     def finish(self, structure: _JointStructure) -> CompactMatrix:
@@ -344,7 +452,9 @@ class _PreparingEntries(CompactEntries):
         self.value_batches: list[FloatArray] = []
         self.sources: tuple[list[IndexArray], ...] = ([], [], [])
         self.diagonal_sources: IndexArray | None = np.full(
-            self.diagonal.size, -1, dtype=np.intp,
+            self.diagonal.size,
+            -1,
+            dtype=np.intp,
         )
         self.offset = 0
 
@@ -365,10 +475,12 @@ class _PreparingEntries(CompactEntries):
         self.diagonal_sources = None
 
     def _record(
-        self, values: FloatArray, positions: IndexArray,
+        self,
+        values: FloatArray,
+        positions: IndexArray,
         selections: tuple[_Selection, ...],
     ) -> None:
-        """Route the same batch selections, never classify or gather coordinates again."""
+        """Route the same batch selections; nothing is classified or gathered again."""
         slots = self.offset + np.arange(values.size, dtype=np.intp)
         self.offset += values.size
         self.value_batches.append(values)
@@ -380,7 +492,8 @@ class _PreparingEntries(CompactEntries):
                 target.append(slots[selected])
 
     def prepare(
-        self, layout: JointLayout,
+        self,
+        layout: JointLayout,
     ) -> tuple[CompactMatrix, _JointStructure | None]:
         """Build actual potential structure after the original fresh reductions."""
         prepared = None
@@ -395,7 +508,8 @@ class _PreparingEntries(CompactEntries):
         return self.finish(), None
 
     def _prepare_route(
-        self, layout: JointLayout,
+        self,
+        layout: JointLayout,
     ) -> tuple[CompactMatrix, _JointStructure] | None:
         """Prepare only optional structure; allocation refusal keeps original data."""
         start, stop = self.block
@@ -403,8 +517,10 @@ class _PreparingEntries(CompactEntries):
         partitions = tuple(
             _CscRoute.compile(batches, sources, shape)
             for batches, sources, shape in zip(
-                (self.left, self.right, self.remainder), self.sources,
-                ((r, m), (m, r), (r, r)), strict=True,
+                (self.left, self.right, self.remainder),
+                self.sources,
+                ((r, m), (m, r), (r, r)),
+                strict=True,
             )
         )
         if any(part is None for part in partitions):
@@ -412,17 +528,29 @@ class _PreparingEntries(CompactEntries):
         mixed: list[tuple[IndexStorage, IndexStorage]] = []
         for position in layout.basis.positions:
             kept = np.flatnonzero(position >= 0)
-            mixed.append((IndexStorage.store(kept),
-                          IndexStorage.store(layout.n_slopes + position[kept])))
-        pairs = tuple(IndexStorage.store(np.flatnonzero(
-            (left.view() >= 0) & (right.view() >= 0),
-        )) for _, left, right, _ in layout.pairs)
+            mixed.append(
+                (
+                    IndexStorage.store(kept),
+                    IndexStorage.store(layout.n_slopes + position[kept]),
+                )
+            )
+        pairs = tuple(
+            IndexStorage.store(
+                np.flatnonzero(
+                    (left.view() >= 0) & (right.view() >= 0),
+                )
+            )
+            for _, left, right, _ in layout.pairs
+        )
         remaining = np.concatenate((np.arange(start), np.arange(stop, self.size)))
         structure = _JointStructure(
-            self.block, IndexStorage.store(remaining.astype(np.intp)),
+            self.block,
+            IndexStorage.store(remaining.astype(np.intp)),
             IndexStorage.store(cast("IndexArray", self.diagonal_sources)),
             cast("tuple[_CscRoute, _CscRoute, _CscRoute]", partitions),
-            tuple(mixed), pairs, self.offset,
+            tuple(mixed),
+            pairs,
+            self.offset,
         )
         values = np.concatenate([np.zeros(0), *self.value_batches])
         return structure.pack(values), structure
@@ -430,27 +558,53 @@ class _PreparingEntries(CompactEntries):
 
 def original_entries(layout: JointLayout) -> bool:
     """Changed sink/pair callbacks keep their original dynamic assembly contract."""
-    return (type(layout) is JointLayout
-            and all(globals()[name] is value for name, value in _ENTRY_PRODUCERS)
-            and all(getattr(cls, name) is value for cls, name, value in _ENTRY_METHODS)
-            and _CscRoute.__dict__["compile"] is _ROUTE_COMPILE
-            and not any(name in layout.__dict__
-                        for name in ("add_pairs", "_pair_values")))
+    return (
+        type(layout) is JointLayout
+        and all(globals()[name] is value for name, value in _ENTRY_PRODUCERS)
+        and all(getattr(cls, name) is value for cls, name, value in _ENTRY_METHODS)
+        and _CscRoute.__dict__["compile"] is _ROUTE_COMPILE
+        and not any(name in layout.__dict__ for name in ("add_pairs", "_pair_values"))
+    )
 
 
-_ENTRY_PRODUCERS = tuple((name, globals()[name]) for name in (
-    "CompactEntries", "JointLayout", "canonical_partition", "kept_block",
-    "group_sums", "native_pair_layout", "native_pair_inputs", "_combined_pair_layout",
-    "csc_array", "_CscRoute", "_JointStructure",
-    "_ValueEntries", "_PreparingEntries",
-))
-_ENTRY_METHODS = tuple((cls, name, getattr(cls, name)) for cls, names in (
-    (CompactEntries, ("__init__", "add", "_scatter", "_matrix", "finish")),
-    (JointLayout, ("__init__", "add_pairs", "_pair_values")),
-    (_CscRoute, ("pack",)), (_JointStructure, ("pack",)),
-    (_ValueEntries, ("__init__", "add", "finish")),
-    (_PreparingEntries, (
-        "__init__", "add", "_discard", "_record", "prepare", "_prepare_route",
-    )),
-) for name in names)
+_ENTRY_PRODUCERS = tuple(
+    (name, globals()[name])
+    for name in (
+        "CompactEntries",
+        "JointLayout",
+        "canonical_partition",
+        "kept_block",
+        "group_sums",
+        "native_pair_layout",
+        "native_pair_inputs",
+        "_combined_pair_layout",
+        "csc_array",
+        "_CscRoute",
+        "_JointStructure",
+        "_ValueEntries",
+        "_PreparingEntries",
+    )
+)
+_ENTRY_METHODS = tuple(
+    (cls, name, getattr(cls, name))
+    for cls, names in (
+        (CompactEntries, ("__init__", "add", "_scatter", "_matrix", "finish")),
+        (JointLayout, ("__init__", "add_pairs", "_pair_values")),
+        (_CscRoute, ("pack",)),
+        (_JointStructure, ("pack",)),
+        (_ValueEntries, ("__init__", "add", "finish")),
+        (
+            _PreparingEntries,
+            (
+                "__init__",
+                "add",
+                "_discard",
+                "_record",
+                "prepare",
+                "_prepare_route",
+            ),
+        ),
+    )
+    for name in names
+)
 _ROUTE_COMPILE = _CscRoute.__dict__["compile"]

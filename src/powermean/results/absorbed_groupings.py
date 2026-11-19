@@ -1,5 +1,8 @@
 """Detached fixed-effect block and grouping snapshots and grouping identity map.
 
+``design/02_computation.md``, Sections 2 and 7; ``design/03_fixed_effects.md``,
+Section 2; ``plan/evidence/M1.15_contract.txt``, items 1, 3 and 4;
+``brief/compound_boundary_review.txt`` and ``brief/layout_C_ownership.txt`` (P02).
 This module defines :func:`_owned_components`, :class:`RetainedBlockSnapshot`,
 :class:`RetainedGroupingSnapshot`, :func:`detach_grouping`, and
 :class:`GroupingIdentityMap`.  Every independent ``.levels``, ``.levels_array``, and
@@ -171,14 +174,24 @@ class RetainedGroupingSnapshot:
 
     @classmethod
     def _from_component_runs(
-        cls, blocks: Sequence[RetainedBlockSnapshot], positions: IndexArray, *,
-        partition_key: PartitionKey, terms: tuple[tuple[str, ...], ...] | None,
-        runs: Mapping[str, ComponentRun], ordinals: Sequence[IndexArray] | None,
+        cls,
+        blocks: Sequence[RetainedBlockSnapshot],
+        positions: IndexArray,
+        *,
+        partition_key: PartitionKey,
+        terms: tuple[tuple[str, ...], ...] | None,
+        runs: Mapping[str, ComponentRun],
+        ordinals: Sequence[IndexArray] | None,
     ) -> RetainedGroupingSnapshot:
         """Fresh grouping headers over private already-owned complete components."""
-        result = cls(blocks, positions, partition_key=partition_key, terms=terms,
-                     column_dtypes={name: run.dtype for name, run in runs.items()},
-                     ordinals=ordinals)
+        result = cls(
+            blocks,
+            positions,
+            partition_key=partition_key,
+            terms=terms,
+            column_dtypes={name: run.dtype for name, run in runs.items()},
+            ordinals=ordinals,
+        )
         object.__setattr__(result, "_component_runs", MappingProxyType(dict(runs)))
         return result
 
@@ -244,12 +257,16 @@ class RetainedGroupingSnapshot:
     def _copy_free(self) -> bool:
         """Whether every owned level/component has only immutable built-in leaves."""
         if self._component_runs is not None:
-            return (original_producers()
-                    and _copy_with_memo is _RUN_COPY
-                    and _copy_free_labels is _RUN_COPY_FREE
-                    and all(_copy_free_labels(b._levels_tuple) for b in self.blocks)
-                    and all(type(run) is ComponentRun and run.bound()
-                            for run in self._component_runs.values()))
+            return (
+                original_producers()
+                and _copy_with_memo is _RUN_COPY
+                and _copy_free_labels is _RUN_COPY_FREE
+                and all(_copy_free_labels(b._levels_tuple) for b in self.blocks)
+                and all(
+                    type(run) is ComponentRun and run.bound()
+                    for run in self._component_runs.values()
+                )
+            )
         return all(_copy_free_labels(b._levels_tuple) for b in self.blocks) and (
             self._columns_tuple is None
             or all(_copy_free_labels(v) for v in self._columns_tuple.values())
@@ -261,18 +278,28 @@ class RetainedGroupingSnapshot:
         """Materialize a fresh grouping view in one pass using one fresh local memo."""
         active_memo: dict[int, Any] = {} if memo is None else memo
         new_blocks = tuple(b.rematerialize(active_memo) for b in self.blocks)
-        runs = (_rematerialized_runs(self) if memo is None
-                and _rematerialized_runs is _RUN_REMATERIALIZE else None)
+        runs = (
+            _rematerialized_runs(self)
+            if memo is None and _rematerialized_runs is _RUN_REMATERIALIZE
+            else None
+        )
         if runs is not None:
             return RetainedGroupingSnapshot._from_component_runs(
-                new_blocks, self._positions, partition_key=self.partition_key,
-                terms=self.terms, runs=runs, ordinals=self._ordinals,
+                new_blocks,
+                self._positions,
+                partition_key=self.partition_key,
+                terms=self.terms,
+                runs=runs,
+                ordinals=self._ordinals,
             )
         stored_columns = self._stored_component_tuples()
         new_cols = (
-            None if stored_columns is None else
-            {name: _copy_with_memo(values, active_memo)
-             for name, values in stored_columns.items()}
+            None
+            if stored_columns is None
+            else {
+                name: _copy_with_memo(values, active_memo)
+                for name, values in stored_columns.items()
+            }
         )
         return RetainedGroupingSnapshot(
             new_blocks,
@@ -294,34 +321,54 @@ def _rematerialized_runs(
     callbacks or current bindings retain the original materializer. Optional clone
     failure unwinds this frame/memo before the required old construction resumes.
     """
-    if (type(grouping) is not RetainedGroupingSnapshot
-            or not all(globals()[name] is value for name, value in _MATERIAL_GLOBALS)
-            or not all(vars(owner).get(name) is value
-                       for owner, name, value in _MATERIAL_METHODS)
-            or copy.deepcopy is not _MATERIAL_DEEPCOPY):
+    if (
+        type(grouping) is not RetainedGroupingSnapshot
+        or not all(globals()[name] is value for name, value in _MATERIAL_GLOBALS)
+        or not all(
+            vars(owner).get(name) is value for owner, name, value in _MATERIAL_METHODS
+        )
+        or copy.deepcopy is not _MATERIAL_DEEPCOPY
+    ):
         return None
     runs, dtypes = grouping._component_runs, grouping._column_dtypes
     if runs is None or dtypes is None:
         return None
-    if (type(runs) is not MappingProxyType or type(dtypes) is not MappingProxyType
-            or grouping._columns_tuple is not None
-            or type(grouping.blocks) is not tuple
-            or any(type(block) is not RetainedBlockSnapshot
-                   or type(block._levels_tuple) is not tuple for block in grouping.blocks)
-            or any(type(name) is not str for name in (*runs, *dtypes))
-            or runs.keys() != dtypes.keys()
-            or type(grouping.partition_key) is not int):
+    if (
+        type(runs) is not MappingProxyType
+        or type(dtypes) is not MappingProxyType
+        or grouping._columns_tuple is not None
+        or type(grouping.blocks) is not tuple
+        or any(
+            type(block) is not RetainedBlockSnapshot
+            or type(block._levels_tuple) is not tuple
+            for block in grouping.blocks
+        )
+        or any(type(name) is not str for name in (*runs, *dtypes))
+        or runs.keys() != dtypes.keys()
+        or type(grouping.partition_key) is not int
+    ):
         return None
     terms = grouping.terms
     if terms is not None and (
-        type(terms) is not tuple or any(type(term) is not tuple
-            or any(type(name) is not str for name in term) for term in terms)
+        type(terms) is not tuple
+        or any(
+            type(term) is not tuple or any(type(name) is not str for name in term)
+            for term in terms
+        )
     ):
         return None
-    if (any(type(run) is not ComponentRun or run.dtype is not np.dtype(object)
-            or dtypes[name] is not run.dtype or run._column is not None
-            or type(run._stored) is not np.ndarray or run._stored.dtype.kind not in "iu"
-            for name, run in runs.items()) or not grouping._copy_free):
+    if (
+        any(
+            type(run) is not ComponentRun
+            or run.dtype is not np.dtype(object)
+            or dtypes[name] is not run.dtype
+            or run._column is not None
+            or type(run._stored) is not np.ndarray
+            or run._stored.dtype.kind not in "iu"
+            for name, run in runs.items()
+        )
+        or not grouping._copy_free
+    ):
         return None
     try:
         memo: dict[int, Any] = {}
@@ -379,25 +426,58 @@ _RUN_COPY_FREE = _copy_free_labels
 # Do not activate constructors, getters, copiers or full materializers to qualify.
 _RUN_REMATERIALIZE = _rematerialized_runs
 _MATERIAL_DEEPCOPY = copy.deepcopy
-_MATERIAL_GLOBALS = tuple((name, globals()[name]) for name in (
-    "copy", "ComponentRun", "RetainedGroupingSnapshot", "RetainedBlockSnapshot",
-    "MappingProxyType", "original_producers", "owned_array",
-    "_copy_with_memo", "_copy_free_labels", "_rematerialized_runs",
-))
+_MATERIAL_GLOBALS = tuple(
+    (name, globals()[name])
+    for name in (
+        "copy",
+        "ComponentRun",
+        "RetainedGroupingSnapshot",
+        "RetainedBlockSnapshot",
+        "MappingProxyType",
+        "original_producers",
+        "owned_array",
+        "_copy_with_memo",
+        "_copy_free_labels",
+        "_rematerialized_runs",
+    )
+)
 _MATERIAL_METHODS = tuple(
-    (owner, name, vars(owner).get(name)) for owner, names in (
-        (RetainedGroupingSnapshot, (
-            "__new__", "__init__", "__getattribute__", "__getattr__",
-            "_from_component_runs", "_stored_component_tuples", "_copy_free",
-        )),
-        (RetainedBlockSnapshot, (
-            "__new__", "__init__", "__getattribute__", "__getattr__",
-            "rematerialize", "_levels_tuple",
-        )),
-        (ComponentRun, (
-            "__getattribute__", "__getattr__", "__deepcopy__", "__slots__",
-        )),
-    ) for name in names
+    (owner, name, vars(owner).get(name))
+    for owner, names in (
+        (
+            RetainedGroupingSnapshot,
+            (
+                "__new__",
+                "__init__",
+                "__getattribute__",
+                "__getattr__",
+                "_from_component_runs",
+                "_stored_component_tuples",
+                "_copy_free",
+            ),
+        ),
+        (
+            RetainedBlockSnapshot,
+            (
+                "__new__",
+                "__init__",
+                "__getattribute__",
+                "__getattr__",
+                "rematerialize",
+                "_levels_tuple",
+            ),
+        ),
+        (
+            ComponentRun,
+            (
+                "__getattribute__",
+                "__getattr__",
+                "__deepcopy__",
+                "__slots__",
+            ),
+        ),
+    )
+    for name in names
 )
 
 
@@ -436,8 +516,11 @@ def _view_over_labels(
 
 
 def _view_over_component_runs(
-    grouping: Grouping, levels: tuple[tuple[object, ...], ...],
-    runs: Mapping[str, ComponentRun], *, partition_key: PartitionKey,
+    grouping: Grouping,
+    levels: tuple[tuple[object, ...], ...],
+    runs: Mapping[str, ComponentRun],
+    *,
+    partition_key: PartitionKey,
     terms: tuple[tuple[str, ...], ...] | None,
     ordinals: Sequence[IndexArray] | None = None,
 ) -> RetainedGroupingSnapshot:
@@ -447,8 +530,12 @@ def _view_over_component_runs(
         for block, values in zip(grouping.blocks, levels, strict=True)
     )
     return RetainedGroupingSnapshot._from_component_runs(
-        blocks, grouping.positions, partition_key=partition_key,
-        terms=terms, runs=runs, ordinals=ordinals,
+        blocks,
+        grouping.positions,
+        partition_key=partition_key,
+        terms=terms,
+        runs=runs,
+        ordinals=ordinals,
     )
 
 
@@ -498,18 +585,24 @@ class GroupingIdentityMap:
         key = self.key_for(grouping)
         batch = (
             RetainedLabelBatch._from_runs(grouping, grouping)
-            if (type(self) is GroupingIdentityMap
+            if (
+                type(self) is GroupingIdentityMap
                 and detach_grouping is _RUN_DETACH
                 and _stored_raw_elements is _RUN_ELEMENTS
                 and _copy_with_memo is _RUN_COPY
-                and _copy_free_labels is _RUN_COPY_FREE)
+                and _copy_free_labels is _RUN_COPY_FREE
+            )
             else None
         )
         if batch is not None and type(grouping) is Derived:
             levels, _, runs = batch._run_views()
             snap = _view_over_component_runs(
-                grouping, levels, runs, partition_key=key,
-                terms=grouping.source.terms, ordinals=grouping.ordinals,
+                grouping,
+                levels,
+                runs,
+                partition_key=key,
+                terms=grouping.source.terms,
+                ordinals=grouping.ordinals,
             )
         else:
             snap = detach_grouping(grouping, partition_key=key)

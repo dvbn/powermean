@@ -5,14 +5,16 @@
 
 """The Newton adapter of the convex joint system: scikit-learn's damped Newton.
 
-The joint system without effects,
-with a power variance of ``tau`` in ``[1, 2]`` or NB2, is solved from one start
+``design/02_computation.md``, Sections 5.1 and 5.7; ``DESIGN.md``, Sections 5.3 and
+6.2; decisions D24, D40, D47, D48 and D50.  The joint system without effects (task
+M0.7), with a power variance of ``tau`` in ``[1, 2]`` or NB2, is solved from one start
 by scikit-learn's Newton-Cholesky iteration.  This is the one module of the package
-that imports :mod:`powermean._vendor`.
+that imports :mod:`powermean._vendor` (``design/11_engineering.md``, Section 3.1,
+rule 4).
 
-Providers.  One damped Newton algorithm, whose iteration comes from one of
+Providers (D24, D50).  One damped Newton algorithm, whose iteration comes from one of
 two providers: ``"bundled"``, the default, is the ``NewtonCholeskySolver`` that the
-package carries; ``"sklearn"`` is the ``NewtonCholeskySolver`` of the
+package carries (task M0.9); ``"sklearn"`` is the ``NewtonCholeskySolver`` of the
 installed scikit-learn, admitted only for a version in
 :data:`VERIFIED_SKLEARN_VERSIONS`.  Both wrap the pointwise loss in the carried
 ``LinearModelLoss``.  Its curvature warning counts the negative pointwise hessians,
@@ -30,33 +32,35 @@ carried ``LinearModelLoss`` averages the pointwise loss of
 :mod:`powermean.solve.point_loss`.  The adapter supplies the loop of
 ``NewtonSolver.solve`` (scikit-learn's code, BSD-3-Clause, with the attribution above
 and the notice ``powermean/_vendor/SKLEARN_COPYING``), statement for statement, and the
-line search of :mod:`powermean.solve.line_search`, that of scikit-learn with the options
-``armijo``, ``backtrack_factor`` and ``max_backtracks``; neither issues scikit-learn's
+line search of :mod:`powermean.solve.line_search`, that of the source with the options
+``armijo``, ``backtrack_factor`` and ``max_backtracks``; neither issues the source's
 warning of an iteration limit or of a failed search, which are the reasons of the
 attempt.  At the defaults an attempt that stops natively is the carried ``solve``, bit
-for bit, as the tests check.  Three changes:
+for bit, as the tests check.  The changes are those of S1 ``engine.py``
+(``DirectNewton``) and D40:
 
 - no fallback: where scikit-learn hands a failure to L-BFGS, the attempt stops with
   its reason; the provider's ``solve``, which holds that fallback in scikit-learn, is
   never called, so no other optimizer runs, whatever the provider;
 - the last accepted state: the line search replaces the state only by an accepted
   trial, so that a refused, failed or interrupted search keeps the last accepted step;
-- a trial whose value is not representable is refused: where the package's rows raise
-  ``FloatingPointError``, the trial is refused as the Armijo test refuses an infinite
-  loss.
+- a trial whose value is not representable is refused, as the Armijo test refused the
+  infinite loss that the campaign's compiled losses returned where the package's rows
+  raise ``FloatingPointError``.
 
 Budgets, retry and result.  ``max_iter`` counts accepted Newton steps and
-``max_evaluations`` the calls of the pointwise loss, each over the whole solve.
+``max_evaluations`` the calls of the pointwise loss, each over the whole solve (S1).
 The retry is that of :mod:`powermean.solve.newton_retry`, decided with the independent
 assessment of :mod:`powermean.solve.assessment`, to which the controls of the
 certificate go.  An attempt ends with a native reason of
-:mod:`powermean.solve.newton_trace`; two exceptions, the evaluation limit and a
+:mod:`powermean.solve.newton_trace`; S1's two exceptions, the evaluation limit and a
 value that is not representable, end it too, and no other is caught.  The result is a
-candidate with its trace, never a claim of convergence: only the certificate decides
-whether it is a solution.
+candidate with its trace (``DESIGN.md``, Section 5.3), never a claim of convergence:
+only the certificate of task M0.11 decides whether it is a solution.
+``PROVENANCE.md``, Section 7, records the sources and the changes.
 
-The profiled organization.
-:func:`run_profiled_attempt` drives the same iteration, line search
+The profiled organization (task M1.11; ``design/02_computation.md``, Section 5.2; the
+M1.11 contract).  :func:`run_profiled_attempt` drives the same iteration, line search
 and providers with the profiled linear loss of
 :mod:`powermean.solve.profiled_linear_loss` (whose class this module still provides),
 one object for both providers, built here with the provider's carried
@@ -64,16 +68,16 @@ one object for both providers, built here with the provider's carried
 this module remains the only one that imports the carried files; and with
 :class:`ProfiledEvaluation`, the whole-point state of the attempt
 (:mod:`powermean.solve.profiled_loss`).  The profiled loss charges each evaluation to
-the solve's one budget before its work.  Three hooks, each skipped on
-the route without effects: :func:`search` brackets a line search (``begin``,
-then ``end`` with the
+the solve's one budget before its work (correction A).  Three hooks, each skipped on
+the M0 route: :func:`search` brackets a line search (``begin``, then ``end`` with the
 accepted trial or ``None``), and :func:`_iterate` calls ``started`` after the setup and
 ``stepped`` after each native convergence test.  The step, search and acceptance
-arithmetic is unchanged.  Two exceptions end a profiled attempt besides those two:
+arithmetic is unchanged.  Two exceptions end a profiled attempt besides S1's two:
 :class:`InnerLimitError` (an inner sweep allowance spent) and :class:`IndicationError`
-(an existence indication).
+(an existence indication).  ``PROVENANCE.md``, Section 29, records the change.
 
-The fitted-index organization.  :func:`run_index_attempt` drives the same
+The fitted-index organization (task M1.12; ``design/02_computation.md``, Section 5.2;
+the M1.12 contract, mechanics Section 2).  :func:`run_index_attempt` drives the same
 loop, line search and providers with an :class:`IndexEvaluation`, the whole-point state
 of the attempt (:mod:`powermean.solve.absorbed_loss`), to which this module hands the
 provider's carried ``LinearModelLoss`` and the carried ``sandwich_dot``
@@ -81,7 +85,7 @@ provider's carried ``LinearModelLoss`` and the carried ``sandwich_dot``
 the carried files.  The provider's ``setup``, ``update_gradient_hessian``,
 ``inner_solve`` and ``finalize`` run at their usual places on the slopes' Schur view (K
 and K-by-K storage); the loop calls the evaluation's representation seams where the
-index route differs, and the other routes skip them: after the setup (the
+index route differs, and the M0 and profiled routes skip them: after the setup (the
 start's full index replaces the slope-only prediction), after the inner solve (the full
 direction and its derivative and decrement, the provider's refusal kept), in place of
 the search on the slopes (the existing :func:`~powermean.solve.line_search.line_search`
@@ -89,13 +93,14 @@ along the full direction, unchanged) and of the provider's convergence method (t
 existing formulas on the full score and the unhalved origin decrement).  Without a slope
 column the provider's inner solve, a factorization of an empty system, is skipped
 explicitly; the provider's convergence method never runs on this route, whose native
-test is the adapter's.  The other routes are unchanged.
+test is the adapter's.  The M0 and profiled routes are unchanged.
 """
 
 from __future__ import annotations
 
 import importlib
 import importlib.metadata
+import sys
 import time
 import warnings
 from dataclasses import dataclass
@@ -109,7 +114,12 @@ from powermean._vendor._typing import BaseLoss
 from powermean.errors import SpecificationError
 from powermean.fe._cancel_storage import finite_vector
 from powermean.model.rows import _immutable
-from powermean.model.variance import FloatArray, PowerVariance
+from powermean.model.variance import (
+    FloatArray,
+    PowerVariance,
+    cancelled_score_unit,
+    score_unit,
+)
 from powermean.solve.assessment import AssessmentLog, Assessor, certificate_controls
 from powermean.solve.cancelled_loss import CancelledLinearLoss
 from powermean.solve.cancelled_operator import CancelledProblem, ImplicitNewtonProblem
@@ -125,7 +135,11 @@ from powermean.solve.newton_trace import (
     Timing,
 )
 from powermean.solve.options import Provider, SolverOptions
-from powermean.solve.point_loss import Budget, EvaluationLimitError, PointLoss
+from powermean.solve.point_loss import (
+    Budget,
+    EvaluationLimitError,
+    PointLoss,
+)
 from powermean.solve.profiled_linear_loss import (
     Admissions,
     PointEvaluation,
@@ -135,8 +149,8 @@ from powermean.solve.profiled_linear_loss import (
 from powermean.solve.starts import Start
 from powermean.systems.joint import JointSystem
 
-# The names of this module, and those of the profiled linear loss defined in
-# solve/profiled_linear_loss.py, whose import route from here is kept.
+# The names of this module and of the profiled linear loss that correction A moved from
+# it to solve/profiled_linear_loss.py: its import route from here is kept.
 __all__ = [
     "BUNDLED",
     "SKLEARN_DISTRIBUTION",
@@ -171,11 +185,13 @@ LinearLoss = vendor_linear_loss.LinearModelLoss
 
 SKLEARN_DISTRIBUTION = "scikit-learn"
 SKLEARN_NEWTON = "sklearn.linear_model._glm._newton_solver"
-# The versions of scikit-learn whose NewtonCholeskySolver, with the carried linear loss,
-# reproduced the bundled provider bit for bit on all 24 cases of the parity of the
-# providers on the package's loss: 1.4.2, the minimum declared version, and 1.9.1.
-# No range is implied, and no other version is listed; the parity test checks a
-# listed version whenever it is installed.
+# The versions of scikit-learn whose NewtonCholeskySolver, with the carried linear loss
+# (D50), reproduced the bundled provider bit for bit on all 24 cases of the parity of
+# the providers on the package's loss, in Codex's host check of that pairing on 7
+# October 2026: 1.4.2, the minimum declared version, and 1.9.1, that of the development
+# environment.  No range is implied, and no other version is listed; the parity test
+# (tests/solve/test_newton_providers.py) checks a listed version whenever it is
+# installed, and tools/verify_newton_providers.py prints its comparison.
 VERIFIED_SKLEARN_VERSIONS: frozenset[str] = frozenset({"1.4.2", "1.9.1"})
 
 
@@ -187,8 +203,9 @@ class NewtonProvider:
     """The Newton class of one provider, the linear loss that it drives, their origin.
 
     ``solver`` is the ``NewtonCholeskySolver`` whose iteration runs; ``linear_loss``
-    wraps the pointwise loss, the carried ``LinearModelLoss`` for both providers.
-    ``version`` is that of the installed scikit-learn, ``None`` for the bundled files.
+    wraps the pointwise loss, the carried ``LinearModelLoss`` for both providers (D50).
+    ``version`` is that of the installed scikit-learn, ``None`` for the bundled files
+    (``PROVENANCE.md``, Section 6, identifies them).
     """
 
     name: Provider
@@ -212,7 +229,7 @@ def installed_provider() -> NewtonProvider:
     """The iteration of the installed scikit-learn, without the gate of the versions.
 
     Its ``NewtonCholeskySolver``, imported by name, with the carried
-    ``LinearModelLoss`` of the bundled provider: only the iteration comes from
+    ``LinearModelLoss`` of the bundled provider (D50): only the iteration comes from
     scikit-learn, whose own linear loss, which its module imports, is not used.  For
     the parity test; the adapter reaches it through :func:`resolve_provider` only.
     The class is typed as the bundled one, whose interface the parity test checks on
@@ -254,7 +271,8 @@ def resolve_provider(
 class NewtonProblem(NamedTuple):
     """The arrays of the iteration: the rows of positive weight of the system.
 
-    ``weights`` are those rows' weights, which :func:`solve` always passes, or ``None``.
+    ``weights`` are those rows' weights, which :func:`solve` always passes; ``None``,
+    the sample weight of the campaign, serves the comparisons with its preflight.
     """
 
     design: FloatArray
@@ -262,11 +280,21 @@ class NewtonProblem(NamedTuple):
     weights: FloatArray | None
 
 
-def absolute_sum(gradient: FloatArray) -> float:
-    """``sum |g|`` by SciPy's norm of order one, as in scikit-learn's line search.
+def unit_tolerance(tolerance: float, point: PointLoss, problem: NewtonProblem) -> float:
+    """``tolerance`` of the native test in the unit of the averaged score.
 
-    SciPy refuses a gradient that is not finite with ``ValueError``; it raises
-    ``FloatingPointError`` here, reported as a numerical breakdown.
+    The native test compares the score and the decrement with the tolerance times
+    :func:`~powermean.model.variance.score_unit`, so that the iteration stops at
+    the same step whatever the unit of the outcome.
+    """
+    return tolerance * score_unit(problem.z, problem.weights, point.variance)
+
+
+def absolute_sum(gradient: FloatArray) -> float:
+    """``sum |g|`` by SciPy's norm of order one, as in the source's line search.
+
+    SciPy refuses a gradient that is not finite with ``ValueError``, which S1 took for
+    a numerical breakdown; it raises ``FloatingPointError`` here, reported as one.
     """
     if not np.isfinite(gradient).all():
         raise FloatingPointError("gradient is not representable in float64")
@@ -284,7 +312,7 @@ def search(
     """The line search of :mod:`powermean.solve.line_search` on the provider's solver.
 
     The raw prediction of the Newton step and the loss of a trial are those of the
-    provider's ``LinearModelLoss``, called as scikit-learn's line search calls it.  With
+    provider's ``LinearModelLoss``, called as the source's line search calls it.  With
     a ``transaction`` (the profiled route) the search is bracketed: ``begin`` before its
     first trial, ``end`` after it with the accepted coefficients, or ``None`` when every
     trial was refused or an exception interrupted it; nothing is caught.
@@ -320,7 +348,7 @@ def search(
 
 
 def _inner_failure(solver: Solver) -> NativeReason:
-    """The reason of a failed Newton step.
+    """The reason of a failed Newton step, as S1 ``DirectNewton.inner_solve`` names it.
 
     An ascending step is ``non_descent_direction``; a singular system or a curvature
     mostly negative, ``factorization_failure``.  Without a new step, the product of the
@@ -337,7 +365,7 @@ def _step(
 
     The provider's inner solve and its refusal, as the source runs them; on the index
     route the inner solve is skipped without a slope column, and the full direction is
-    completed after it.
+    completed after it (task M1.12).
     """
     design, z, weights = problem
     if index is None or index.factorized:
@@ -352,8 +380,8 @@ def _test(
 ) -> FloatArray:
     """The native convergence test; the accepted gradient that the hooks receive.
 
-    The provider's method on the route without effects and the profiled route; the index
-    route's two formulas on its full score otherwise.
+    The provider's method on the M0 and profiled routes; the index route's two formulas
+    on its full score otherwise (task M1.12).
     """
     if index is None:
         design, z, weights = problem
@@ -375,9 +403,9 @@ def _iterate(
     """The loop of ``NewtonSolver.solve``, with :func:`line_search` and no fallback.
 
     ``hooks`` (the profiled and index routes) are called after the setup and after
-    each native convergence test, and bracket each line search; ``None`` on the route
-    without effects.  ``index`` (the index route) supplies the representation seams
-    of :class:`IndexEvaluation`; ``None`` on the other routes.
+    each native convergence test, and bracket each line search; ``None`` on the M0
+    route.  ``index`` (the index route, task M1.12) supplies the representation seams
+    of :class:`IndexEvaluation`; ``None`` on the M0 and profiled routes.
     """
     design, z, weights = problem
     solver.setup(X=design, y=z, sample_weight=weights)
@@ -427,7 +455,7 @@ def _guarded(
 ) -> tuple[NativeReason, str]:
     """The reason of the attempt, with the text of the exception that ended it, if any.
 
-    Only two exceptions end an attempt: the evaluation limit and a value that is
+    Only S1's two exceptions end an attempt: the evaluation limit and a value that is
     not representable.  Any other exception is not caught.
     """
     try:
@@ -458,19 +486,30 @@ def run_attempt(
 ) -> NewtonAttempt:
     """One attempt of the iteration from ``coefficients``, at most ``max_iter`` steps.
 
-    The solver is built from a copy of the coefficients, the
-    provider's linear loss (the carried ``LinearModelLoss``) of ``base_loss``
+    The solver is built as S1 builds ``DirectNewton``: a copy of the coefficients, the
+    provider's linear loss (the carried ``LinearModelLoss``, D50) of ``base_loss``
     without an intercept of its own (the design holds it), no penalty,
-    ``tol=gradient_tol``, one thread.  NumPy does not
-    report overflow or invalid operations, and the provider's warnings are
-    recorded in the attempt.  ``budget`` is the one that ``base_loss`` charges.
+    the native gradient tolerance, one thread. With a power variance, the gradient
+    and squared decrement carry the outcome unit to the power ``2 - tau``. As in S1,
+    NumPy suppresses overflow and invalid-operation warnings. The attempt records
+    the provider's warnings. ``budget`` is the one that ``base_loss`` charges.
     """
     linear_loss = provider.linear_loss(base_loss=base_loss, fit_intercept=False)
+    tolerance = options.gradient_tol
+    if isinstance(base_loss, PointLoss) and isinstance(
+        base_loss.variance, PowerVariance
+    ):
+        # Every finite gradient may pass an overflowing threshold. An infinite
+        # decrement must still fail the provider's comparison. A threshold
+        # rounded to zero admits only a zero gradient and squared decrement.
+        tolerance = min(
+            unit_tolerance(tolerance, base_loss, problem), sys.float_info.max
+        )
     solver = provider.solver(
         coef=np.array(coefficients, dtype=np.float64),
         linear_loss=linear_loss,
         l2_reg_strength=0.0,
-        tol=options.gradient_tol,
+        tol=tolerance,
         max_iter=max_iter,
         n_threads=1,
         verbose=0,
@@ -537,6 +576,7 @@ def run_cancelled_attempt(
     buffers, and finalize only handles inactive multinomial branches. Search calls
     our raw helper and loss_gradient. No other X access or dense wrapper runs.
     Provider allocations are float64 (d,) and (d,d), from the coefficient length.
+    See the external ABI audit and supported-host tests for this exact call set.
     """
     if type(problem) is not CancelledProblem or type(options) is not SolverOptions:
         raise TypeError("use a validated CancelledProblem and SolverOptions")
@@ -555,11 +595,13 @@ def run_cancelled_attempt(
     checked = finite_vector(coefficients, operator.shape[1], "identified start")
     linear = CancelledLinearLoss(problem, budget)
     carrier = ImplicitNewtonProblem(operator, problem.z, None)
+    # The criterion sum(t)/n, t = z exp(-q), its gradient and its decrement are linear
+    # in the outcome: the native tolerance is read in that unit (ruling 68).
     solver = provider.solver(
         coef=np.array(checked, dtype=np.float64),
         linear_loss=cast("LinearLoss", linear),
         l2_reg_strength=0.0,
-        tol=options.gradient_tol,
+        tol=options.gradient_tol * cancelled_score_unit(problem.z, None),
         max_iter=max_iter,
         n_threads=1,
         verbose=0,
@@ -630,8 +672,8 @@ def solve(
         budgets, the line search, the retry and the curvature by the iteration, the
         controls of the certificate by the assessor only.
     assess : Assessor or None
-        The independent assessment that the retry needs (the certificate):
-        required with ``retry=1``, never called with ``retry=0``, and never
+        The independent assessment that the retry needs (the certificate of task
+        M0.11): required with ``retry=1``, never called with ``retry=0``, and never
         replaced by the solver's own test.
 
     Returns
@@ -698,19 +740,19 @@ def solve(
     )
 
 
-# ------------------------------------------------ the profiled organization
+# ------------------------------------------------ the profiled organization (M1.11)
 
 
 class InnerLimitError(RuntimeError):
-    """A profile or absorption of a profiled point spent its sweeps.
+    """A profile or absorption of a profiled point spent its sweeps (S1 FEInnerLimit).
 
-    It stops the attempt: neither a refused trial nor a
+    It stops the attempt, as S1's ``FEInnerLimit`` did: neither a refused trial nor a
     new allowance.
     """
 
 
 class IndicationError(RuntimeError):
-    """An existence indication stopped a profiled attempt.
+    """An existence indication stopped a profiled attempt (task M1.11, mechanics B).
 
     Raised by :meth:`Hooks.started` or :meth:`Hooks.stepped`; the operative stop of the
     attempt is then not a native stop.
@@ -795,9 +837,8 @@ def run_profiled_attempt(
     linear loss, handed over by one cast since it provides the carried interface without
     deriving from it; ``evaluation`` is also the hooks of the iteration.  ``budget`` is
     the solve's one budget, which ``point`` charges and the profiled loss admits each
-    evaluation to before its work.  Besides the evaluation limit and a value that is
-    not representable, :class:`InnerLimitError` and :class:`IndicationError` end the
-    attempt; no other
+    evaluation to before its work.  Besides S1's two exceptions,
+    :class:`InnerLimitError` and :class:`IndicationError` end the attempt; no other
     exception is caught.
     """
     carried = provider.linear_loss(base_loss=point, fit_intercept=False)
@@ -812,7 +853,7 @@ def run_profiled_attempt(
         coef=np.array(coefficients, dtype=np.float64),
         linear_loss=cast("LinearLoss", profiled),
         l2_reg_strength=0.0,
-        tol=options.gradient_tol,
+        tol=unit_tolerance(options.gradient_tol, point, problem),
         max_iter=max_iter,
         n_threads=1,
         verbose=0,
@@ -850,11 +891,11 @@ def run_profiled_attempt(
     )
 
 
-# --------------------------------------------- the fitted-index organization
+# --------------------------------------------- the fitted-index organization (M1.12)
 
 
 class IndexEvaluation(Hooks, Protocol):
-    """The fitted-index state of one attempt: its hooks and its seams.
+    """The fitted-index state of one attempt (task M1.12): its hooks and its seams.
 
     :func:`run_index_attempt` hands it the provider's carried ``LinearModelLoss`` and
     the carried ``sandwich_dot`` (:meth:`provider_loss`), and :func:`_iterate` calls
@@ -924,9 +965,8 @@ def run_index_attempt(
     offset) and the carried ``sandwich_dot``, handed over by one cast as the profiled
     loss is; ``evaluation`` is also the hooks and the seams of the iteration.
     ``budget`` is the solve's one budget, which ``point`` charges and the evaluation
-    admits each evaluation to before its work.  Besides the evaluation limit
-    and a value that is not representable, :class:`InnerLimitError` and
-    :class:`IndicationError` end the attempt; no other
+    admits each evaluation to before its work.  Besides S1's two exceptions,
+    :class:`InnerLimitError` and :class:`IndicationError` end the attempt; no other
     exception is caught.  The attempt's state is the evaluation's accepted whole point
     (the full index ``q`` as its raw prediction and the full score as its gradient),
     not the provider's Schur view.  The record is that of :func:`run_profiled_attempt`.
@@ -937,7 +977,7 @@ def run_index_attempt(
         coef=np.array(coefficients, dtype=np.float64),
         linear_loss=cast("LinearLoss", linear),
         l2_reg_strength=0.0,
-        tol=options.gradient_tol,
+        tol=unit_tolerance(options.gradient_tol, point, problem),
         max_iter=max_iter,
         n_threads=1,
         verbose=0,

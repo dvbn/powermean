@@ -1,9 +1,11 @@
 """The records of the absorbed joint root solve outside ``tau in [1, 2]``.
 
-A joint fit outside ``[1, 2]`` starts from the nearest convex member (PPML below 1,
-Gamma above 2, on the same sample and formulation), and its continuation path is
-recorded; the result is a selected local root, certified as a regular root, not as
-unique.  The solve itself is
+``design/02_computation.md``, Sections 5.3 (root Newton), 6 (the nearest convex start
+of a joint fit outside ``[1, 2]``, the continuation path, recorded), 7 (the
+certificate) and 9 (provenance); ``DESIGN.md``, Sections 3.4 (a selected local root,
+certified as a regular root, not as unique), 6.2 and 6.3; decisions D51 and D57; the
+human approval of 31 October 2026 of the nearest convex start (PPML below 1, Gamma
+above 2, on the same sample and formulation).  The solve itself is
 :mod:`powermean.solve.absorbed_root`.  These records hold what ran and what it cost;
 none certifies anything: the certificate of the selected point decides, and a
 candidate is never a certified solution.
@@ -61,17 +63,17 @@ if TYPE_CHECKING:
         Level,
     )
     from powermean.solve.absorbed_certificate_factor import FactorRecord
-    from powermean.solve.absorbed_certificate_geometry import SparseMatrix
     from powermean.solve.cancelled_records import (
         MeritMetric,
         RootAttemptRecord,
         RootOptions,
     )
-    from powermean.solve.absorbed import AbsorbedOptions
+    from powermean.solve.m1_options import AbsorbedOptions
     from powermean.solve.newton_absorbed import IndexCandidate
     from powermean.solve.newton_profiled import ProfiledCandidate
     from powermean.solve.newton_trace import NativeReason, Timing
     from powermean.solve.options import SolverOptions
+    from powermean.solve.sparse_matrix import SparseMatrix
 
 RootInitializerKind = Literal["ppml_tau1", "gamma_tau2", "user_start"]
 # The operation of every root stage, whatever organization the fit requested.

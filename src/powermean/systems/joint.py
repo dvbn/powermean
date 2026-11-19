@@ -1,12 +1,12 @@
 """Joint system without effects: moment, Jacobians, criterion and row contributions.
 
-The joint system without effects (``b_i = x_i``), on the transformed problem: an
-outcome ``z >= 0``, a dense design ``X`` with rows ``x_i'``, coefficients ``gamma``, a
-transformed offset ``o`` and fixed nonnegative weights ``a``.  The index is
-``q = X gamma + o``; the order layer has already multiplied the offset by ``omega``,
-and no order or exposure enters here.  The row terms ``r``, ``c``, ``w`` and ``l`` are
-those of :mod:`powermean.model.rows`, and each weight multiplies the terms of its row
-once:
+The joint system of ``design/01_statistical_core.md``, Section 5.1, without effects
+(``b_i = x_i``), on the transformed problem: an outcome ``z >= 0``, a dense design ``X``
+with rows ``x_i'``, coefficients ``gamma``, a transformed offset ``o`` and fixed
+nonnegative weights ``a``.  The index is ``q = X gamma + o``; the order layer has
+already multiplied the offset by ``omega``, and no order or exposure enters here.  The
+row terms ``r``, ``c``, ``w`` and ``l`` are those of :mod:`powermean.model.rows`, and
+each weight multiplies the terms of its row once:
 
     moment                S = X'(a r)          = sum_i a_i r_i x_i
     observed bread        C = X' diag(a c) X   = -dS/dgamma'
@@ -22,12 +22,13 @@ indefinite (zero rows at ``tau = 2`` have no curvature).  The aggregates are sum
 never divided by the number of rows or by the total weight: a factor common to ``S``
 and ``C`` would leave the roots and the Newton step ``C^-1 S`` unchanged, but would
 multiply by its square root the scaled score ``||C^(-1/2) S||`` that the certificate
-measures where ``C`` is positive definite.
+measures where ``C`` is positive definite (``design/02_computation.md``, Section 7).
 
 Weights.  ``a`` enters alike for the three kinds of the design; the kinds differ in
 the meat and the counts, which are not formed here.  An evaluation keeps the raw ``r``
 and ``a`` so that frequency weights can enter a meat as replicated rows, with
-``a_i r_i^2`` and not the square of a contribution.  Rows of zero weight are
+``a_i r_i^2`` and not the square of a contribution
+(``design/04_inference_and_effects.md``, Section 2.2).  Rows of zero weight are
 validated and keep their position (:class:`SamplingUnits`), but they enter no index,
 row or aggregate, so an extreme value there cannot overflow.  No row of positive
 weight is left out.
@@ -39,9 +40,14 @@ aggregate that is not representable in float64 raises ``FloatingPointError``: th
 weighted row term is formed first, then its products with the design and their sum,
 and nothing is rescaled or clipped.
 
-The weight is inside the row term in every product: ``X' (a r)``,
-``X' (X * (a c)[:, None])`` and ``X * (a r)[:, None]``.  ``evaluate`` returns a
-:class:`JointEvaluation`, not the rows alone.
+Adaptation of ``moments/mean.py`` of pyiols (source S6 of ``design/06_reuse_map.md``),
+``MeanScore``: its methods, the fields of its ``ScoreEvaluation`` and the order of its
+products ``X' r``, ``X' (X * c[:, None])`` and ``X * r[:, None]`` are kept.  S6
+divides by the number of rows and has no weights and no criterion; here the weight is
+inside the row term, so at unit weights ``S / n``, ``-C / n`` and ``-H / n`` are the
+S6 values bit for bit for identical rows (``tools/verify_ports_joint.py``).  The rows
+are those of :mod:`powermean.model.rows`, and ``evaluate`` returns the record of
+``DESIGN.md``, Section 5.3, not the rows alone (``PROVENANCE.md``, Section 5).
 """
 
 from __future__ import annotations
@@ -76,7 +82,7 @@ IndexArray = NDArray[np.intp]
 def _outcome_and_design(
     z: ArrayLike, design: ArrayLike
 ) -> tuple[FloatArray, FloatArray]:
-    """A nonnegative vector ``z`` and a matrix with one row per value."""
+    """A nonnegative vector ``z`` and a matrix with one row per value (as S6)."""
     outcome = _finite_array(z, "z")
     matrix = _finite_array(design, "design")
     if outcome.ndim != 1 or matrix.ndim != 2 or matrix.shape[0] != outcome.size:
@@ -89,7 +95,7 @@ def _outcome_and_design(
 
 
 def _offset(offset: ArrayLike | None, rows: int) -> FloatArray:
-    """The transformed offset ``o``: zero if omitted, a scalar for every row."""
+    """The transformed offset ``o``: zero if omitted, a scalar for every row (as S6)."""
     if offset is None:
         return np.zeros(rows)
     shift = _finite_array(offset, "offset")
@@ -132,7 +138,7 @@ def _negative(matrix: FloatArray) -> FloatArray:
 def _weighted_moment(
     design: FloatArray, weights: FloatArray, residual: FloatArray
 ) -> FloatArray:
-    """``S = X'(a r)``; the weight multiplies ``r`` first."""
+    """``S = X'(a r)``; S6 forms ``X' r``, and the weight multiplies ``r`` first."""
     with np.errstate(over="ignore", under="ignore", invalid="ignore"):
         value: FloatArray = design.T @ (weights * residual)
     return _immutable(_finite_result(value, "moment"))
@@ -141,7 +147,7 @@ def _weighted_moment(
 def _weighted_product(
     design: FloatArray, weights: FloatArray, row_weight: FloatArray, name: str
 ) -> FloatArray:
-    """``X' (X * (a v)[:, None])``: ``C`` or ``H``."""
+    """``X' (X * (a v)[:, None])``, as S6 forms a Jacobian: ``C`` or ``H``."""
     with np.errstate(over="ignore", under="ignore", invalid="ignore"):
         value: FloatArray = design.T @ (design * (weights * row_weight)[:, None])
     return _immutable(_finite_result(value, name))
@@ -150,14 +156,14 @@ def _weighted_product(
 def _weighted_contributions(
     design: FloatArray, weights: FloatArray, residual: FloatArray
 ) -> FloatArray:
-    """The rows ``a_i r_i x_i'``: ``X * (a r)[:, None]``."""
+    """The rows ``a_i r_i x_i'``: ``X * (a r)[:, None]``, where S6 forms ``X * r``."""
     with np.errstate(over="ignore", under="ignore", invalid="ignore"):
         value: FloatArray = design * (weights * residual)[:, None]
     return _immutable(_finite_result(value, "contribution matrix"))
 
 
 def _weighted_criterion(weights: FloatArray, terms: FloatArray) -> float:
-    """``L = sum_i a_i l_i``, the criterion of the joint system, with weights."""
+    """``L = sum_i a_i l_i``, the criterion of file 01, Section 5.1, with weights."""
     with np.errstate(over="ignore", under="ignore", invalid="ignore"):
         total = float(np.sum(weights * terms))
     if not math.isfinite(total):
@@ -172,12 +178,12 @@ def _weighted_criterion(weights: FloatArray, terms: FloatArray) -> float:
 class SamplingUnits:
     """The sampling units of the joint system without effects: its active rows.
 
-    ``identifiers`` are the positions among the input rows of the rows of positive
-    weight, in increasing order: the ``i``-th contribution, and the ``i``-th entry of
-    every row array of an evaluation, belong to the input row ``identifiers[i]``.
-    ``inactive`` are the positions of the rows of zero weight, which enter no
-    arithmetic; ``nobs`` counts every input row.  Read-only arrays.  The alignment of
-    one system, not the sample accounting of the interface.
+    ``DESIGN.md``, Section 5.3.  ``identifiers`` are the positions among the input rows
+    of the rows of positive weight, in increasing order: the ``i``-th contribution, and
+    the ``i``-th entry of every row array of an evaluation, belong to the input row
+    ``identifiers[i]``.  ``inactive`` are the positions of the rows of zero weight,
+    which enter no arithmetic; ``nobs`` counts every input row.  Read-only arrays.  The
+    alignment of one system, not the sample accounting of the interface (task M0.20).
     """
 
     identifiers: IndexArray
@@ -190,10 +196,10 @@ class JointEvaluation:
     """One evaluation of the joint system: rows, weights, sums and contributions.
 
     Row arrays are on the active rows, in the order of ``units.identifiers``, under the
-    names ``log_mean`` (``q``), ``residual`` (``r``), ``curvature`` (``c``) and
-    ``expected_curvature`` (``w``), unweighted, beside the raw ``weights``.
-    ``moment``, ``bread`` and ``information`` are ``S``, ``C`` and ``H``; ``jacobian``
-    is ``-C`` and ``expected_jacobian`` is ``-H``.  No criterion
+    names of S6 ``ScoreEvaluation``: ``log_mean`` (``q``), ``residual`` (``r``),
+    ``curvature`` (``c``) and ``expected_curvature`` (``w``), unweighted, beside the
+    raw ``weights``.  ``moment``, ``bread`` and ``information`` are ``S``, ``C`` and
+    ``H``; ``jacobian`` is ``-C`` and ``expected_jacobian`` is ``-H``.  No criterion
     (:meth:`JointSystem.criterion`).  Read-only arrays.
     """
 
@@ -222,7 +228,7 @@ class JointEvaluation:
 
 @runtime_checkable
 class EstimatingSystem(Protocol):
-    """An estimating system on dense arrays without effects.
+    """An estimating system on dense arrays without effects (``DESIGN.md``, 5.3).
 
     ``dimension`` and ``units``; ``evaluate`` returns the moment, its observed and
     expected Jacobians and the unit contributions, and ``criterion`` the criterion
@@ -254,7 +260,7 @@ class EstimatingSystem(Protocol):
 
 @dataclass(frozen=True, eq=False, init=False)
 class JointSystem:
-    """The joint system without effects, on dense arrays.
+    """The joint system without effects, on dense arrays (file 01, Section 5.1).
 
     Parameters
     ----------
@@ -325,14 +331,14 @@ class JointSystem:
         return int(self.design.shape[1])
 
     def _coefficients(self, gamma: ArrayLike) -> FloatArray:
-        """``gamma`` as a finite vector, one value per column."""
+        """``gamma`` as a finite vector, one value per column (as S6)."""
         coefficients = _finite_array(gamma, "gamma")
         if coefficients.shape != (self.dimension,):
             raise ValueError("gamma must match the number of design columns")
         return coefficients
 
     def _index(self, coefficients: FloatArray) -> FloatArray:
-        """``q = X gamma + o`` on the active rows."""
+        """``q = X gamma + o`` on the active rows, as S6 forms it."""
         with np.errstate(over="ignore", under="ignore", invalid="ignore"):
             q: FloatArray = self.active_design @ coefficients + self.active_offset
         return _finite_result(q, "index")
@@ -343,11 +349,11 @@ class JointSystem:
         return evaluate_rows(self.active_z, q, variance=self.variance)
 
     def log_mean(self, gamma: ArrayLike) -> FloatArray:
-        """The index ``q = X gamma + o`` of the active rows."""
+        """The index ``q = X gamma + o`` of the active rows (S6 ``log_mean``)."""
         return _immutable(self._index(self._coefficients(gamma)))
 
     def residual(self, gamma: ArrayLike) -> FloatArray:
-        """The score residual ``r`` of the active rows, unweighted."""
+        """The score residual ``r`` of the active rows, unweighted (S6 ``residual``)."""
         return self._rows(self._coefficients(gamma)).score
 
     def _moment(self, rows: RowEvaluation) -> FloatArray:
@@ -375,19 +381,19 @@ class JointSystem:
         )
 
     def contributions(self, gamma: ArrayLike) -> FloatArray:
-        """The rows ``a_i r_i x_i'`` of the active rows."""
+        """The rows ``a_i r_i x_i'`` of the active rows (S6 ``contributions``)."""
         return self._contributions(self._rows(self._coefficients(gamma)))
 
     def moment(self, gamma: ArrayLike) -> FloatArray:
-        """``S = X'(a r)``, a sum."""
+        """``S = X'(a r)``, a sum (S6 ``moment``, which divides by the rows)."""
         return self._moment(self._rows(self._coefficients(gamma)))
 
     def jacobian(self, gamma: ArrayLike) -> FloatArray:
-        """``-C``, the literal Jacobian ``dS/dgamma'``."""
+        """``-C``, the literal Jacobian ``dS/dgamma'`` (S6 ``jacobian``, averaged)."""
         return _negative(self._bread(self._rows(self._coefficients(gamma))))
 
     def expected_jacobian(self, gamma: ArrayLike) -> FloatArray:
-        """``-H``, the expected Jacobian."""
+        """``-H``, the expected Jacobian (S6 ``expected_jacobian``, averaged)."""
         return _negative(self._information(self._rows(self._coefficients(gamma))))
 
     def evaluate(self, gamma: ArrayLike) -> JointEvaluation:

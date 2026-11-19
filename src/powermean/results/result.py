@@ -40,12 +40,10 @@ it as uncertified.  On the linear route the fresh certificate
 (:mod:`powermean.solve.linear_certificate`) decides as the joint one does; a bare linear
 candidate handed over without its conclusion has no certificate and no status, and its
 inference and prediction are refused as not available without that certificate, while
-its coefficients and retained components are reported.  Where no point exists, because
-the least-squares solve formed none or the automatic start had no finite value, ``coef``
-is withheld as well, with the last state that exists (the candidate with its reason, or
-the start failure) and no certificate.  Degenerate inference at an exact root reports
-its zero standard errors, undefined ratios and missing intervals as such: nothing is
-floored.
+its coefficients and retained components are reported.  Where no point exists, ``coef``
+is withheld as well, with the last state that exists and no certificate. Degenerate
+inference at an exact root reports zero standard errors, undefined ratios and missing
+intervals.
 
 A later covariance (``vcov``) is formed again from the retained primitives by the
 convention of the fit, for ``"robust"`` or one classification retained with the fit, or,
@@ -77,14 +75,15 @@ import copy
 import math
 import statistics
 from collections.abc import Mapping, Sequence
-from typing import Any, Literal, TypedDict, Unpack
+from dataclasses import replace
+from typing import TYPE_CHECKING, Any, Literal, TypedDict, Unpack
 
 import numpy as np
 import pandas as pd
 
 from powermean import messages
 from powermean._prepare.compose import _owned_index
-from powermean.data.request_values import OMITTED, given
+from powermean.data.request_values import OMITTED, choice, given
 from powermean.data.specs import Estimator
 from powermean.effects.targets import IntervalKind, ReportingContext, ReportingPoint
 from powermean.errors import ConvergenceError, SpecificationError
@@ -105,8 +104,10 @@ from powermean.results.effect_reporting import (
     effect_result,
     effects_table,
 )
+from powermean.results.fe_helpers import detached_record
 from powermean.results.fe_result_backends import FEBackend
 from powermean.results.fe_sample import FESampleView
+from powermean.results.indefinite import retained_indefinite
 from powermean.results.owned import (
     owned_any_certificate,
     owned_candidate,
@@ -122,10 +123,17 @@ from powermean.results.restriction_reporting import (
     restriction_result,
 )
 from powermean.results.retained import AnyCertificate, CovarianceRecord, RetainedFit
+from powermean.results.retained_gamma import RetainedGammaResult
 from powermean.results.sample import SampleView
 from powermean.results.summary import render
 from powermean.solve.cancelled_records import CancelledCertificate
+from powermean.solve.iols.normalization import IolsScaleFailure
 
+if TYPE_CHECKING:
+    from powermean.results.saturated import SaturatedCovariance
+
+InfluenceUnit = Literal["sampling", "row"]
+INFLUENCE_UNITS: tuple[InfluenceUnit, ...] = ("sampling", "row")
 PredictionKind = Literal["power_mean"]
 PREDICTION_KINDS: tuple[PredictionKind, ...] = ("power_mean",)
 DEFAULT_PREDICTION: PredictionKind = "power_mean"
@@ -212,7 +220,7 @@ def not_certified(result: Result) -> ConvergenceError:
 
     The error that the result's inference raises, for the dispatch of the fit with
     ``on_failure="raise"``: the status, the last state (the solver's candidate, the
-    linear candidate, the start failure or the supplied certificate) and the
+    linear candidate, the pre-iteration failure or the supplied certificate) and the
     certificate, as owned copies.
     """
     return result._withheld()
@@ -247,7 +255,7 @@ class Result:
         self._fit: RetainedFit | None = None
         self._fe: FEBackend | None = None
         # The active covariance of a view (with_vcov); None: the fit's own.
-        self._view: CovarianceRecord | None = None
+        self._view: CovarianceRecord | SaturatedCovariance | None = None
         self._sample: SampleView | FESampleView
         if isinstance(retained, RetainedFit):
             self._fit = retained
@@ -256,12 +264,21 @@ class Result:
                 retained.labels,
                 retained.columns,
                 retained.subset_missing,
+                retained.design.columns,
+                exhausted=retained.exhausted,
             )
             self._provenance = provenance(retained)
         else:
             self._fe = retained
-            self._sample = retained.sample
-            self._provenance = retained.provenance
+            try:
+                self._sample = retained.sample
+                self._provenance = retained.provenance
+            except AttributeError as error:
+                if error.obj is retained and error.name in ("sample", "provenance"):
+                    raise TypeError(
+                        "retained must be a RetainedFit or a fixed-effect backend"
+                    ) from error
+                raise
 
     @property
     def _retained(self) -> RetainedFit:
@@ -274,7 +291,13 @@ class Result:
     @property
     def certificate(
         self,
-    ) -> AnyCertificate | RetainedCertificateSnapshot | CancelledCertificate | None:
+    ) -> (
+        AnyCertificate
+        | RetainedCertificateSnapshot
+        | CancelledCertificate
+        | RetainedGammaResult
+        | None
+    ):
         """The authentic certificate of the point, as supplied; a fresh owned copy.
 
         The same values, quantities, gates and diagnostics on every access, with
@@ -282,8 +305,24 @@ class Result:
         """
         if self._fe is not None:
             return self._fe.certificate
-        certificate = self._retained.certificate
+        retained = self._retained
+        if (
+            isinstance(retained.sample_failure, RetainedGammaResult)
+            and retained.status == "no_finite_root"
+        ):
+            return detached_record(retained.sample_failure)
+        certificate = retained.certificate
         return None if certificate is None else owned_any_certificate(certificate)
+
+    def _indefinite_root(self) -> bool:
+        """Whether the fit is a certified root of indefinite curvature (ruling 78).
+
+        Read from the final certificate's own record
+        (:mod:`powermean.results.indefinite`); no copy and no computation.
+        """
+        if self._fe is not None:
+            return self._fe._indefinite_root()
+        return retained_indefinite(self._retained)
 
     @property
     def sample(self) -> SampleView | FESampleView:
@@ -312,7 +351,8 @@ class Result:
         """The refusal of inference where the point is not certified.
 
         The last state (the solver's candidate, the linear candidate with its
-        reason, the start failure, or the supplied certificate) and the certificate
+        reason, the pre-iteration failure, or the supplied certificate) and the
+        certificate
         travel as owned copies: the error is the caller's to inspect, and an edit of
         what it carries reaches nothing retained.
         """
@@ -328,8 +368,12 @@ class Result:
             last_state = owned_candidate(retained.candidate)
         elif retained.linear is not None:
             last_state = owned_linear(retained.linear)
+        elif isinstance(retained.failure, IolsScaleFailure):
+            last_state = replace(retained.failure)
         elif retained.failure is not None:
             last_state = retained.failure
+        elif retained.sample_failure is not None and certificate is None:
+            last_state = detached_record(retained.sample_failure)
         identifier = "convergence.not_certified"
         fields: dict[str, object] | None = None
         selected_certificate = retained.certificate
@@ -347,13 +391,16 @@ class Result:
                         [retained.names[int(i)] for i in unusable]
                     )
                 }
-        return ConvergenceError(
+        error = ConvergenceError(
             identifier,
             fields,
             status=status,
             last_state=last_state,
             certificate=certificate,
         )
+        if isinstance(last_state, IolsScaleFailure):
+            error.add_note(last_state.message)
+        return error
 
     def _linear_refusal(self, need: str) -> SpecificationError:
         """The refusal of what a bare linear candidate cannot give: no certificate."""
@@ -373,7 +420,7 @@ class Result:
             raise self._withheld()
         return retained.theta
 
-    def _certified_default(self, need: str) -> CovarianceRecord:
+    def _certified_default(self, need: str) -> CovarianceRecord | SaturatedCovariance:
         """The default covariance of a certified point, for ``need``."""
         retained = self._retained
         if retained.estimator.route == "linear" and retained.status is None:
@@ -384,7 +431,7 @@ class Result:
             raise self._withheld()
         return retained.default
 
-    def _active(self, need: str) -> CovarianceRecord:
+    def _active(self, need: str) -> CovarianceRecord | SaturatedCovariance:
         """The active covariance of a certified point: a view's, else the fit's own."""
         default = self._certified_default(need)
         return default if self._view is None else self._view
@@ -407,8 +454,7 @@ class Result:
         ------
         ConvergenceError
             The point is not finite (status ``nonfinite``), or no point exists: the
-            least-squares solve formed none, or the automatic start had no finite
-            value.
+            solve stopped before producing a candidate.
         SpecificationError
             A bare linear candidate without its conclusion formed no coefficients.
         """
@@ -654,8 +700,9 @@ class Result:
             view's); ``"robust"``; ``{"cluster": name}`` for a classification
             retained with the fit; ``{"cluster": "a + b"}`` for several retained
             dimensions, with the optional keys ``"multiway"`` (``"cgm"``, the
-            default signed form, or ``"ddg"``) and ``"psd"`` (``"cgm"`` or
-            ``"none"``, on a signed multiway request only); the exact string of a
+            default signed form, or ``"ddg"``) and ``"psd"`` (``"cgm"``,
+            ``"fixest"`` or ``"none"``, on a signed multiway request only); the
+            exact string of a
             named HC method, ``"HC0"`` to ``"HC5"`` or ``"HC4m"``; or an
             :class:`~powermean.data.specs.Inference` record.
         ssc : str or ConventionValues, optional
@@ -778,7 +825,7 @@ class Result:
         retained = self._retained
         table: pd.DataFrame | None = None
         beta: pd.Series[float] | None = None
-        record: CovarianceRecord | None = None
+        record: CovarianceRecord | SaturatedCovariance | None = None
         if retained.certified and retained.default is not None:
             record = self._active("an interval")
             table = self.tidy(level)
@@ -793,8 +840,18 @@ class Result:
             record=record,
         )
 
-    def influence(self) -> pd.DataFrame:
-        """The coefficient influences ``A s_i`` on the reported scale, by row.
+    def influence(self, *, unit: InfluenceUnit = "sampling") -> pd.DataFrame:
+        """The coefficient influences ``A s_u`` on the reported scale.
+
+        Parameters
+        ----------
+        unit : {"sampling", "row"}, default "sampling"
+            ``"sampling"``: one row per sampling unit of the system, which is the row
+            except after cancellation, where it is the cancelled group (index
+            ``group``, in the order of first appearance of the groups).  ``"row"``:
+            one row per row whatever the system; after cancellation, the row terms
+            ``(B_i - Bbar_g) rho_i`` mapped by the same ``A``, indexed by original
+            position, whose sums within a cancelled group are the group rows.
 
         Returns
         -------
@@ -802,18 +859,21 @@ class Result:
             One row per row of positive weight, indexed by its original position
             (``position``), one column per coefficient: the contribution of the row
             to the first-order change of ``beta`` (sum normalization); frequency
-            weights give one row per stored row.
+            weights give one row per stored row.  After cancellation, one row per
+            cancelled group unless ``unit="row"``; the rows are those of the
+            certified uncorrected root, also after a coefficient correction.
 
         Raises
         ------
         ConvergenceError
             The point is not certified.
         SpecificationError
-            The influence contributions were discarded (``keep_influence=False``), or
-            a bare linear candidate has no certificate.
+            The influence contributions were discarded (``keep_influence=False``), a
+            bare linear candidate has no certificate, or ``unit`` is neither value.
         """
+        by_row = choice("unit", unit, INFLUENCE_UNITS) == "row"
         if self._fe is not None:
-            return self._fe.influence()
+            return self._fe.influence_rows() if by_row else self._fe.influence()
         self._certified_default("an influence")
         retained = self._retained
         influence = retained.influence
@@ -865,6 +925,9 @@ class Result:
             if not isinstance(data, pd.DataFrame):
                 raise TypeError("data must be a pandas DataFrame")
             matrix = prediction.replayed_matrix(retained.design, data)
+            columns, names = retained.design.columns, sample.data.column_names
+            if len(names) != len(columns):  # a collinear regressor was omitted
+                matrix = matrix[:, [columns.index(name) for name in names]]
             offset = self._prediction_offset(data)
             fitted = prediction.power_mean(matrix, beta, offset)
             index = _owned_index(data.index)

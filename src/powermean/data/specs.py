@@ -1,35 +1,46 @@
 """The specification records: the estimator and its inference.
 
-The typed specification objects ``Estimator``, ``Computation`` and ``Inference`` remain
-available for programmatic use.  ``Computation`` is :mod:`powermean.data.computation`.
-The records are frozen; each converts to a mapping that JSON holds (``to_dict``) and
-back (``from_dict``), losslessly, and a record of another type is refused.
+``DESIGN.md``, Sections 5.1 and 5.3 ("typed specification objects ``Estimator``,
+``Computation``, ``Inference`` remain available for programmatic use"), 3.1, 3.2, 4.1
+and 8; ``design/01_statistical_core.md``, Sections 2 and 3;
+``design/04_inference_and_effects.md``, Sections 2 and 3; decisions D41, D45, D51 and
+D55.  Port of ``specs.py`` and ``mean.py`` of expreg (source S7 of
+``design/06_reuse_map.md``), adapted to the accepted records of the package;
+``PROVENANCE.md``, Section 13, records the source and every change.  The third record
+of S7, ``Computation``, is :mod:`powermean.data.computation`.  The records are frozen;
+each converts to a mapping that JSON holds (``to_dict``) and back (``from_dict``),
+losslessly, and a record of another type is refused.
 
-:class:`Estimator` is the estimator: a mean order (:class:`PowerMean`, any finite real
-``omega``, 1 by default), a working variance
-(:class:`~powermean.model.variance.PowerVariance` or
+:class:`Estimator` is the estimator of ``DESIGN.md``, Section 1, commitment 2: a mean
+order (:class:`PowerMean`, any finite real ``omega``, 1 by default), a working
+variance (the accepted :class:`~powermean.model.variance.PowerVariance` or
 :class:`~powermean.model.variance.NB2Variance`, by exact type; ``PowerVariance(tau=1)``
-by default, the interface default), the exogenous moment (:class:`ExogenousMean`) and
-the formulation without fixed effects (:class:`NoFixedEffects`).  Instruments and fixed
-effects are refused as not yet available (``specification.unimplemented``).  At ``omega
-= 0`` the estimator is log OLS: the record keeps its variance as exact provenance of the
-specification (``route`` is ``"linear"``), and the linear equation receives no working
-variance (``powermean.model.order``).
+by default, the interface default of ``DESIGN.md``, Section 4.1), the exogenous moment
+(:class:`ExogenousMean`) and the formulation without fixed effects
+(:class:`NoFixedEffects`), the two that the first milestone implements.  Instruments
+and fixed effects are refused as not yet available (``specification.unimplemented``,
+decision D41).  At ``omega = 0`` the estimator is log OLS: the record keeps its
+variance as exact provenance of the specification (``route`` is ``"linear"``), and the
+linear equation receives no working variance (``powermean.model.order``).
 
 :class:`Inference` names the covariance requested at a fit without fixed effects:
 ``"robust"``, or ``"cluster"`` on one cluster variable, with the factors of the
-``"stata"`` convention and the normal reference (:mod:`powermean.inference.convention`),
-constants of the record, where the expected bread stays refused as not yet available;
-``"robust"`` with the explicit convention of its request, a preset name or a custom
-record, an explicit ``"stata"`` included; or ``"cluster"`` with the typed request of the
-expanded menu: the canonical :class:`~powermean.data.inference_requests.ClusterRequest`
-(its dimensions in order, an interaction ``a^b`` among them, its multiway form and its
-``"psd"`` key, each as given) with the explicit convention of the request, if any; or
-``"hc"``, a named HC method with the explicit convention of its request, if any, and its
-bread.  A named method owns its scalar factor and takes the reference distribution of
-the convention in force, which the inference layer resolves with the counts of the fit;
-the robust and cluster factors, their reference and the ``psd`` treatment are the
-convention's.  The record holds the request only.  Nothing here computes.
+``"stata"`` convention and the normal reference (file 04, Section 3;
+:mod:`powermean.inference.convention`), constants of the record, where the expected
+bread stays refused as not yet available (decision D41); ``"robust"`` with the
+explicit convention of its request (``plan/evidence/M1_contract.txt``, Sections 3.1
+and 6(e); decisions D60 and D65), a preset name or a custom record, an explicit
+``"stata"`` included; or ``"cluster"`` with the typed request of the expanded menu
+(contract, Sections 3.1, 3.3 and 6(d), (e); decisions D4, D60 and D65): the canonical
+:class:`~powermean.data.inference_requests.ClusterRequest` (its dimensions in order, an
+interaction ``a^b`` among them, its multiway form and its ``"psd"`` key, each as given)
+with the explicit convention of the request, if any; or ``"hc"``, a named HC method
+(Sections 3.1, 3.2 and 6(a), (e); decisions D55, D57, D60 and D65) with the explicit
+convention of its request, if any, and its bread.  A named method owns its scalar
+factor and takes the reference distribution of the convention in force, which the
+inference layer resolves with the counts of the fit; the robust and cluster factors,
+their reference and decision D4's treatment are the convention's.  The record holds
+the request only.  Nothing here computes.
 """
 
 from __future__ import annotations
@@ -51,12 +62,12 @@ from powermean.model.variance import NB2Variance, PowerVariance
 Variance = PowerVariance | NB2Variance
 Covariance = Literal["robust", "cluster", "hc"]
 Bread = Literal["observed", "expected"]
-# The one convention and reference of the robust covariance and of the single cluster
-# variable.
+# The one convention and reference of the robust and cluster covariances of the first
+# milestone (file 04, Section 3).
 CONVENTION = "stata"
 REFERENCE_DISTRIBUTION = "normal"
-# The breads of a named HC request, and the preset names of its explicit convention; a
-# custom convention is a ConventionValues record.
+# The breads of a named HC request, and the preset names of its explicit convention
+# (contract, Section 6(e) and (g)); a custom convention is a ConventionValues record.
 BREADS: tuple[Bread, ...] = ("observed", "expected")
 PRESETS: tuple[str, ...] = ("stata", "none", "regression")
 VALID_SSC = "'stata', 'none', 'regression' or a ConventionValues record"
@@ -71,7 +82,8 @@ VARIANCES: tuple[str, ...] = ("PowerVariance", "NB2Variance")
 class PowerMean:
     """The mean order: ``E(Y^omega | X) = exp(omega X'beta)``; log OLS at zero.
 
-    Any finite real order: the order is validated by
+    S7 ``PowerMean``, with any finite real order (``design/01``, Section 3.2) in place
+    of S7's ``[0, 1]``: the order is validated by the accepted
     :func:`powermean.model.order_scale._mean_order` (a boolean, a non-real, NaN or an
     infinity is refused with ``ValueError``; ``-0.0`` is stored as ``0.0``).
 
@@ -117,7 +129,7 @@ class NoFixedEffects:
 
 @dataclass(frozen=True)
 class FixedEffectFormulation:
-    """Internal provenance of ordered joint or selected-cancelled blocks."""
+    """Private preview provenance of ordered joint or selected-cancelled blocks."""
 
     blocks: tuple[str, ...]
     cancelled: str | None = None
@@ -142,7 +154,7 @@ class FixedEffectFormulation:
 
 
 def _default_variance() -> PowerVariance:
-    """``PowerVariance(tau=1)``, the interface default."""
+    """``PowerVariance(tau=1)``, the interface default (``DESIGN.md``, Section 4.1)."""
     return PowerVariance(tau=1.0)
 
 
@@ -167,7 +179,8 @@ REGISTRY: Mapping[str, type] = MappingProxyType(
 class Estimator:
     """What is estimated: mean order, working variance, moment and formulation.
 
-    Each component is checked by exact type.
+    S7 ``Estimator`` (its field ``score`` renamed ``variance``), on the accepted records
+    of the package.  Each component is checked by exact type.
 
     Parameters
     ----------
@@ -176,9 +189,9 @@ class Estimator:
     variance : PowerVariance or NB2Variance, default PowerVariance(tau=1.0)
         The working variance.
     moment : ExogenousMean, default ExogenousMean()
-        The moment; instruments are refused as not yet available.
+        The moment; instruments are not available before milestone M4.
     fixed_effects : NoFixedEffects, default NoFixedEffects()
-        The formulation; fixed effects are refused as not yet available.
+        The formulation; fixed effects are not available before milestone M1.
 
     Raises
     ------
@@ -186,8 +199,8 @@ class Estimator:
         ``mean`` is not a ``PowerMean``.
     SpecificationError
         ``variance`` is not one of the two accepted variances
-        (``specification.invalid_value``); ``moment`` or ``fixed_effects`` asks for
-        what is not yet available (``specification.unimplemented``).
+        (``specification.invalid_value``); ``moment`` or ``fixed_effects`` asks for a
+        later milestone (``specification.unimplemented``).
     """
 
     mean: PowerMean = field(default_factory=PowerMean)
@@ -198,7 +211,7 @@ class Estimator:
     )
 
     def __post_init__(self) -> None:
-        """Check each component by exact type."""
+        """Check each component by exact type, in S7's order."""
         if type(self.mean) is not PowerMean:
             raise TypeError("mean must be PowerMean")
         if type(self.variance) not in (PowerVariance, NB2Variance):
@@ -296,28 +309,28 @@ def explicit_bread(value: object) -> Bread:
 
 @dataclass(frozen=True)
 class Inference:
-    """The covariance requested at a fit without fixed effects.
+    """The covariance requested at a fit without fixed effects (S7 ``Inference``).
 
     Parameters
     ----------
     covariance : {"robust", "cluster", "hc"}, default "robust"
         The robust covariance, a cluster covariance, or a named HC method.
     cluster : str, optional
-        The single cluster variable, ``a^b`` the interaction of
+        The one cluster variable of the first milestone, ``a^b`` the interaction of
         two; with ``"cluster"``, required unless ``clusters`` is given, refused
         otherwise.
     method : {"HC0", "HC1", "HC2", "HC3", "HC4", "HC4m", "HC5"}, optional
         The named HC method, an exact string; required with ``"hc"``.
     ssc : str, ConventionValues or OMITTED, optional
         The explicit convention of a named HC request, of a typed cluster request or
-        of the robust covariance: a preset name or a
+        of the robust covariance (contract, Sections 3.1 and 6(e)): a preset name or a
         custom record; ``OMITTED`` where the request gives none, so that the default or
         inherited convention is not taken for an explicit one.
     bread : {"observed", "expected"}, default "observed"
         The bread of a named HC request.
     clusters : ClusterRequest, optional
-        The typed cluster request of the expanded menu: its dimensions in order,
-        repetitions kept, its multiway form
+        The typed cluster request of the expanded menu (contract, Section 6(d); file
+        04, Section 2): its dimensions in order, repetitions kept, its multiway form
         and its ``"psd"`` key, each as given; with ``"cluster"`` in place of
         ``cluster``, refused otherwise.
 
@@ -332,13 +345,13 @@ class Inference:
         and a typed request; a typed request beside another covariance, of another
         type or with the pair adjustment of a fit with fixed effects; no method with
         ``"hc"``; a method, an explicit convention or the expected bread beside the
-        single cluster variable; a method or the expected bread beside
+        cluster variable of the first milestone; a method or the expected bread beside
         the robust covariance or a typed cluster request.
 
     Notes
     -----
-    The robust covariance without an explicit convention and the single cluster
-    variable keep the ``"stata"`` convention and the normal reference,
+    The robust covariance without an explicit convention and the cluster variable of
+    the first milestone keep the ``"stata"`` convention and the normal reference,
     constants written by :meth:`to_dict` and required by :meth:`from_dict`.  A named HC
     request records its method, its bread and its explicit convention only, a typed
     cluster request its typed record and its explicit convention only, and a robust
@@ -389,7 +402,7 @@ class Inference:
             )
 
     def _check_cluster(self) -> None:
-        """The single cluster variable, or one typed cluster request."""
+        """One cluster variable of the first milestone, or one typed cluster request."""
         if self.clusters is None:
             if not isinstance(self.cluster, str) or not self.cluster:
                 raise ValueError("a cluster covariance names one cluster variable")
@@ -443,7 +456,7 @@ class Inference:
         convention in force: the round trip keeps the presence of the convention.  A
         typed cluster request writes its record under ``"clusters"`` and its explicit
         convention in the same way, and a robust request with an explicit convention
-        that convention alone, without the ``"stata"`` and normal-reference constants.
+        that convention alone, without the constants of the first milestone.
         """
         if self.clusters is not None:
             return self._with_ssc(
@@ -481,11 +494,11 @@ class Inference:
         """The record of :meth:`to_dict`.
 
         Raises ``ValueError`` for a record of another type and ``SpecificationError``
-        (``specification.unimplemented``) for a robust covariance or a single cluster
-        variable whose convention is not ``"stata"`` or whose reference distribution is
-        not normal, which such a record does not hold.  A named HC request, a typed
-        cluster request and a robust request with an explicit ``"ssc"`` hold no such
-        constants.
+        (``specification.unimplemented``) for a robust covariance or a cluster variable
+        of the first milestone whose convention is not ``"stata"`` or whose reference
+        distribution is not normal, which a record of the first milestone does not
+        hold.  A named HC request, a typed cluster request and a robust request with
+        an explicit ``"ssc"`` hold no such constants.
         """
         data: dict[str, Any] = dict(record)
         if data.pop("type", None) != "Inference":

@@ -1,6 +1,6 @@
 """Logical fixed-effect block selection and controls for one-block cancellation.
 
-One named
+``design/03_fixed_effects.md``, Sections 1 to 3; ``DESIGN.md``, Section 3.4.  One named
 fixed-effect block is selected for exact multiplicative cancellation, or ``cancel=True``
 selects the unique block with the largest number of distinct levels on the estimation
 positions.  All remaining blocks are retained in their recorded model order without any
@@ -9,9 +9,10 @@ cap on the number of retained dimensions.
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-from typing import Literal
+from typing import TYPE_CHECKING, Literal, cast
 
 import numpy as np
 
@@ -34,10 +35,20 @@ from powermean.model.variance import (
     resolve_cancelled_variance,
 )
 from powermean.results.cancelled_retained import CancelledReporting
+from powermean.results.retained_hc_records import HCInferenceRequest
 from powermean.results.retained_inference import InferenceRequest
 from powermean.solve.cancelled_operator import AttemptBounds
-from powermean.solve.cancelled_records import RootOptions
-from powermean.solve.absorbed import AbsorbedOptions
+from powermean.solve.cancelled_records import RootExecutionBounds, RootOptions
+from powermean.solve.m1_options import AbsorbedOptions
+
+if TYPE_CHECKING:
+    from powermean.interface.cancelled_fit import ShortGroupHandoff
+
+# No conditioning band beyond the collinearity threshold: reghdfe, ppmlhdfe, fixest and
+# pyfixest drop collinear columns and never refuse a fit for the conditioning of its
+# regressors. 1 is the least admissible value and requires nothing more than the rank.
+# AWAITING THE OWNER'S CONFIRMATION (the harnesses used 1e6, which refuses such fits).
+DEFAULT_GAP_MIN = 1.0
 
 
 @dataclass(frozen=True)
@@ -78,12 +89,15 @@ class CancelledSelection:
         self,
         *,
         gram_rtol: float = 1e-12,
-        gap_min: float = 1e-8,
+        gap_min: float = DEFAULT_GAP_MIN,
         max_bytes: int = 64_000_000,
-        nuisance_basis: str = "gram_eigh",
-        custom_nuisance_basis: object = None,
+        nuisance_basis: str = "exact_selection",
     ) -> NumericalGeometry:
-        """Build ``NumericalGeometry`` for the selected block and retained order."""
+        """Build ``NumericalGeometry`` for the selected block and retained order.
+
+        The default basis is the fit's own (``exact_selection``), so that a start
+        reduced here is in the coordinates the fit solves in.
+        """
         structure = cancel_structure(
             self.inputs.cancelled,
             self.inputs.retained,
@@ -96,13 +110,16 @@ class CancelledSelection:
             gap_min=gap_min,
             max_bytes=max_bytes,
             nuisance_basis=nuisance_basis,
-            custom_nuisance_basis=custom_nuisance_basis,
+            original_slopes=self.inputs.slopes.original_slopes,
         )
 
 
 @dataclass(frozen=True)
 class CancelledFitControls:
-    """Explicit numerical/admission/resource choices; no package defaults selected."""
+    """The numerical, admission and resource choices of a cancelled fit.
+
+    A call that gives none takes :func:`default_cancelled_controls`.
+    """
 
     gram_rtol: float
     gap_min: float
@@ -114,6 +131,46 @@ class CancelledFitControls:
     inference: AttemptBounds
     diagnostic: DiagnosticControls
     collinear: str
+
+
+# Existing numerical-geometry threshold relative to its largest eigenvalue.  This
+# is not ruling 92's formula-order omission rule: the shared collinearity analysis
+# owns that policy and the dispatch carries its decided columns into the geometry.
+# AWAITING THE OWNER'S CONFIRMATION (the harnesses and all earlier evidence used 1e-10).
+DEFAULT_GRAM_RTOL = 1e-9
+
+
+def default_diagnostic() -> DiagnosticControls:
+    """The collinearity diagnostic at the absorber's own final controls."""
+    fields = AbsorbedOptions.__dataclass_fields__
+    return DiagnosticControls(
+        tolerance=cast("float", fields["absorb_tol_final"].default),
+        max_sweeps=cast("int", fields["absorb_max_sweeps"].default),
+        acceleration=cast("bool", fields["absorb_acceleration"].default),
+    )
+
+
+def default_cancelled_controls() -> CancelledFitControls:
+    """The controls of a cancelled fit whose call gives none.
+
+    No limit of the package's own on work or on reserved bytes: a fit that needs more
+    memory than the machine has fails as any array computation does.
+    """
+    unbounded = AttemptBounds(max_bytes=sys.maxsize, max_work=sys.maxsize)
+    return CancelledFitControls(
+        gram_rtol=DEFAULT_GRAM_RTOL,
+        gap_min=DEFAULT_GAP_MIN,
+        geometry_bytes=sys.maxsize,
+        admission_bytes=sys.maxsize,
+        identity_atol=cast(
+            "float", RootExecutionBounds.__dataclass_fields__["identity_atol"].default
+        ),
+        attempt=unbounded,
+        certificate=unbounded,
+        inference=unbounded,
+        diagnostic=default_diagnostic(),
+        collinear="drop",
+    )
 
 
 @dataclass(frozen=True)
@@ -130,6 +187,13 @@ class CancelledFitPolicy:
     absorbed_options: AbsorbedOptions | Mapping[str, object] | None = None
     wz: WZControls | None = None
     wz_coefficient: WZControls | None = None
+    # A named HC request, evaluated once at the accepted point; never in the solve.
+    hc: HCInferenceRequest | None = None
+    # Whether the caller stated the ``merit_metric`` of ``root_options``; a mapping
+    # that names it states it as well.
+    merit_metric_given: bool = False
+    report_secondary: bool = True
+    short_group: ShortGroupHandoff | None = None
 
 
 def _invalid_blocks(value: object, valid: str) -> SpecificationError:

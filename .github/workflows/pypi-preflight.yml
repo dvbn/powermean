@@ -1,0 +1,102 @@
+name: PyPI preflight
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  wheels:
+    name: Wheels on ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+          - runner: macos-15-intel
+            arch: x86_64
+          - runner: macos-26
+            arch: arm64
+          - runner: windows-2025
+            arch: AMD64
+          - runner: windows-11-arm
+            arch: ARM64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    env:
+      CIBW_ARCHS: ${{ matrix.arch }}
+      CIBW_BUILD: "cp312-* cp313-* cp314-*"
+      CIBW_SKIP: "*-musllinux_*"
+      CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
+      CIBW_MANYLINUX_AARCH64_IMAGE: manylinux_2_28
+      CIBW_ENVIRONMENT: 'CMAKE_ARGS="-DPOWERMEAN_BUILD_BASIS=ON" CMAKE_BUILD_PARALLEL_LEVEL=2'
+      CIBW_ENVIRONMENT_MACOS: 'CMAKE_ARGS="-DPOWERMEAN_BUILD_BASIS=ON" CMAKE_BUILD_PARALLEL_LEVEL=2 MACOSX_DEPLOYMENT_TARGET=15.0'
+      CIBW_TEST_SOURCES: ".github/check-installed.py examples docs/examples/iols_first_fit.py"
+      CIBW_TEST_COMMAND: "python -I .github/check-installed.py"
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.13"
+      - name: Install the build tools
+        run: python -m pip install cibuildwheel==4.3.5 twine
+      - name: Build and test installed wheels
+        run: python -m cibuildwheel --output-dir wheelhouse
+      - name: Verify the wheel count and metadata
+        shell: bash
+        run: |
+          shopt -s nullglob
+          wheels=(wheelhouse/*.whl)
+          test "${#wheels[@]}" -eq 3
+          python -m twine check --strict "${wheels[@]}"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: wheels-${{ matrix.runner }}
+          path: wheelhouse/*.whl
+          if-no-files-found: error
+
+  source:
+    name: Source distribution and minimum dependencies
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - name: Build and inspect the source distribution
+        run: |
+          python -m pip install build twine
+          python -m build --sdist
+          python -m twine check --strict dist/*.tar.gz
+      - name: Install the source distribution with minimum runtime dependencies
+        env:
+          CMAKE_BUILD_PARALLEL_LEVEL: "2"
+        run: |
+          python -m pip install "numpy==2.3.1" "pandas==2.2.2" "scipy==1.15.0" "formulaic==1.0.0" "within-py==0.4.0"
+          python -m pip install --no-deps -Ccmake.define.POWERMEAN_BUILD_BASIS=ON dist/*.tar.gz
+          python -m pip check
+      - name: Test the installed package
+        run: |
+          cp .github/check-installed.py "$RUNNER_TEMP/"
+          cp -R examples "$RUNNER_TEMP/"
+          cp docs/examples/iols_first_fit.py "$RUNNER_TEMP/"
+          cd "$RUNNER_TEMP"
+          python -I check-installed.py
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: source-distribution
+          path: dist/*.tar.gz
+          if-no-files-found: error

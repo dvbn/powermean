@@ -1,29 +1,31 @@
 """The trigger boundary of the profiled Newton solver: request, trace, admission.
 
-When an indication stops the solver during iteration, the existence analysis is rerun
-freshly with tighter tolerances; nothing is dropped on the basis of an iterate.
-Internal module, separate from :mod:`powermean.solve.newton_profiled`.  Nothing of the
+``design/02_computation.md``, Section 4 (during iteration: when an indication stops the
+solver, the existence analysis is rerun freshly with tighter tolerances; nothing is
+dropped on the basis of an iterate); the M1 ledger's iteration-trigger note; the M1.11
+contract with its sample bridge, partial trace, correction C reconciliation, D addendum
+and the correction-A scope; decisions D51 and D68 to D72.  Task M1.11, private;
+separated from :mod:`powermean.solve.newton_profiled` by correction A.  Nothing of the
 interface layer is imported here: the caller's dependencies arrive as the typed
 protocols below.
 
 The request.  After an alarm the solver calls the caller's :class:`Trigger` once with a
 :class:`TriggerRequest`: the stopped whole point (:class:`FullPoint`), the alarm and the
 exact lower binding (the sample, the variance and the existing TIGHTER controls of the
-family, of the support analysis for ``tau < 2`` and NB2 and of the recession analysis
-for ``tau = 2``).  The caller owns the
-trigger, bound to the actual completed outcome of the sample stage; it runs the normal
-coordinator once and returns its frozen record through the structural views below
+family: M1.7's for ``tau < 2`` and NB2, M1.8's for ``tau = 2``).  The caller owns the
+trigger, bound to the actual completed M1.10 outcome; it runs the normal coordinator
+once and returns its frozen record through the structural views below
 (:class:`TraceView`), a propagated failure included.
 
 The reading (:func:`triggered`).  The trace must start from this very sample, its
-origin's sample must be this sample, and its request must be this
+origin's sample must be this sample (correction A), and its request must be this
 trigger's; its first fresh diagnostic must be the family's, and the solver admits that
 diagnostic's admitted result again on its own problem, formed from the sample (every
 original unscaled candidate column, every block with its level labels, the typed
 weights, the transformed outcome and offset, the original positions), which replays
 every witness.  The coordinator's outcome is admitted by the caller's
 :class:`Admission`, the coordinator's own admission of the call's origin, derived
-request and recorded walk: a status, a structural stand-in or a foreign
+request and recorded walk (correction A): a status, a structural stand-in or a foreign
 or refused outcome is not an admitted outcome and is never kept as one.  The
 classification (:data:`TriggerStatus`) reads that evidence: support without separated
 rows is a false alarm; witnessed separation is ``separation_recomposed`` when the
@@ -34,7 +36,7 @@ that fails a binding or an admission check is ``refused``.  The solver never res
 re-solves, certifies, adopts a new sample or deletes a row: its stopped point and its
 sample are unchanged.
 
-The point view.  A whole point
+The point view (task M1.12, the M1.12 contract's mechanics, Section 4).  A whole point
 is a :class:`WholePoint` of a :class:`PointView`, the common honest data of either
 absorbed organization: the slopes, the base and the full index of every row.  The
 profiled organization's whole point keeps its name and meaning, :data:`FullPoint`, a
@@ -57,6 +59,7 @@ from powermean.data.collinearity import CollinearityProblem, DiagnosticControls
 from powermean.data.sample_fe_source import same_blocks
 from powermean.data.sample_fe_state import FESample
 from powermean.data.weights import ObservationWeights
+from powermean.fe.certificate_basis import owned_basis
 from powermean.model.order import IndexArray
 from powermean.model.variance import FloatArray, NB2Variance, PowerVariance
 from powermean.solve.newton_trace import Timing
@@ -69,6 +72,7 @@ from powermean.solve.support import (
     select_method,
 )
 from powermean.solve.support_gamma import GammaProblem, GammaResult
+from powermean.solve.support_gamma_problem import identified_coordinates
 from powermean.solve.support_lp import LPControls
 from powermean.solve.support_problem import NONE, STALE, SupportProblem
 from powermean.systems.profiled import PointProfile
@@ -169,7 +173,7 @@ class EventView(Protocol):
     def result(self) -> object:
         """The analysis returned (``raw``) or kept by the admission (``admitted``).
 
-        Typed ``object``: a ``raw`` result is the caller's own record of
+        Typed ``object`` (correction B): a ``raw`` result is the caller's own record of
         what returned, which the solver never reads; an ``admitted`` one is read only
         as the family's analysis, admitted again.
         """
@@ -214,12 +218,12 @@ class RequestView(Protocol):
 
     @property
     def support(self) -> SupportControls | None:
-        """The support-analysis controls of the call."""
+        """The M1.7 controls of the call."""
         ...
 
     @property
     def recession(self) -> LPControls | None:
-        """The recession-analysis controls of the call."""
+        """The M1.8 controls of the call."""
         ...
 
 
@@ -315,7 +319,7 @@ def _first(trace: TraceView, kind: str, stages: tuple[str, ...]) -> EventView | 
 
 
 def _support_problem(request: TriggerRequest) -> SupportProblem:
-    """The support problem of the solver's sample: its original equation, all blocks."""
+    """The M1.7 problem of the solver's sample: its original equation, all blocks."""
     sample, data = request.sample, request.sample.data
     return SupportProblem(
         sample.problem.response,
@@ -330,15 +334,21 @@ def _support_problem(request: TriggerRequest) -> SupportProblem:
     )
 
 
-def _gamma_problem(request: TriggerRequest) -> GammaProblem:
-    """The Gamma recession problem of the solver's sample, with its typed weights."""
+def _gamma_problem(request: TriggerRequest, *, identified: bool) -> GammaProblem:
+    """The M1.8 problem of the solver's sample, with its typed weights."""
     sample, data = request.sample, request.sample.data
     weights = data.weights
     if weights is None:
         weights = ObservationWeights(np.ones(data.nobs))
-    # Only a GPML solve requests recession controls; GammaProblem refuses other
-    # families.
+    # Only a GPML solve requests M1.8 controls; GammaProblem refuses any other family.
     variance = cast("PowerVariance", request.variance)
+    chart = None
+    if identified:
+        grouping = sample.grouping
+        basis = None if grouping is None else owned_basis(sample)
+        chart = identified_coordinates(
+            sample.active, data.design.shape[1], grouping, basis
+        )
     return GammaProblem(
         sample.problem.response,
         data.design,
@@ -349,6 +359,7 @@ def _gamma_problem(request: TriggerRequest) -> GammaProblem:
         sample.problem.offset,
         variance,
         sample.omega,
+        coordinates=chart,
     )
 
 
@@ -369,7 +380,11 @@ def _again(request: TriggerRequest, event: EventView) -> SupportResult | GammaRe
             raise ValueError("the diagnostic ran under other controls or method")
         return replace(result, problem=problem)
     if isinstance(result, GammaResult) and request.recession is not None:
-        found = _gamma_problem(request)
+        # The legacy full-design diagnostic has no coordinate chart. For a
+        # reduced diagnostic, reconstruct the chart from the solver's own sample.
+        found = _gamma_problem(
+            request, identified=result.problem.coordinates is not None
+        )
         result.problem.require_same(found)
         if not same_blocks(result.problem.grouping, found.grouping):
             raise ValueError(STALE)

@@ -1,7 +1,9 @@
 """The reported scale of the linear certificate, from the fresh linear evaluation.
 
-The linear path is the joint system without effects at a unit curvature:
-contribution ``x_i e_i``, map ``(X'CX)^-1`` with ``C = diag(a)``.  The
+``design/02_computation.md``, Section 7 (the coefficient correction in units of its
+standard error); ``design/04_inference_and_effects.md``, Sections 1 to 3 (the joint
+system without effects at a unit curvature: contribution ``x_i e_i``, map
+``(X'CX)^-1`` with ``C = diag(a)``); decisions D41, D49 and D51; task M0.22.  The
 fresh certificate of the linear path (:mod:`powermean.solve.linear_certificate`)
 compares its Newton correction with the standard errors at the point, which this
 module supplies through the callback :class:`~powermean.solve.linear_certificate.
@@ -10,7 +12,7 @@ LinearScaleProvider`; the solve stage imports nothing of this one.
 :func:`fresh_linear_influence` forms the influence record of a
 :class:`~powermean.solve.linear_evaluation.LinearEvaluation`, the record that the
 certificate evaluated afresh at its point: ``-C`` is its Jacobian, ``C = X' diag(a) X``
-its bread, the map ``A = C^-1`` the
+its bread, the map ``A = C^-1`` the accepted
 :func:`~powermean.inference.influence.moment_influence_map` of ``-C``, and the
 contributions ``a_i e_i x_i`` its rows, on its rows of positive weight, with the
 statistical count ``N`` of the stated kind of the weights.  It reads nothing of a
@@ -20,7 +22,7 @@ fresh audit of a point, nor its rank.  :class:`LinearCovarianceScale` is the pro
 the robust covariance or that of one cluster dimension with the factors of the
 ``"stata"`` preset and the same frequency convention as the certificate
 (:mod:`powermean.inference.convention`), reported by the dense map ``M`` or by the
-direct map of the :class:`~powermean.model.order_scale.OrderScale`
+direct map of the accepted :class:`~powermean.model.order_scale.OrderScale`
 (:func:`~powermean.inference.provider.direct_standard_errors`), as the joint
 provider does.  It keeps no state between calls, and returns a record of the very
 point it received.

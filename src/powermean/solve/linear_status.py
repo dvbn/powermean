@@ -1,6 +1,7 @@
 """The status of a linear solve: the fresh certificate of its point, or its reason.
 
-After the
+``design/02_computation.md``, Sections 1 (rule 3), 5.5 and 7 (the statuses);
+``DESIGN.md``, Section 4.6; decisions D41 and D45; task M0.22.  After the
 least-squares solve returns, :func:`conclude_linear` certifies the point afresh
 (:func:`powermean.solve.linear_certificate.certify_linear`, with the controls of the
 resolved options) and composes the status of the solve from that certificate alone:
@@ -30,7 +31,7 @@ of the candidate's own reason (:data:`NO_POINT_STATUS`), each kept apart:
 
 The certificate is then ``None``: no point is invented, no evaluation is claimed, no
 rank is read as a certificate, and ``no_finite_root`` is never assigned here, since
-no existence analysis is formed on this path.  The native reasons of
+no existence analysis is formed before milestone M1 (D41).  The native reasons of
 the Newton solver (:mod:`powermean.solve.status`) are not those of a linear solve;
 :class:`LinearConclusion` keeps the candidate with its own reason beside the
 certificate and the status.  No status is added to :data:`~powermean.solve.status.
@@ -42,6 +43,10 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
+from typing import Any
+
+import numpy as np
+from numpy.typing import NDArray
 
 from powermean.solve.assessment import certificate_controls
 from powermean.solve.linear import LinearCandidate, LinearReason
@@ -166,9 +171,31 @@ def _check_same_problem(problem: LinearProblem, candidate: LinearCandidate) -> N
     same = (
         candidate.dimension == problem.dimension
         and units.nobs == problem.units.nobs
-        and units.identifiers.tolist() == problem.units.identifiers.tolist()
-        and units.inactive.tolist() == problem.units.inactive.tolist()
-        and candidate.weights.tolist() == problem.active_weights.tolist()
+        and _same_values(units.identifiers, problem.units.identifiers)
+        and _same_values(units.inactive, problem.units.inactive)
+        and _same_values(candidate.weights, problem.active_weights)
     )
     if not same:
         raise ValueError("the candidate did not solve this linear problem")
+
+
+def _same_values(found: NDArray[Any], given: NDArray[Any]) -> bool:
+    """``found.tolist() == given.tolist()``, decided on the arrays where that is exact.
+
+    For two nonempty arrays of one Boolean, integer or floating dtype of at most eight
+    bytes, the lists are equal exactly when the shapes are and every pair of elements
+    compares equal: the lists then hold the same integers or the same doubles, which
+    Python compares by the rules NumPy applies to the arrays.  Every other pair,
+    empty arrays included, compares the lists.
+    """
+    if (
+        type(found) is np.ndarray
+        and type(given) is np.ndarray
+        and found.dtype == given.dtype
+        and found.dtype.kind in "biuf"
+        and found.dtype.itemsize <= 8
+        and found.size
+        and given.size
+    ):
+        return found.shape == given.shape and bool(np.array_equal(found, given))
+    return bool(found.tolist() == given.tolist())

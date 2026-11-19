@@ -1,5 +1,7 @@
 """Fit-used and retained-only dependence provenance for frame preparation.
 
+``design/02_computation.md``, Section 2, step 2; ``design/04_inference_and_effects.md``,
+Section 2.3; ``plan/evidence/M1.15_contract.txt``, item 7; decisions D41, D51 and D55.
 Provides :class:`UsedDependence`, :class:`ColumnProvenance`,
 :class:`DependenceProvenance`, and :func:`prepare_dependence`.  Fit-used dependence
 columns (``cluster``, ``clusters``, ``time``, ``unit``, ``coordinates``) join the step-2
@@ -170,7 +172,11 @@ class ColumnProvenance:
 
     @classmethod
     def _from_retained(
-        cls, *, name: str, source_dtype: str, pandas_kind: str,
+        cls,
+        *,
+        name: str,
+        source_dtype: str,
+        pandas_kind: str,
         sources: tuple[Column, ...],
     ) -> ColumnProvenance:
         """Lossless original-row view from this invocation's native owned columns.
@@ -181,8 +187,11 @@ class ColumnProvenance:
         """
         result = object.__new__(cls)
         for field, value in (
-            ("name", name), ("roles", ("retained",)), ("used_in_fit", False),
-            ("source_dtype", source_dtype), ("pandas_kind", pandas_kind),
+            ("name", name),
+            ("roles", ("retained",)),
+            ("used_in_fit", False),
+            ("source_dtype", source_dtype),
+            ("pandas_kind", pandas_kind),
             ("_retained_sources", sources),
         ):
             object.__setattr__(result, field, value)
@@ -190,6 +199,7 @@ class ColumnProvenance:
 
     def __getattribute__(self, name: str) -> Any:
         """Resolve exact-native presentation fields; generic lookup stays unchanged."""
+        result: Column | BoolArray
         if type(self) is ColumnProvenance and type(name) is str:
             state = object.__getattribute__(self, "__dict__")
             if "_retained_sources" in state and name not in state:
@@ -202,7 +212,8 @@ class ColumnProvenance:
                     # The admitted native biuf rule, not a new call to a source callback
                     # after the fit. Non-native/changed-hook inputs were kept eager.
                     masks = tuple(
-                        ~np.isfinite(c._stored) if c.dtype.kind == "f"
+                        ~np.isfinite(c._stored)
+                        if c.dtype.kind == "f"
                         else np.zeros(c.size, dtype=np.bool_)
                         for c in self._retained_sources
                     )
@@ -241,8 +252,9 @@ class ColumnProvenance:
             for value in values:
                 if value.dtype.kind == "f":
                     invalid |= ~np.isfinite(value)
-            paired = np.fromiter(zip(left, right, strict=True), dtype=object,
-                                 count=left.size)
+            paired = np.fromiter(
+                zip(left, right, strict=True), dtype=object, count=left.size
+            )
             paired[invalid] = None
             paired.setflags(write=False)
             return paired
@@ -375,8 +387,11 @@ def prepare_dependence(
 
 
 def _prepare_dependence(
-    frame: ModelFrame, data: pd.DataFrame, columns: Columns,
-    dependence: UsedDependence | None = None, *,
+    frame: ModelFrame,
+    data: pd.DataFrame,
+    columns: Columns,
+    dependence: UsedDependence | None = None,
+    *,
     _retained: Mapping[str, tuple[str, ...]] | None = None,
 ) -> tuple[RawInputs, dict[str, Any], DependenceProvenance]:
     """The single extraction body; owned composition alone supplies original terms."""
@@ -438,8 +453,7 @@ def _prepare_dependence(
         if _retained is not None:
             # The first RawInputs already owns and checked y/design/weights.
             # Add only freshly checked metadata; no second numeric construction.
-            object.__setattr__(inputs, "metadata",
-                               AlignedColumns(extra_metadata, nobs))
+            object.__setattr__(inputs, "metadata", AlignedColumns(extra_metadata, nobs))
         else:
             inputs = RawInputs(
                 inputs.y,
@@ -457,26 +471,72 @@ def _prepare_dependence(
     )
     return inputs, missing, provenance
 
-_RETAIN_GLOBALS = tuple((name, globals()[name]) for name in (
-    "AlignedColumns", "Column", "ColumnProvenance", "RawInputs",
-    "_inputs", "_column", "_values",
-    "_pandas_kind", "_role_table", "_prepare_dependence",
-))
-_RETAIN_PROVENANCE = tuple((name, vars(ColumnProvenance).get(name)) for name in (
-    "__init__", "__getattribute__", "__getattr__", "__getstate__",
-    "take", "values", "missing_mask",
-))
-_RETAIN_FIELDS = tuple((name, vars(ColumnProvenance).get(name))
-                       for name in ColumnProvenance.__dataclass_fields__)
-_RETAIN_COLUMNS = tuple((kind, tuple((name, vars(kind).get(name)) for name in (
-    "__init__", "__getattribute__", "values", "stored", "dtype", "size", "take",
-    "nobs",
-))) for kind in (Column, RawInputs, AlignedColumns, _input_columns.RawWeights))
-_RETAIN_RAW_ALIASES = tuple((name, getattr(_raw_columns, name)) for name in (
-    "Column", "RawInputs", "AlignedColumns", "RawWeights",
-    "_elements", "_owned_objects", "_object_array",
-    "_column_names", "_real_rows", "_immutable",
-))
+
+_RETAIN_GLOBALS = tuple(
+    (name, globals()[name])
+    for name in (
+        "AlignedColumns",
+        "Column",
+        "ColumnProvenance",
+        "RawInputs",
+        "_inputs",
+        "_column",
+        "_values",
+        "_pandas_kind",
+        "_role_table",
+        "_prepare_dependence",
+    )
+)
+_RETAIN_PROVENANCE = tuple(
+    (name, vars(ColumnProvenance).get(name))
+    for name in (
+        "__init__",
+        "__getattribute__",
+        "__getattr__",
+        "__getstate__",
+        "take",
+        "values",
+        "missing_mask",
+    )
+)
+_RETAIN_FIELDS = tuple(
+    (name, vars(ColumnProvenance).get(name))
+    for name in ColumnProvenance.__dataclass_fields__
+)
+_RETAIN_COLUMNS = tuple(
+    (
+        kind,
+        tuple(
+            (name, vars(kind).get(name))
+            for name in (
+                "__init__",
+                "__getattribute__",
+                "values",
+                "stored",
+                "dtype",
+                "size",
+                "take",
+                "nobs",
+            )
+        ),
+    )
+    for kind in (Column, RawInputs, AlignedColumns, _input_columns.RawWeights)
+)
+_RETAIN_RAW_ALIASES = tuple(
+    (name, getattr(_raw_columns, name))
+    for name in (
+        "Column",
+        "RawInputs",
+        "AlignedColumns",
+        "RawWeights",
+        "_elements",
+        "_owned_objects",
+        "_object_array",
+        "_column_names",
+        "_real_rows",
+        "_immutable",
+    )
+)
 _RETAIN_INPUT_CONSTRUCTOR = _input_columns.RawInputs
 _RETAIN_INPUT_WEIGHTS = _input_columns.RawWeights
 _RETAIN_INVALID = validity.values_invalid
@@ -484,15 +544,26 @@ _RETAIN_INVALID = validity.values_invalid
 
 def _retained_original() -> bool:
     """Constant-size first-producer callback qualification, never per-row replay."""
-    return (all(globals().get(name) is original for name, original in _RETAIN_GLOBALS)
-            and all(vars(_raw_columns).get(name) is original
-                    for name, original in _RETAIN_RAW_ALIASES)
-            and _input_columns.RawInputs is _RETAIN_INPUT_CONSTRUCTOR
-            and _input_columns.RawWeights is _RETAIN_INPUT_WEIGHTS
-            and all(vars(ColumnProvenance).get(name) is original
-                    for name, original in _RETAIN_PROVENANCE)
-            and all(vars(ColumnProvenance).get(name) is original
-                    for name, original in _RETAIN_FIELDS)
-            and all(vars(kind).get(name) is original
-                    for kind, methods in _RETAIN_COLUMNS for name, original in methods)
-            and validity.values_invalid is _RETAIN_INVALID)
+    return (
+        all(globals().get(name) is original for name, original in _RETAIN_GLOBALS)
+        and all(
+            vars(_raw_columns).get(name) is original
+            for name, original in _RETAIN_RAW_ALIASES
+        )
+        and _input_columns.RawInputs is _RETAIN_INPUT_CONSTRUCTOR
+        and _input_columns.RawWeights is _RETAIN_INPUT_WEIGHTS
+        and all(
+            vars(ColumnProvenance).get(name) is original
+            for name, original in _RETAIN_PROVENANCE
+        )
+        and all(
+            vars(ColumnProvenance).get(name) is original
+            for name, original in _RETAIN_FIELDS
+        )
+        and all(
+            vars(kind).get(name) is original
+            for kind, methods in _RETAIN_COLUMNS
+            for name, original in methods
+        )
+        and validity.values_invalid is _RETAIN_INVALID
+    )

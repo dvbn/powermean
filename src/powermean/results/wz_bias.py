@@ -68,20 +68,30 @@ class WZBias:
         }
         if self.operator is not None:
             op = self.operator
+            # Owner ruling 29: one factor per role; the single published N/(N-1)
+            # (``nodes``) exists only when the present counts agree.
+            equal = op.origins == op.destinations
             result.update(
                 source="WZ CWP11/21 Section 3.4, Appendix A.2.1; formal G=-DH",
                 binding_sha256=op.binding_sha256,
                 route=op.route,
-                nodes=op.nodes,
+                origins=op.origins,
+                destinations=op.destinations,
+                nodes=op.origins if equal else None,
                 periods=op.periods,
+                pairs=op.pairs,
                 slope_names=op.names,
-                factor_numerator=op.nodes,
-                factor_denominator=op.nodes - 1,
+                identification=op.identification,
+                origin_factor=(op.origins, op.origins - 1),
+                destination_factor=(op.destinations, op.destinations - 1),
+                factor_numerator=op.origins if equal else None,
+                factor_denominator=op.origins - 1 if equal else None,
                 factor_owner="WZ_coefficient_only",
                 rcond_min=op.rcond_min,
                 nuisance_rcond=op.nuisance_rcond,
                 slope_rcond=op.slope_rcond,
                 minimum_group_rcond=op.minimum_group_rcond,
+                shared_covariance_information=op.shared_information,
                 reservation=asdict(op.reservation),
             )
         if self.point is not None:

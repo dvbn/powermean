@@ -1,7 +1,9 @@
 """Options of the optional no-FE IOLS solver and lossless kernel-control mapping.
 
+``design/02_computation.md``, Sections 5.6, 5.7 and 8.2;
+``plan/evidence/M1_contract.txt``, Sections 1 and 5.1; decisions D47, D52 and D53.
 Each option is a field with its default, its valid values and one sentence of
-documentation:
+documentation (``design/11_engineering.md``, Section 5, rule 7):
 
     option                  default                   valid values
     eps                     1e-12                     positive finite real numbers
@@ -16,6 +18,7 @@ documentation:
     rho_log_max             14                        finite real numbers
     iols_backend            'cpp'                     'cpp', 'numpy'
 
+The defaults are those of file 02, Section 5.7, ``eps=1e-12`` being decision D52's.
 When ``iols_backend`` is omitted by the caller, ``'cpp'`` is the preferred backend and
 automatically falls back to ``'numpy'`` only if the compiled extension module
 ``powermean._native.iols._kernel_cpp`` is genuinely absent on disk. When
@@ -36,7 +39,7 @@ import numpy as np
 from powermean.errors import SpecificationError
 from powermean.solve.iols.direct_route import DirectNoFEBackend
 from powermean.solve.iols.kernel import IOLSKernelControl
-from powermean.solve.absorbed import (
+from powermean.solve.m1_options import (
     POSITIVE_INTEGER,
     POSITIVE_REAL,
     Setting,
@@ -115,7 +118,7 @@ IOLS_OPTION_NAMES: tuple[str, ...] = tuple(IOLS_DOMAINS)
 
 @dataclass(frozen=True, kw_only=True)
 class IolsOptions:
-    """The options of the optional no-FE IOLS solver.
+    """The options of the optional no-FE IOLS solver (file 02, Sections 5.6 and 5.7).
 
     Keyword arguments only.  Each value is validated against :data:`IOLS_DOMAINS` and
     stored as resolved.
@@ -124,12 +127,12 @@ class IolsOptions:
     ----------
     eps : float, default 1e-12
         Internal stopping threshold on the largest coefficient change, before the
-        residual check.  The common
+        residual check; the executed campaign's value (decision D52).  The common
         certificate decides convergence; a positive finite real.
     anderson_m : int, default 5
         Initial depth of the Anderson mixing; a nonnegative integer, zero included,
-        stored as given and not a statement about a later adaptation of the
-        depth.
+        stored as given and not a statement about the source's later adaptation of
+        the depth.
     max_phase1_iterations : int, default 100000
         Budget of pilot updates; a positive integer, 1 included.
     stopcrit : int, default 1000000
@@ -291,6 +294,19 @@ def options_to_kernel_control(options: IolsOptions) -> IOLSKernelControl:
                 ),
             },
         )
+    for name in ("rho_log_min", "rho_log_max"):
+        bound = getattr(options, name)
+        try:
+            math.exp(bound)
+        except OverflowError as exc:
+            raise SpecificationError(
+                "specification.invalid_value",
+                {
+                    "argument": name,
+                    "value": bound,
+                    "valid": "log step bounds with a finite exponential",
+                },
+            ) from exc
     return IOLSKernelControl(
         anderson_m=int(options.anderson_m),
         eps=float(options.eps),

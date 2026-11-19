@@ -1,4 +1,4 @@
-"""Owned supplied coordinates for the internal tau=2 attempt.
+"""Owned supplied coordinates for the private tau=2 attempt (03 Section 3.3).
 
 This is a bridge to a coordinate map, not a geometry builder. The caller supplies
 T and P, with PT=I; no rank, alias, normalization or reference level is selected.
@@ -18,9 +18,12 @@ import numpy as np
 from powermean.fe._cancel_storage import (
     BuilderRecord,
     FloatStorage,
+    IndexArray,
+    IndexStorage,
     finite_product,
     finite_vector,
 )
+from powermean.fe.geometry_errors import GeometryAdmissionError
 from powermean.fe.retained import CenteredDesign
 from powermean.model.variance import FloatArray, PowerVariance, Variance
 
@@ -100,6 +103,94 @@ def _matrix(values: FloatArray, shape: tuple[int, int], name: str) -> None:
         raise ValueError(f"{name} must be finite with shape {shape}")
 
 
+def _selected_columns(basis: FloatArray) -> IndexArray | None:
+    """The distinct columns that ``basis`` selects, in coordinate order, or None.
+
+    ``basis`` selects them when each of its columns is a distinct unit vector and
+    it has no other nonzero entry; ``T v`` then places ``v`` at them, ``T' u``
+    reads those entries of ``u``, and ``PT`` is those columns of ``P``.
+    """
+    if basis.ndim != 2 or basis.shape[0] == 0 or basis.shape[1] == 0:
+        return None
+    d = basis.shape[1]
+    if int(np.count_nonzero(basis)) != d:
+        return None
+    columns = np.argmax(np.abs(basis), axis=0).astype(np.intp)
+    if not np.all(basis[columns, np.arange(d)] == 1.0):
+        return None
+    seen = np.zeros(basis.shape[0], dtype=np.bool_)
+    seen[columns] = True
+    if int(seen.sum()) != d:
+        return None
+    return columns
+
+
+def _identity_proven(
+    reduction: FloatArray,
+    expansion: FloatArray,
+    atol: float,
+    *,
+    columns: IndexArray | None = None,
+) -> bool:
+    """Whether one product proves that every column check of ``PT=I`` passes.
+
+    A sum of ``p`` products, evaluated in any order, lies within
+    ``2 p eps sum_k |P_ik| |T_kj|`` of the real sum where ``p eps`` is well below
+    one, so two evaluations of the same sum differ by at most twice that. Where
+    every entry of ``PT - I`` from one product is at most ``atol`` minus this
+    band, every entry of every ``P T[:, j] - e_j`` is at most ``atol``, and finite
+    with ``atol < 1``, so the loop passes; where ``p eps`` reaches ``1/8``, the
+    band exceeds ``1`` and cannot be below ``atol < 1``, leaving the loop to
+    check too. Any other case, a band not below ``atol`` included, is left to the
+    column checks, which decide and raise as before. The workspace is one p-by-d
+    array at a time and one d-by-d array, inside the validation reservation of
+    ``workspace_plan``. Where ``T`` selects ``columns`` (as found by
+    :func:`_selected_columns`), ``PT`` is those columns of ``P``, which is the
+    product's value entry for entry.
+    """
+    with np.errstate(over="ignore", invalid="ignore"):
+        rows = float(np.abs(reduction).sum(axis=1).max())
+        scale = rows * float(np.abs(expansion).max())
+        eps = float(np.finfo(np.float64).eps)
+        band = 4.0 * eps * (expansion.shape[0] * scale + 1.0)
+        if not band < atol:
+            return False
+        error = (
+            reduction @ expansion if columns is None else reduction[:, columns].copy()
+        )
+        error[np.diag_indices_from(error)] -= 1.0
+        return bool(
+            np.isfinite(error).all() and np.abs(error, out=error).max() <= atol - band
+        )
+
+
+def _check_left_inverse(
+    expansion: FloatArray,
+    reduction: FloatArray,
+    columns: IndexArray | None,
+    atol: float,
+) -> None:
+    """Verify ``||P T - I||_max <= atol`` via one product, slice, or columnwise."""
+    if _identity_proven(reduction, expansion, atol, columns=columns):
+        return
+    with np.errstate(over="raise", invalid="raise"):
+        if columns is not None:
+            error = reduction[:, columns].copy()
+            error[np.diag_indices_from(error)] -= 1.0
+            if not np.isfinite(error).all() or np.any(np.abs(error) > atol):
+                raise GeometryAdmissionError(
+                    "left_inverse", "supplied maps must satisfy PT=I"
+                )
+            return
+        for j in range(expansion.shape[1]):
+            error = reduction @ expansion[:, j]
+            error[j] -= 1.0
+            if not np.isfinite(error).all() or np.any(np.abs(error) > atol):
+                raise GeometryAdmissionError(
+                    "left_inverse", "supplied maps must satisfy PT=I"
+                )
+
+
 @dataclass(frozen=True, eq=False, init=False)
 class CancelledOperator(BuilderRecord):
     """Owned coordinate adapter bound to one immutable accepted full design.
@@ -109,8 +200,9 @@ class CancelledOperator(BuilderRecord):
     fresh downstream geometry gates, never a trusted-success field here.
     """
 
-    __slots__ = ("_expand", "_reduce", "bounds", "design", "plan")
+    __slots__ = ("_columns", "_expand", "_reduce", "bounds", "design", "plan")
 
+    _columns: IndexStorage | None
     _expand: FloatStorage
     _reduce: FloatStorage
     design: CenteredDesign
@@ -128,6 +220,12 @@ class CancelledOperator(BuilderRecord):
         return self._expand.view()
 
     @property
+    def selected(self) -> IndexArray | None:
+        """The columns that T selects, found once when it was bound; or None."""
+        found = self._columns
+        return None if found is None else found.view()
+
+    @property
     def reduction(self) -> FloatArray:
         """Detached immutable view of P; P is not used as a score pullback."""
         return self._reduce.view()
@@ -135,6 +233,11 @@ class CancelledOperator(BuilderRecord):
     def expand(self, values: FloatArray) -> FloatArray:
         """Map coefficients by T, with a fresh shape/finite check."""
         eta = finite_vector(values, self.shape[1], "identified coefficients")
+        columns = self._columns
+        if columns is not None:
+            full = np.zeros(self.design.n_columns, dtype=np.float64)
+            full[columns.view()] = eta
+            return full
         with np.errstate(over="raise", invalid="raise"):
             return finite_product(self.expansion @ eta)
 
@@ -151,6 +254,9 @@ class CancelledOperator(BuilderRecord):
     def rmatvec(self, values: FloatArray) -> FloatArray:
         """B_id' u=T'B'u, distinct from coefficient reduction P."""
         full = self.design.rmatvec(values)
+        columns = self._columns
+        if columns is not None:
+            return finite_product(full[columns.view()])
         with np.errstate(over="raise", invalid="raise"):
             return finite_product(self.expansion.T @ full)
 
@@ -195,14 +301,12 @@ def coordinate_map(
     _matrix(expand, (p, d), "T")
     _matrix(reduce, (d, p), "P")
     expansion, reduction = FloatStorage.store(expand), FloatStorage.store(reduce)
-    with np.errstate(over="raise", invalid="raise"):
-        for j in range(d):
-            error = reduction.view() @ expansion.view()[:, j]
-            error[j] -= 1.0
-            if not np.isfinite(error).all() or np.any(np.abs(error) > identity_atol):
-                raise ValueError("supplied maps must satisfy PT=I")
+    columns = _selected_columns(expansion.view())
+    _check_left_inverse(expansion.view(), reduction.view(), columns, identity_atol)
+    stored_columns = None if columns is None else IndexStorage.store(columns)
     record = object.__new__(CancelledOperator)
     for name, value in (
+        ("_columns", stored_columns),
         ("_expand", expansion),
         ("_reduce", reduction),
         ("design", design),

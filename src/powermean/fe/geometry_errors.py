@@ -1,4 +1,4 @@
-"""Typed refusal diagnostics for the geometry preparation."""
+"""Typed refusal diagnostics for design/03, Sections 3.1-3.2 geometry."""
 
 from __future__ import annotations
 

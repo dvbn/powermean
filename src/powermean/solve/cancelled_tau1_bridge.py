@@ -1,6 +1,6 @@
 """Exact tau=1 joint-absorbed inner layout and cancelled-coordinate mapping.
 
-Positive-total cancelled groups form the inner computational problem;
+Design 03.3: positive-total cancelled groups form the inner computational problem;
 all original outer rows remain in fresh cancelled certification and accounting.
 """
 
@@ -14,7 +14,7 @@ import numpy as np
 from powermean.data.collinearity_records import ABSORBED
 from powermean.data.raw import Column, RawInputs
 from powermean.data.retained import _regression_data, select_order
-from powermean.data.sample import build_sample
+from powermean.data.sample import SampleBase, build_sample
 from powermean.data.sample_fe import EffectColumns
 from powermean.data.sample_fe_state import (
     FESample,
@@ -39,7 +39,7 @@ from powermean.solve.cancelled_operator import AttemptBounds
 from powermean.solve.cancelled_records import (
     CancelledCertificate,
 )
-from powermean.solve.absorbed import AbsorbedOptions
+from powermean.solve.m1_options import AbsorbedOptions
 from powermean.solve.newton_absorbed import (
     _problem,
 )
@@ -82,34 +82,35 @@ class _Tau1Context:
 
 
 def _build_effect_columns(
-    geometry: NumericalGeometry, active_rows: IndexArray
+    geometry: NumericalGeometry, rows: slice | IndexArray, n_rows: int
 ) -> tuple[EffectColumns, tuple[int, ...]]:
     """Construct ``EffectColumns`` for the cancelled and non-annihilated blocks."""
     structure = geometry.structure
     cancel_codes = structure.cancel_codes
     terms: list[tuple[str, ...]] = [("fe_cancel",)]
     columns: dict[str, Column] = {
-        "fe_cancel": Column(cancel_codes[active_rows], name="fe_cancel")
+        "fe_cancel": Column(cancel_codes[rows], name="fe_cancel")
     }
     retained_indices: list[int] = []
     ann_blocks = geometry.annihilated_blocks
+    sorted_rows = structure.inverse[rows]
     for b_idx, sorted_codes in enumerate(structure.retained_sorted_codes):
         if bool(ann_blocks[b_idx]):
             continue
-        codes_b = sorted_codes[structure.inverse][active_rows]
-        if np.unique(codes_b).size <= 1:
+        codes_b = sorted_codes[sorted_rows]
+        if np.all(codes_b == codes_b[0]):
             continue
         col_name = f"fe_ret_{b_idx}"
         terms.append((col_name,))
         columns[col_name] = Column(codes_b, name=col_name)
         retained_indices.append(b_idx)
-    return EffectColumns(terms, columns, int(active_rows.size)), tuple(retained_indices)
+    return EffectColumns(terms, columns, n_rows), tuple(retained_indices)
 
 
 def _build_bridge_layout(capture: CapturedFit) -> _BridgeLayout:
     """Construct the inner ``FESample`` on positive-outcome cancelled groups."""
     geometry = capture.admission.geometry
-    structure, z, offset = geometry.structure, capture.z, capture.centered_offset
+    structure, z = geometry.structure, capture.z
     if capture.obs_weights is not None and np.any(capture.obs_weights != 1.0):
         raise ValueError("cancelled tau=1 bridge supports only unit multipliers")
     cancel_codes = structure.cancel_codes
@@ -119,29 +120,21 @@ def _build_bridge_layout(capture: CapturedFit) -> _BridgeLayout:
     if n_active == 0:
         raise ValueError("no positive-outcome cancelled group remains for tau=1")
 
-    effects, retained_indices = _build_effect_columns(geometry, active_rows)
-    d_x = geometry.n_slopes_identified
-    if d_x > 0:
-        raw_slopes = capture.admission.raw_slopes
-        design_matrix = raw_slopes[active_rows][:, geometry.kept_slope_indices]
-        col_names = tuple(f"x{j}" for j in range(d_x))
-        reasons: tuple[str | None, ...] = (None,) * d_x
-    else:
-        design_matrix = np.ones((n_active, 1), dtype=np.float64)
-        col_names, reasons = ("_absorbed_dummy",), (ABSORBED,)
-
-    y_act, off_act = z[active_rows], offset[active_rows]
-    raw_inputs = RawInputs(
-        y=y_act, design=design_matrix, column_names=col_names, offset=off_act
+    # With every group active, flatnonzero gives exactly the original row order.
+    rows = slice(None) if n_active == structure.n_rows else active_rows
+    base, effects, retained_indices = _bridge_inputs(capture, rows, n_active)
+    reasons = (
+        (None,) * geometry.n_slopes_identified
+        if geometry.n_slopes_identified
+        else (ABSORBED,)
     )
-    base = build_sample(raw_inputs)
     order_rows = select_order(base, 1.0, positive_only=False)
-    reg_initial = _regression_data(base.inputs, order_rows.positions)
-    replicas = replicas_of(reg_initial, order_rows)
+    data = _regression_data(base.inputs, order_rows.positions)
+    replicas = replicas_of(data, order_rows)
     ledger = ledger_of(order_rows, base.missing, replicas)
+    # No closure or exclusion intervenes: the ledger keeps these same order rows.
     source = effects.encode(order_rows.positions)
     grouping = restrict(source, ledger.positions, ledger.nobs)
-    data = _regression_data(base.inputs, ledger.positions)
     problem = transform_problem(data.y, 1.0, offset=data.offset, positive_only=False)
     sample = final_sample(
         order_rows,
@@ -154,6 +147,38 @@ def _build_bridge_layout(capture: CapturedFit) -> _BridgeLayout:
         reasons=reasons,
     )
     return _BridgeLayout(sample, active_rows, retained_indices)
+
+
+def _bridge_inputs(
+    capture: CapturedFit, rows: slice | IndexArray, n_active: int
+) -> tuple[SampleBase, EffectColumns, tuple[int, ...]]:
+    """The ordinary inner inputs, before any coordinator or bridge sample."""
+    geometry = capture.admission.geometry
+    effects, retained_indices = _build_effect_columns(geometry, rows, n_active)
+    d_x = geometry.n_slopes_identified
+    if d_x > 0:
+        raw_slopes = capture.admission.raw_slopes
+        if d_x == geometry.n_slopes_full:
+            design_matrix = raw_slopes[rows]
+        elif isinstance(rows, slice):
+            design_matrix = raw_slopes[:, geometry.kept_slope_indices]
+        else:
+            design_matrix = raw_slopes[np.ix_(rows, geometry.kept_slope_indices)]
+        col_names = tuple(f"x{j}" for j in range(d_x))
+    else:
+        design_matrix = np.ones((n_active, 1), dtype=np.float64)
+        col_names = ("_absorbed_dummy",)
+
+    raw_inputs = RawInputs(
+        y=capture.z[rows],
+        design=design_matrix,
+        column_names=col_names,
+        offset=capture.centered_offset[rows],
+    )
+    return build_sample(raw_inputs), effects, retained_indices
+
+
+_BRIDGE_INPUTS = _bridge_inputs
 
 
 def _effects_to_identified(

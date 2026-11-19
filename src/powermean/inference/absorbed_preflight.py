@@ -1,9 +1,10 @@
-"""Sample-bound absorbed inference structural preflight."""
+"""Sample-bound absorbed inference structural preflight (D55/D57/D76)."""
 
 from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -14,14 +15,20 @@ from powermean.data.request_values import OMITTED
 from powermean.data.sample_fe_state import FESample
 from powermean.errors import SpecificationError
 from powermean.fe.certificate_basis import CertificateBasis, owned_basis
+from powermean.inference.absorbed_block_hc import BlockPreflight, block_preflight
 from powermean.inference.absorbed_code_tuples import CachedCodeTuples
-from powermean.inference.absorbed_rank import AbsorbedCount, absorbed_count
+from powermean.inference.absorbed_rank import (
+    AbsorbedCount,
+    absorbed_count,
+    exact_absorbed,
+)
 from powermean.inference.contributions import statistical_count
 from powermean.inference.convention import ClusterCodes, Covariance, _active_codes
-from powermean.inference.hc import HCPreflight, hc_preflight
+from powermean.inference.hc import HCPreflight
 from powermean.inference.psd import FrameScales, Sequence, column_scales
 from powermean.inference.ssc import (
     AppliedConvention,
+    RequestKind,
     ResolvedConvention,
     apply_convention,
     convention_counts,
@@ -36,6 +43,7 @@ from powermean.solve.absorbed_certificate_scale import (
     FEScaleInput,
     IntegerArray,
 )
+from powermean.solve.reported import saturated
 from powermean.systems.joint import SamplingUnits
 
 
@@ -53,7 +61,7 @@ def sampling_units(sample: FESample) -> SamplingUnits:
 
 @dataclass(frozen=True, eq=False)
 class AbsorbedFrameRecord:
-    """Owned frame record of one eigenvalue adjustment at an absorbed point."""
+    """Owned frame record of one D4 operation at an absorbed point."""
 
     sequence: Sequence
     convention: str
@@ -102,7 +110,7 @@ class AbsorbedPreflight:
     applied: AppliedConvention
     absorbed: AbsorbedCount | None
     active_clusters: tuple[tuple[str, IntegerArray], ...]
-    hc_preflight: HCPreflight | None = None
+    hc_preflight: HCPreflight | BlockPreflight | None = None
     code_tuples: CachedCodeTuples | None = None
     psd: PsdTreatment | None = None
     frame_scales: FrameScales | None = None
@@ -136,7 +144,11 @@ def _empty_preflight(
         if request.kind == "cluster" and any(g < 2 for g in groups0):
             raise ValueError("the cluster factor G/(G - 1) needs at least two clusters")
         blocks0 = tuple((b.name, b.codes[active]) for b in sample.grouping.blocks)
-        absorbed0 = absorbed_count(blocks0, [c for _, c in active_clusters])
+        absorbed0 = exact_absorbed(
+            absorbed_count(blocks0, [c for _, c in active_clusters]),
+            lambda: blocks0,
+            basis0.n_kept if active.size == sample.count else None,
+        )
         counts0 = convention_counts(count0, 0, basis0.n_kept, absorbed0, groups0)
         apply_convention(resolved, counts0, kind=request.kind)
     return basis0
@@ -177,6 +189,16 @@ def _active_request(
         or (not np.array_equal(request.positions, sample.positions))
     ):
         raise ValueError("the cluster codes are not aligned with the sample's rows")
+    for name, codes in request.clusters:
+        if int(np.unique(codes[active]).size) < 2:
+            raise SpecificationError(
+                "specification.invalid_value",
+                {
+                    "argument": "cluster",
+                    "value": name,
+                    "valid": "at least two clusters on the estimation sample",
+                },
+            )
     active_clusters = tuple(
         (
             (name, _active_codes(ClusterCodes(name, codes), units))
@@ -194,19 +216,43 @@ def preflight_absorbed_scale(
 
 
 def _preflight_numeric(
-    sample: FESample, request: CovarianceRequest,
+    sample: FESample,
+    request: CovarianceRequest,
     prepare_basis: Callable[[FESample], CertificateBasis],
-    prepare_count: Callable[[CertificateBasis, list[IntegerArray]], AbsorbedCount | None]
+    prepare_count: Callable[
+        [CertificateBasis, list[IntegerArray]], AbsorbedCount | None
+    ]
     | None = None,
 ) -> tuple[AbsorbedPreflight | None, CertificateBasis]:
     """Prepare this operation's basis at the ORIGINAL ordered preflight site."""
     return _preflight(sample, request, prepare_basis, prepare_count)
 
 
+def _unless_saturated[T](call: Callable[[], T], rows: int, dimension: int) -> T | None:
+    """``call()``, or ``None`` where a saturated fit refuses it for zero residual dof.
+
+    A saturated fit (:func:`powermean.solve.reported.saturated`) forms no covariance
+    and its certificate calls no provider: the refusal of a factor or reference that
+    needs residual degrees of freedom is its missing covariance
+    (:mod:`powermean.results.saturated`), not a refusal of the fit.
+    """
+    try:
+        return call()
+    except SpecificationError as error:
+        if error.identifier == "specification.no_residual_dof" and saturated(
+            rows, dimension
+        ):
+            return None
+        raise
+
+
 def _preflight(
-    sample: FESample, request: CovarianceRequest,
+    sample: FESample,
+    request: CovarianceRequest,
     prepare_basis: Callable[[FESample], CertificateBasis] | None,
-    prepare_count: Callable[[CertificateBasis, list[IntegerArray]], AbsorbedCount | None]
+    prepare_count: Callable[
+        [CertificateBasis, list[IntegerArray]], AbsorbedCount | None
+    ]
     | None = None,
 ) -> tuple[AbsorbedPreflight | None, CertificateBasis]:
     """One preflight implementation; the public entry always constructs afresh."""
@@ -243,17 +289,25 @@ def _preflight(
         raise ValueError("the prepared basis belongs to another sample grouping")
     dimension = k + basis.n_kept
     count = statistical_count(weights[active], frequency=frequency)
+    hc_pre: HCPreflight | BlockPreflight | None
+    code_tuples: CachedCodeTuples | None = None
+    rows = int(active.size)
     if request.kind == "hc":
         assert request.method is not None
-        hc_pre = hc_preflight(
-            design.matrix,
-            weights,
-            request.method,
-            resolved,
-            frequency=frequency,
-            basis=basis,
+        method = request.method
+        # Fixed-effect log-OLS never reaches this preflight: it is solved by
+        # absorption without a basis (:mod:`powermean.interface.fe_linear`).
+        block = _unless_saturated(
+            lambda: block_preflight(
+                k, basis, weights, method, resolved, frequency=frequency
+            ),
+            rows,
+            dimension,
         )
-        code_tuples = CachedCodeTuples(basis)
+        if block is None:
+            return None, basis
+        hc_pre = block
+        count, dimension = hc_pre.count, hc_pre.rank
         applied = hc_pre.applied
         absorbed: AbsorbedCount | None = hc_pre.absorbed
         psd: PsdTreatment | None = None
@@ -261,30 +315,44 @@ def _preflight(
         fp: str | None = None
     else:
         hc_pre = None
-        code_tuples = None
         dimensions = [c for _, c in active_clusters]
         absorbed = (
             prepare_count(basis, dimensions)
-            if (prepare_count is not None and active.size == sample.count
-                and absorbed_count is _ABSORBED_COUNT) else None
+            if (
+                prepare_count is not None
+                and active.size == sample.count
+                and absorbed_count is _ABSORBED_COUNT
+            )
+            else None
         )
         if absorbed is None:
             blocks = tuple((b.name, b.codes[active]) for b in sample.grouping.blocks)
             absorbed = absorbed_count(blocks, dimensions)
+        grouping = sample.grouping
+        absorbed = exact_absorbed(
+            absorbed,
+            lambda: tuple((b.name, b.codes[active]) for b in grouping.blocks),
+            basis.n_kept if active.size == sample.count else None,
+        )
         groups = [int(np.unique(c).size) for _, c in active_clusters]
         if request.kind == "cluster" and any(g < 2 for g in groups):
             raise ValueError("the cluster factor G/(G - 1) needs at least two clusters")
         counts = convention_counts(count, k, dimension, absorbed, groups)
-        applied = apply_convention(resolved, counts, kind=request.kind)
+        conventional = _unless_saturated(
+            lambda: apply_convention(
+                resolved, counts, kind=cast("RequestKind", request.kind)
+            ),
+            rows,
+            dimension,
+        )
+        if conventional is None:
+            return None, basis
+        applied = conventional
         signed = len(request.clusters) >= 2 and (
             request.multiway is OMITTED or request.multiway == "cgm"
         )
         if signed:
-            psd = (
-                ("cgm" if request.psd == "cgm" else "none")
-                if request.psd is not OMITTED
-                else applied.psd
-            )
+            psd = request.psd if request.psd is not OMITTED else applied.psd
         else:
             psd = None
         if psd == "cgm":

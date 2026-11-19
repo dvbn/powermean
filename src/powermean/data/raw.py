@@ -1,46 +1,47 @@
 """The raw inputs of the sample construction: every input row, before any accounting.
 
-:class:`RawInputs` holds the arrays of every input row, aligned by position and in input
-order, as the interface evaluated them and before any row is excluded: the raw outcome,
-the design trained by Formulaic on the full frame, the raw weights, the offset or the
-exposure, and the aligned metadata that later stages need (cluster labels, time, unit or
-location information).  A value may be missing or infinite where the masks of the
-interface say so: the record checks shapes and alignment, never values, and selects
-nothing.  :func:`powermean.data.sample.build_sample` applies the steps of the sample
-construction to it.
+``design/02_computation.md``, Section 2, steps 1 to 4; ``DESIGN.md``, Section 6.1;
+decisions D41, D51 and D55.  :class:`RawInputs` holds the arrays of every input row,
+aligned by position and in input order, as the interface evaluated them and before any
+row is excluded: the raw outcome, the design trained by Formulaic on the full frame,
+the raw weights, the offset or the exposure, and the aligned metadata that later
+stages need (cluster labels, time, unit or location information; file 04, Section
+2.3).  A value may be missing or infinite where the masks of the interface say so:
+the record checks shapes and alignment, never values, and selects nothing.
+:func:`powermean.data.sample.build_sample` applies the steps of Section 2 to it.
 
-Two boundaries hold here.  First, the raw record is not the validated numeric record:
-:class:`~powermean.data.inputs.RegressionData` holds finite values only and would refuse
-a row that the accounting excludes first, so it is formed on the retained rows alone.
-Second, the raw weights keep their original objects: a frequency count arrives as the
-Python or NumPy integer that the user gave, in an object array where the column holds
-such objects, and is never converted to a double before the exact check of
-:class:`~powermean.data.weights.ObservationWeights` on the retained rows.  A ``2**53 +
-1`` on a row that the subset excludes is therefore never seen by that check, and the
-same count on a retained row is still refused.  A list of Python numbers is kept as the
-objects given, never inferred into a narrower type: ``[2**53 + 1, 0.0]`` would otherwise
-become doubles, and the first count would round to ``2**53`` before any check could see
-it.
+Two boundaries of the design hold here.  First, the raw record is not the validated
+numeric record of task M0.19: :class:`~powermean.data.inputs.RegressionData` holds
+finite values only and would refuse a row that the accounting excludes first, so it is
+formed on the retained rows alone.  Second, the raw weights keep their original
+objects: a frequency count arrives as the Python or NumPy integer that the user gave,
+in an object array where the column holds such objects, and is never converted to a
+double before the exact check of :class:`~powermean.data.weights.ObservationWeights`
+on the retained rows.  A ``2**53 + 1`` on a row that the subset excludes is therefore
+never seen by that check, and the same count on a retained row is still refused.  A
+list of Python numbers is kept as the objects given, never inferred into a narrower
+type: ``[2**53 + 1, 0.0]`` would otherwise become doubles, and the first count would
+round to ``2**53`` before any check could see it.
 
 Ownership (:class:`Column`).  A plain array (integers, doubles, Booleans, strings,
-dates) is kept in immutable bytes of its own, :func:`powermean.model.rows._immutable`
-for doubles and the same bytes with their own type otherwise, which NumPy refuses to
-make writable again.  An object array has no plain bytes, and any holder of an array
-that owns its memory can set its write flag again; and its elements are objects, which a
-caller can change in place where they are mutable (a label that is an instance of a
-class of the caller, say), through the object given or through one handed out.  So an
-object column keeps its own copies of the elements (:func:`_owned_objects`: an element
-of an immutable built-in type as it is, every other element its ``copy.deepcopy``, with
-one memo for the column, so that an object that occurs twice is one copy that occurs
-twice), and every access, through :attr:`Column.values`, :attr:`Column.stored` or a
-selection, forms a fresh read-only array, or tuple, of fresh copies of them.  An array
-or an element that a caller got and changed is the caller's own: the record is
-unchanged, and so is every record derived from it.  A later change of the caller's
-input, of an array or of an element, reaches no record either.  What is kept is the type
-and the value of each element, and the equivalences within a column; not the identity of
-the caller's objects.  Booleans are not weights (the exact-count check refuses them, and
-R and Stata take numeric weights only), and neither are strings, dates or complex
-values.
+dates) is kept in immutable bytes of its own, the accepted
+:func:`powermean.model.rows._immutable` for doubles and the same bytes with their own
+type otherwise, which NumPy refuses to make writable again.  An object array has no
+plain bytes, and any holder of an array that owns its memory can set its write flag
+again; and its elements are objects, which a caller can change in place where they are
+mutable (a label that is an instance of a class of the caller, say), through the
+object given or through one handed out.  So an object column keeps its own copies of
+the elements (:func:`_owned_objects`: an element of an immutable built-in type as it
+is, every other element its ``copy.deepcopy``, with one memo for the column, so that an
+object that occurs twice is one copy that occurs twice), and every access, through
+:attr:`Column.values`, :attr:`Column.stored` or a selection, forms a fresh read-only
+array, or tuple, of fresh copies of them.  An array or an element that a caller got
+and changed is the caller's own: the record is unchanged, and so is every record
+derived from it.  A later change of the caller's input, of an array or of an element,
+reaches no record either.  What is kept is the type and the value of each element, and
+the equivalences within a column; not the identity of the caller's objects.  Booleans
+are not weights (the exact-count check of S7 refuses them, and R and Stata take
+numeric weights only), and neither are strings, dates or complex values.
 """
 
 from __future__ import annotations
@@ -295,12 +296,8 @@ class _OwnedMapping[V](Mapping[str, V]):
     current data and this object is its one projection: every read through it (an
     item, the names, the length, the key, item and value views, equality, a copy, the
     reversed names) is a read of that ``dict`` and of nothing else; a caller cannot set
-    or delete an item, nor rebind the ``dict`` through an attribute.  The private
-    per-fit snapshot (:mod:`powermean.results.primitive_snapshot`) reads the carried
-    ``dict`` after checking its exact type and the exact type of every key and value,
-    and infers nothing from the identity of this object or of the ``dict``: a mapping
-    of any other class in a record's field, or another object in the place of the
-    ``dict``, is refused unread and read by the general route as it always was.
+    or delete an item, nor rebind the ``dict`` through an attribute. The private
+    preparation checks for a passive exact dictionary before reading its contents.
 
     Mapping operations retain the previous ``mappingproxy`` dispatch, including
     caller hooks in comparisons, unions and key lookups. The temporary proxies

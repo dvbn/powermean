@@ -29,6 +29,7 @@ from powermean.results.cancelled_provenance import (
 )
 from powermean.results.owned import _owned_attempt, owned_array
 from powermean.results.wz_bias import WZBias
+from powermean.solve.cancelled_existence import Existence
 from powermean.solve.cancelled_operator import AttemptBounds
 from powermean.solve.cancelled_records import (
     CancelledCertificate,
@@ -49,6 +50,7 @@ from powermean.systems.cancelled import CancelledAccounting
 from powermean.systems.identified import IdentifiedState
 
 if TYPE_CHECKING:
+    from powermean.results.retained_hc_records import RetainedHC
     from powermean.results.retained_inference import InferenceRequest, RetainedInference
 
 
@@ -61,6 +63,12 @@ class CancelledReporting:
     user_labels: ArrayLike
     cancelled_name: str = "cancelled"
     retained_names: tuple[str, ...] = ()
+
+
+# The refusal of a cancelled geometry that identifies no slope (every regressor is
+# collinear with the fixed effects).  The public dispatch answers it with the joint
+# route's fit of the same call, which estimates the effects alone.
+NO_RETAINED_SLOPE = "inference without a retained slope"
 
 
 def prepare_cancelled_reporting(
@@ -77,7 +85,7 @@ def prepare_cancelled_reporting(
             "nonzero omega and one original-column scale per slope required"
         )
     if geometry.n_slopes_identified == 0:
-        raise unavailable("inference without a retained slope")
+        raise unavailable(NO_RETAINED_SLOPE)
     block_names = (reporting.cancelled_name, *reporting.retained_names)
     if (
         type(reporting.retained_names) is not tuple
@@ -136,6 +144,7 @@ class RetainedCancelledEnvelope(BuilderRecord):
         "_capture",
         "_certificate",
         "_full_scales",
+        "_hc",
         "_history",
         "_inference_bounds",
         "_initial",
@@ -157,6 +166,7 @@ class RetainedCancelledEnvelope(BuilderRecord):
         "cancelled_name",
         "continuation_used",
         "executed_variance",
+        "existence",
         "geometry",
         "keep_influence",
         "merit_metric",
@@ -211,10 +221,15 @@ class RetainedCancelledEnvelope(BuilderRecord):
     _attempts: Attempts | None
     _request: InferenceRequest
     _initial: RetainedInference | None
+    _hc: RetainedHC | None
     _capture: CapturedFit | None
     _state: IdentifiedState | None
     _rhs: FloatStorage | None
     _wz_bias: WZBias | None
+    # tau = 2 after a solve that does not certify (owner's ruling 71,
+    # solve.cancelled_existence): "finite_root", "no_finite_root" or "undecided";
+    # None where the test did not run.
+    existence: Existence | None
 
     @property
     def root_options(self) -> RootOptions | None:
@@ -240,6 +255,18 @@ class RetainedCancelledEnvelope(BuilderRecord):
         return None if value is None else detached_tau1(value)
 
     @property
+    def has_evaluated_point(self) -> bool:
+        """Whether the retained solve has an evaluated point for reporting."""
+        trace = self._tau1_result
+        if trace is None:
+            return True
+        candidate = trace.candidate
+        return (
+            candidate is not None
+            and candidate.attempts[candidate.retained].point is not None
+        )
+
+    @property
     def equation(self) -> str:
         """Exact equation, normalization and statistical-multiplier provenance."""
         var_label = (
@@ -248,9 +275,7 @@ class RetainedCancelledEnvelope(BuilderRecord):
             and self.executed_variance.tau == 2.0
             else repr(self.executed_variance)
         )
-        return (
-            f"cancelled sum moments; H=-dS/dtheta'; {var_label}; unit multipliers"
-        )
+        return f"cancelled sum moments; H=-dS/dtheta'; {var_label}; unit multipliers"
 
     @property
     def column_scales(self) -> FloatArray:
@@ -294,6 +319,11 @@ class RetainedCancelledEnvelope(BuilderRecord):
         return detached_certificate(self._certificate)
 
     @property
+    def score_metric(self) -> str:
+        """The metric of the retained certificate's scaled score, without a copy."""
+        return self._certificate.measures.score_metric
+
+    @property
     def history(self) -> tuple[CancelledCertificate, ...]:
         """Every fresh retry assessment, followed by the fresh selected certificate."""
         return tuple(detached_certificate(item) for item in self._history)
@@ -316,6 +346,16 @@ class RetainedCancelledEnvelope(BuilderRecord):
     def initial_scale(self) -> RetainedInference | None:
         """Common inference record, withheld on failed fits, detached outward."""
         return copy.deepcopy(self._initial) if self.accepted else None
+
+    @property
+    def initial_hc(self) -> RetainedHC | None:
+        """The named HC covariance requested with the fit, at its accepted point.
+
+        ``None`` for a fit without such a request or without a certified point.  The
+        solve read the fit's own one-way scale (``initial_scale``), as the fit
+        without ``vcov`` does; this record is evaluated once, at the final point.
+        """
+        return copy.deepcopy(self._hc) if self.accepted else None
 
     @property
     def inference_diagnostics(self) -> RetainedInference | None:
@@ -360,8 +400,14 @@ class RetainedCancelledEnvelope(BuilderRecord):
         return self._order.coefficients(self._point.view()[:k])
 
     def retained_effects(self) -> FloatArray:
-        """Estimated retained effects under actual T normalization, in block order."""
-        full = self.geometry.expand(self._point.view())[self.geometry.n_slopes_full :]
+        """Estimated retained effects, orthogonal to the null space, in block order.
+
+        That is the normalization of a spectral T, and the one taken on a selection
+        (:meth:`NumericalGeometry.normalized_full`).
+        """
+        full = self.geometry.normalized_full(self._point.view())[
+            self.geometry.n_slopes_full :
+        ]
         if full.size == 0:
             return owned_array(full)
         return OrderScale(self._order.omega, np.ones(full.size)).coefficients(full)

@@ -1,10 +1,11 @@
 """Robust and one-way cluster covariances with the factors of the ``"stata"`` preset.
 
-This module provides the robust estimator and one cluster dimension, with the factors
-of the ``"stata"`` convention and the normal reference.  Multiway clustering, the
-other presets, the expected bread and the eigenvalue adjustment of an indefinite
-estimate are not in this module; the primitives of :mod:`powermean.inference.vcov`
-keep their own conventions, which are not these.
+``design/04_inference_and_effects.md``, Sections 2, 2.2 and 3; ``DESIGN.md``, Section
+8; decisions D41, D49, D51 and D54.  The first milestone exposes the robust estimator
+and one cluster dimension, with the factors of the ``"stata"`` convention and the
+normal reference.  Multiway clustering, the other presets, the expected bread and the
+eigenvalue adjustment of an indefinite estimate arrive at M1; the primitives of
+:mod:`powermean.inference.vcov` keep their own conventions, which are not these.
 
 From an :class:`~powermean.inference.contributions.Influence` record, with the map
 ``A = C^-1`` and the contributions ``s_i`` of its ``m`` rows of positive weight:
@@ -13,7 +14,7 @@ From an :class:`~powermean.inference.contributions.Influence` record, with the m
     one-way    V = G/(G - 1) sum_g U_g U_g'        U_g = sum_{i in g} A s_i
     reference  normal
 
-Weights.  Analytic and probability weights multiply the
+Weights (file 04, Section 2.2).  Analytic and probability weights multiply the
 contributions, ``s_i = a_i r_i x_i``, so the robust meat is
 ``sum_i a_i^2 r_i^2 x_i x_i'``.  Frequency weights are replicated rows: each replicate
 is a sampling unit of the robust meat, ``sum_i f_i r_i^2 x_i x_i'``, so the
@@ -32,11 +33,11 @@ halving being exact in binary, and whose zero row adds nothing: the estimate is
 ``u_1 u_1'`` bit for bit.  ``N`` is never a divisor of the stored rows.  An influence
 ``m u_i`` beyond the doubles raises ``FloatingPointError``; nothing is rescaled.
 
-Factors.  Robust: ``N/(N - 1)``, ``N`` the count of the record
+Factors (file 04, Section 3).  Robust: ``N/(N - 1)``, ``N`` the count of the record
 (the total frequency count, else the number of rows of positive weight), never
 ``N/(N - K)``; ``N < 2`` is refused.  One-way: ``G/(G - 1)``, ``G`` the clusters of
 the rows of positive weight.  Each estimate is the primitive's ``HC0`` or uncorrected
-one-way covariance, its symmetric part formed, then multiplied once by
+one-way covariance, its symmetric part formed as D54 requires, then multiplied once by
 the factor, so that the covariance stays exactly symmetric.  The primitive's estimate
 is kept (``Covariance.estimate``): its unscaled covariance, components, eigenvalues and
 diagnostics, which a positive factor does not change, and its
@@ -49,16 +50,16 @@ Cluster codes.  :class:`ClusterCodes` holds one named dimension with one integer
 per input row of the system (``units.nobs`` codes, rows of zero weight included, in
 their order).  Only the codes of the rows of positive weight are read, at their
 positions ``units.identifiers``: a row of zero weight enters no alignment, cluster or
-count.  They are checked before any arithmetic, as the primitive checks them: a
+count.  They are checked before any arithmetic, as the primitive checks them (D40): a
 NumPy array of integers, one per input row; a negative code on a row of positive
 weight is a missing label and is refused, as are fewer than two clusters.  Nothing is
 coerced or reordered.
 
 Reported scale.  :func:`reported_covariance` maps the covariance ``V`` of ``gamma`` to
 ``M V M'`` for a matrix ``M`` that the caller supplies, the identity by default (the
-order layer supplies its own), keeps its symmetric part, rounded once
+order layer of task M0.17 supplies its own), keeps its symmetric part, rounded once
 per entry, and forms the standard errors ``sqrt(diag(M V M'))``.  A zero variance gives
-a zero standard error, which the certificate flags as degenerate inference; a
+a zero standard error, which the certificate flags as degenerate inference (D49); a
 negative variance gives a missing one (NaN), never zero, which passes no gate.
 """
 
@@ -131,7 +132,7 @@ class ClusterCodes:
 
 @dataclass(frozen=True, eq=False)
 class Covariance:
-    """A covariance of ``gamma`` under the ``"stata"`` convention.
+    """A covariance of ``gamma`` under the ``"stata"`` convention of milestone M0.
 
     Attributes
     ----------
@@ -249,7 +250,8 @@ def _active_codes(cluster: ClusterCodes, units: SamplingUnits) -> IntegerArray:
     codes: IntegerArray = cluster.codes[units.identifiers]
     if np.any(codes < 0):
         raise ValueError(f"cluster dimension {name!r} contains missing labels")
-    if np.unique(codes).size < 2:
+    # Two distinct codes exist exactly when a code differs from the first one.
+    if not codes.size or not bool((codes != codes[0]).any()):
         raise ValueError(
             f"cluster dimension {name!r} must contain at least two clusters"
         )

@@ -1,17 +1,20 @@
 """The profiled joint system with absorbed effects: problem, points, equations, Schur.
 
-The profiled organization: every block is profiled at the slopes, the gradient
-``X'r`` is taken at the profiled effects, and the Newton system is formed by weighted
-absorption of the regressors with the curvature weights.  The controls are taken here
-as explicit primitive arguments and never chosen.  The organization covers any number
-of blocks, NB2, weights and offsets, with no two-block restriction, coefficient-only
-cache, roundoff allowance or broad exception catch.  This module is internal:
-``powermean`` exports nothing of it.
+``design/02_computation.md``, Section 5.2 (the profiled organization: every block
+profiled at the slopes, the gradient ``X'r`` at the profiled effects, the Newton system
+by weighted absorption of the regressors with the curvature weights) and Section 5.7
+(the controls, taken here as explicit primitive arguments and never chosen);
+``design/01_statistical_core.md``, Sections 3.1, 4.1 and 5.1;
+``design/06_reuse_map.md``, ``fe/profile`` (S1 ``fe_direct.ProfileLinearLoss``,
+ADAPTED: any number of blocks, NB2, weights and offsets; its two-block restriction,
+coefficient-only cache, roundoff allowance and broad catches are not taken); the M1.11
+contract and its conditional outline, Section 3.  Task M1.11, private: ``powermean``
+exports nothing of it.
 
-Notation.  ``z = Y^omega >= 0`` is the transformed outcome, ``X`` the active scaled
-slopes (``n`` by ``K``, ``K >= 0``) of coordinates ``theta``, ``o`` the transformed
-offset (``omega`` times the offset), ``a > 0`` the raw observation weights of total
-``A``, and the blocks those of the grouping.  At the slopes ``theta``:
+Notation of file 01.  ``z = Y^omega >= 0`` is the transformed outcome, ``X`` the
+active scaled slopes (``n`` by ``K``, ``K >= 0``) of coordinates ``theta``, ``o`` the
+transformed offset (``omega`` times the offset), ``a > 0`` the raw observation weights
+of total ``A``, and the blocks those of the accepted grouping.  At the slopes ``theta``:
 
     base             b = X theta + o                    the offset enters once
     profiled index   q = b + sum_k alpha_k[c_k]           every block profiled
@@ -20,7 +23,7 @@ offset (``omega`` times the offset), ``a > 0`` the raw observation weights of to
     direction        X~: X absorbed with the weights a c (observed) or a w
                      (expected), and the K-by-K matrix X~' diag(a c) X~ (or a w)
 
-The profile routine is used unchanged: :func:`profile` for the power
+The profile is the accepted M1.5/M1.6 routine, unchanged: :func:`profile` for the power
 family and :func:`profile_nb2` for NB2, each from a recorded starting state, at the
 requested tolerance and sweep budget, returning ``converged``, ``budget`` or ``range``
 with its work.  The criterion and gradient are formed in the order of operations of the
@@ -28,15 +31,15 @@ carried ``LinearModelLoss`` (the weight times the row term, the sum or the divis
 the weight total, then ``X'``), so that they reproduce the values of the solver's
 pointwise loss at the same index.  The expected curvature changes the direction only:
 the criterion, the true gradient and the profile equations are the same for both.  The
-weighted absorption is the projection of :mod:`powermean.fe.absorb`, from a cold
-start unless a direction hands :func:`_absorb_slopes` its warm slope state; a level
+weighted absorption is the accepted M1.4 projection, from a cold start unless a
+direction hands :func:`_absorb_slopes` its warm slope state; a level
 of a block whose curvature total is not finite and positive has no Newton system and
 refuses with ``FloatingPointError``: no floor, ridge or individual curvature division
 (a zero row at ``tau = 2`` legitimately has no curvature; its level keeps a positive
 total through its positive rows).  Nothing is cached; a changed outcome, weight, base or
 control is a new evaluation.
 
-A completed absorption is kept whatever follows: when its Schur matrix is
+A completed absorption is kept whatever follows (correction A): when its Schur matrix is
 not representable, :func:`absorb_slopes` returns the absorption's own record with no
 matrix and the range failure named, so that the work and status of the absorber survive
 the refusal; :func:`absorb_design` refuses as before.  No scaled substitute, clipping or
@@ -52,36 +55,46 @@ tolerance.  The public :func:`absorb_slopes` and :func:`absorb_design` stay cold
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import numpy as np
 from numpy.typing import ArrayLike
 
+from powermean.data.numeric_fit import NumericFit
 from powermean.fe.absorb import AbsorptionResult, AbsorptionState, absorb
 from powermean.fe.absorb_numeric import (
     PreparedWeights,
     _from_checked_weights,
     group_sums,
-    prepare_weights,
+)
+from powermean.fe.absorb_numeric import (
+    prepare_weights as _prepare_profile_weights,
 )
 from powermean.fe.groups import Grouping
-from powermean.fe.profile import ProfileResult, ProfileState, profile
+from powermean.fe.profile import ProfileResult, ProfileState
+from powermean.fe.profile import profile as _power_profile
 from powermean.fe.profile_arithmetic import (
     ProfileProblem,
     _cached_criterion,
     _cached_rows,
     prepare_profile,
 )
-from powermean.fe.profile_nb2 import ScalarWork, prepare_profile_nb2, profile_nb2
+from powermean.fe.profile_nb2 import ScalarWork, prepare_profile_nb2
+from powermean.fe.profile_nb2 import profile_nb2 as _nb2_profile
 from powermean.fe.reductions import immutable_array
 from powermean.model.rows import evaluate_criterion, evaluate_rows
-from powermean.data.numeric_fit import NumericFit
 from powermean.model.variance import FloatArray, NB2Variance, PowerVariance
 
 Family = PowerVariance | NB2Variance
 SCOPE = "the profiled solver covers PowerVariance with 1 <= tau <= 2 and NB2Variance"
 SLOPES = "theta must hold one finite value per slope column"
 SCHUR = "the Schur matrix is not representable in float64"
+
+# The conditional optimizer reads the live bindings at their original locations.
+prepare_weights = _prepare_profile_weights
+profile = _power_profile
+profile_nb2 = _nb2_profile
 
 _ACCEPTED_PREPARE_PROFILE = prepare_profile
 _ACCEPTED_PREPARE_NB2 = prepare_profile_nb2
@@ -127,7 +140,7 @@ class ProfiledProblem:
     weights : array of float
         The raw observation weights ``a``, finite and positive, one per row.
     grouping : Grouping
-        The blocks of the rows.
+        The accepted blocks of the rows.
     variance : PowerVariance or NB2Variance
         ``tau`` in ``[1, 2]``, or NB2: the convex scope of the solver.
     columns : tuple of str
@@ -136,9 +149,9 @@ class ProfiledProblem:
     Notes
     -----
     The arrays are stored as owned read-only copies.  Every level of every block must
-    hold a row of positive outcome, which the sample construction guarantees; the
-    profile factory checks it here, once, and refuses otherwise with ``ValueError``,
-    as it refuses malformed arrays.
+    hold a row of positive outcome, which the sample construction guarantees (decision
+    D14); the accepted profile factory checks it here, once, and refuses otherwise
+    with ``ValueError``, as it refuses malformed arrays.
     """
 
     z: FloatArray
@@ -148,6 +161,9 @@ class ProfiledProblem:
     grouping: Grouping
     variance: Family
     columns: tuple[str, ...]
+
+    if TYPE_CHECKING:
+        _initial: ProfileProblem = field(init=False)
 
     def __post_init__(self) -> None:
         """Check every field and the support of every level; own the arrays."""
@@ -182,15 +198,20 @@ class ProfiledProblem:
 
     @classmethod
     def _from_numeric(cls, numeric: NumericFit, variance: Family) -> ProfiledProblem:
-        """Read one admitted operation's numeric owner; public construction is unchanged."""
-        if not (type(variance) is NB2Variance or
-                (type(variance) is PowerVariance and 1.0 <= variance.tau <= 2.0)):
+        """Read the admitted numeric owner; keep the public constructor unchanged."""
+        if not (
+            type(variance) is NB2Variance
+            or (type(variance) is PowerVariance and 1.0 <= variance.tau <= 2.0)
+        ):
             raise ValueError(SCOPE)
         result = object.__new__(cls)
         for name, value in (
-            ("z", numeric.response), ("design", numeric.design),
-            ("offset", numeric.offset), ("weights", numeric.weights),
-            ("grouping", numeric._grouping), ("variance", variance),
+            ("z", numeric.response),
+            ("design", numeric.design),
+            ("offset", numeric.offset),
+            ("weights", numeric.weights),
+            ("grouping", numeric._grouping),
+            ("variance", variance),
             ("columns", numeric.columns),
         ):
             object.__setattr__(result, name, value)
@@ -205,7 +226,7 @@ class ProfiledProblem:
             object.__setattr__(result, name, getattr(self, name).view())
         for name in ("grouping", "variance", "columns"):
             object.__setattr__(result, name, getattr(self, name))
-        initial: ProfileProblem = getattr(self, "_initial")
+        initial = self._initial
         # A different immutable header guarantees _with_base constructs a new
         # prepared record. Constant family terms may be shared; q-dependent
         # evaluation state is local to this fresh certificate.
@@ -361,9 +382,7 @@ def point_equations(problem: ProfiledProblem, index: ArrayLike) -> PointEquation
     """
     q = _real(index, "index", (problem.n_rows,))
     initial: ProfileProblem | None = (
-        getattr(problem, "_initial", None)
-        if type(problem) is ProfiledProblem
-        else None
+        getattr(problem, "_initial", None) if type(problem) is ProfiledProblem else None
     )
     if (
         initial is not None
@@ -457,7 +476,7 @@ def absorb_slopes(
 ) -> Absorbed:
     """Absorb the slopes with the curvature ``weights``; their Schur matrix if it can.
 
-    The weighted absorption from a cold start.  ``ValueError`` without a slope
+    The accepted M1.4 absorption from a cold start.  ``ValueError`` without a slope
     column; ``FloatingPointError`` for a level without a positive curvature total (no
     absorption ran).  The absorption's statuses and work are returned as they are, and
     kept whatever follows: the matrix is formed only when it converged, and when that
@@ -568,7 +587,7 @@ def absorb_design(
     max_sweeps: int,
     acceleration: bool,
 ) -> Absorbed:
-    """Absorb the slopes with the curvature ``weights`` (cold start).
+    """Absorb the slopes with the curvature ``weights`` (accepted M1.4, cold start).
 
     ``ValueError`` without a slope column; ``FloatingPointError`` for a level without a
     positive curvature total (no absorption ran) and for a Schur matrix that is not

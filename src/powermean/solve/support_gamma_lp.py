@@ -1,11 +1,16 @@
 """The two bounded linear programs of the GPML recession diagnostic.
 
-At joint ``tau = 2``: a linear program, and ``ExistenceError`` with the direction when
-the condition fails.  Internal module.  The programs use largest-magnitude slope
-scales, bounded homogeneous programs and a separate boundary program.
+``design/02_computation.md``, Section 4 (joint ``tau = 2``: a linear program, and
+``ExistenceError`` with the direction when the condition fails);
+``design/06_reuse_map.md``, ``solve/support``; ``plan/evidence/M1.8_contract.txt``,
+Section 2; decision D51.  Task M1.8, private.  An adaptation, not a port, of the two
+GPML programs of S6 ``design/support.py`` (``references/S6_support.py.txt``, lines 86
+to 229): its largest-magnitude slope scales, bounded homogeneous programs and separate
+boundary program are kept; its unweighted positive-row mean, method, tolerances, row
+deduplication and acceptance of ``fun`` are not.
 
-Data (:func:`prepare`).  ``s_j = max_i |X_ij|``, 1 for a zero column, not a power of
-two; ``X / s``; ``rho = (a / max a) / sum(a / max a)`` and ``rhoP``
+Data (:func:`prepare`).  ``s_j = max_i |X_ij|``, 1 for a zero column (S6's scale, not
+M1.7's powers of two); ``X / s``; ``rho = (a / max a) / sum(a / max a)`` and ``rhoP``
 by the same procedure on the rows of ``P = {Z > 0}``.  Every quotient runs with each
 floating-point condition raised (:mod:`powermean.fe.absorb_numeric`): no positive
 weight can vanish, and a lost quotient raises ``FloatingPointError``.  With
@@ -17,7 +22,7 @@ Programs (:func:`call`).  LP1 (``negative``): minimize ``t'v`` subject to
 ``-A_P v <= 0`` and ``-1 <= v <= 1``; LP2 (``zero_sum``): minimize ``-p'v`` under the
 same and ``t'v = 0``.  ``-A_P`` is sparse (CSR), one row per row of ``P``, every
 column; its nonzeros, and LP2's stacked ``[A_P; t']``, are counted before allocation
-and refused above :data:`NONZERO_LIMIT` (an internal resource limit, not a
+and refused above :data:`NONZERO_LIMIT` (S6's guard, a private resource limit, not a
 statement about the memory of HiGHS).  A call is HiGHS dual simplex with the explicit
 options of :class:`~powermean.solve.support_lp.LPControls`.  It is charged before the
 optimizer runs: its :class:`LPReport` is established with the program, the controls and
@@ -31,7 +36,7 @@ missing or not of its genuine type, shape, domain or finiteness is unavailable
 only when no warning was raised, the status is 0, ``success`` is ``True`` and every
 other field is available; otherwise it is ``lp_failure``.  That rule has one
 definition, :func:`usable`, which a result applies again to every report it admits
-whose ``failure`` is empty: an empty ``failure`` alone admits nothing.
+whose ``failure`` is empty (correction B): an empty ``failure`` alone admits nothing.
 
 Raw check (:func:`raw_check`), on a usable point ``v`` before any mapping:
 ``max |v| <= 1 + f`` (``lp_box``); ``min_P (A v) >= -f`` and, in LP2, ``|t'v| <= f``
@@ -70,11 +75,11 @@ from powermean.solve.support_witness import relative
 Stage = Literal["negative", "zero_sum"]
 Marginal = tuple[FloatArray, FloatArray, FloatArray, FloatArray]
 Effects = tuple[FloatArray, ...]
-# The 10,000,000-nonzero guard.
+# S6's 10,000,000-nonzero guard (references/S6_support.py.txt, lines 388 and 481).
 NONZERO_LIMIT = 10_000_000
 # The exception a valid call can raise at run time, read in SciPy's linprog, its
-# HiGHS adapter and wrapper (SciPy 1.17.0 and 1.18.1): an allocation failure
-# (NumPy's, SciPy's sparse conversions', or HiGHS's
+# HiGHS adapter and wrapper (1.17.0 here, the pinned 1.18.1 copy; correction A's
+# record): an allocation failure (NumPy's, SciPy's sparse conversions', or HiGHS's
 # std::bad_alloc through pybind11).  HiGHS returns its errors as a status; the input
 # checks raise TypeError or ValueError only for malformed inputs, which this module
 # never builds, so those and every other exception propagate.
@@ -140,7 +145,6 @@ class Optimize(Protocol):
 
 
 sparse = cast("Sparse", importlib.import_module("scipy.sparse"))
-optimize = cast("Optimize", importlib.import_module("scipy.optimize"))
 
 
 # ---------------------------------------------------------------------------- data
@@ -185,7 +189,7 @@ def normalized(a: FloatArray) -> FloatArray:
 
 
 def scales(design: FloatArray) -> FloatArray:
-    """``s_j = max_i |X_ij|`` per column, 1 for a zero column."""
+    """``s_j = max_i |X_ij|`` per column, 1 for a zero column (S6 ``_check``)."""
     largest = np.max(np.abs(design), axis=0) if design.size else np.zeros(0)
     return immutable_array(np.where(largest == 0, 1.0, largest))
 
@@ -197,6 +201,8 @@ class LPData:
     ``scales`` are ``s`` and ``scaled`` is ``X / s``; ``weights`` is ``rho`` and
     ``positive_weights`` ``rhoP`` (empty without positive rows); ``total`` is ``t`` and
     ``positive_total`` is ``p``, the slopes then every level of every block.
+    ``coordinates`` selects only the LP layout; these full objectives and scales
+    remain available for every original-coordinate identity.
     """
 
     scales: FloatArray
@@ -205,6 +211,7 @@ class LPData:
     positive_weights: FloatArray
     total: FloatArray
     positive_total: FloatArray
+    coordinates: IndexArray | None = None
 
 
 def objective(
@@ -233,25 +240,58 @@ def prepare(problem: GammaProblem) -> LPData:
         rho_p,
         objective(problem, scaled, every, rho),
         objective(problem, scaled, positive, rho_p),
+        problem.coordinates,
     )
 
 
 def stage_objective(data: LPData, stage: Stage) -> FloatArray:
     """``c``: ``t`` for LP1, ``-p`` for LP2."""
-    return data.total if stage == "negative" else immutable_array(-data.positive_total)
+    if data.coordinates is None:
+        return (
+            data.total if stage == "negative" else immutable_array(-data.positive_total)
+        )
+    values = data.total if stage == "negative" else -data.positive_total
+    return immutable_array(values[data.coordinates])
+
+
+def expand(problem: GammaProblem, values: FloatArray) -> FloatArray:
+    """Zero-embed actual LP coefficients or box multipliers in original columns."""
+    if problem.coordinates is None:
+        return values
+    found = np.zeros(problem.n_parameters)
+    found[problem.coordinates] = values
+    return found
+
+
+def _positions(problem: GammaProblem) -> IndexArray:
+    """Original-column to LP-column map, with -1 at every omitted column."""
+    if problem.coordinates is None:
+        return np.arange(problem.n_parameters, dtype=np.intp)
+    found = np.full(problem.n_parameters, -1, dtype=np.intp)
+    found[problem.coordinates] = np.arange(problem.n_coordinates, dtype=np.intp)
+    return found
 
 
 # ---------------------------------------------------------------- resource guard
 
 
 def constraint_nonzeros(problem: GammaProblem) -> int:
-    """The nonzeros of ``A_P``, counted from ``X`` and the blocks, nothing allocated.
+    """The nonzeros of the actual ``A_P``, counted from ``X`` and the blocks.
 
     A nonzero ``X_ij`` stays nonzero in ``X / s`` (an underflowing quotient refuses).
     """
-    per_row = np.count_nonzero(problem.design, axis=1)
-    found = int(per_row[problem.positive].sum())
-    return found + problem.positive.size * problem.n_blocks
+    if problem.coordinates is None:
+        per_row = np.count_nonzero(problem.design, axis=1)
+        found = int(per_row[problem.positive].sum())
+        return found + problem.positive.size * problem.n_blocks
+    positive, positions = problem.positive, _positions(problem)
+    slopes = problem.coordinates[problem.coordinates < problem.n_slopes]
+    found = sum(int(np.count_nonzero(problem.design[positive, j])) for j in slopes)
+    offset = problem.n_slopes
+    for block in () if problem.grouping is None else problem.grouping.blocks:
+        found += int(np.count_nonzero(positions[offset + block.codes[positive]] >= 0))
+        offset += block.n_levels
+    return found
 
 
 def within_limit(nonzeros: int) -> bool:
@@ -262,18 +302,26 @@ def within_limit(nonzeros: int) -> bool:
 def _inequality(problem: GammaProblem, data: LPData) -> SparseMatrix:
     """``-A_P`` in CSR: the nonzero scaled slopes, then ``-1`` at each block's level."""
     positive = problem.positive
-    block = data.scaled[positive]
+    positions = _positions(problem)
+    slopes = np.flatnonzero(positions[: problem.n_slopes] >= 0)
+    block = data.scaled[np.ix_(positive, slopes)]
     r, c = np.nonzero(block)
-    row_parts, column_parts, value_parts = [r], [c], [-block[r, c]]
+    row_parts = [r]
+    column_parts = [positions[slopes[c]]]
+    value_parts = [-block[r, c]]
     offset = problem.n_slopes
     for b in () if problem.grouping is None else problem.grouping.blocks:
-        row_parts.append(np.arange(positive.size))
-        column_parts.append(offset + b.codes[positive])
-        value_parts.append(-np.ones(positive.size))
+        columns = positions[offset + b.codes[positive]]
+        kept = np.flatnonzero(columns >= 0)
+        row_parts.append(kept)
+        column_parts.append(columns[kept])
+        value_parts.append(-np.ones(kept.size))
         offset += b.n_levels
     where = (indices(np.concatenate(row_parts)), indices(np.concatenate(column_parts)))
     values: FloatArray = np.concatenate(value_parts)
-    return sparse.csr_array((values, where), shape=(positive.size, offset))
+    return sparse.csr_array(
+        (values, where), shape=(positive.size, problem.n_coordinates)
+    )
 
 
 # ------------------------------------------------------------------------- calls
@@ -452,16 +500,18 @@ def call(
     optimizer runs.  LP2 needs a nonempty ``P``; the caller checks the nonzeros
     against :data:`NONZERO_LIMIT` before this call allocates its matrices.
     """
-    k = problem.n_parameters
+    k = problem.n_coordinates
     a_ub = _inequality(problem, data) if problem.positive.size else None
     b_ub = None if a_ub is None else np.zeros(problem.positive.size)
     a_eq = b_eq = None
     if stage == "zero_sum":
-        a_eq = sparse.csr_array(np.array(data.total[None, :]), shape=(1, k))
+        total_columns = stage_objective(data, "negative")
+        a_eq = sparse.csr_array(np.array(total_columns[None, :]), shape=(1, k))
         b_eq = np.zeros(1)
     nonzeros = sum(0 if a is None else a.nnz for a in (a_ub, a_eq))
     rows_m = problem.positive.size + (0 if a_eq is None else 1)
     attempt = LPReport(stage, controls, rows_m, nonzeros)
+    optimize = cast("Optimize", importlib.import_module("scipy.optimize"))
     with warnings.catch_warnings(record=True) as found:
         warnings.simplefilter("always")
         try:
@@ -488,6 +538,7 @@ def call(
 
 def split(problem: GammaProblem, v: FloatArray) -> tuple[FloatArray, Effects]:
     """``v`` as slope coordinates and one array per block, copies, in block order."""
+    v = expand(problem, v)
     found, start = [], problem.n_slopes
     for block in () if problem.grouping is None else problem.grouping.blocks:
         found.append(np.array(v[start : start + block.n_levels]))
@@ -564,7 +615,9 @@ def raw_check(
         activity = rows(data.scaled, problem.grouping, slopes, effects)[
             problem.positive
         ]
-        balance = dot(data.total, v) if stage == "zero_sum" else None
+        balance = (
+            dot(stage_objective(data, "negative"), v) if stage == "zero_sum" else None
+        )
         found, scale = dot(c, v), float(total(np.abs(c))[0])
         agreement = ratio(found - fun, scale)
     except FloatingPointError:

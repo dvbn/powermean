@@ -1,9 +1,12 @@
 """Lower original-audit admission and value-binding checks before retained detachment.
 
-A selected-root candidate (:mod:`powermean.solve.absorbed_root`) is re-admitted by its
-reader, its selected root point by its admission, and its convex initializer's own
-audit, where one ran, by the same checks as any convex audit, under the same requested
-covariance.
+``design/02_computation.md``, Section 7; ``plan/evidence/M1.15_contract.txt``, item 9;
+``plan/evidence/M1.15_interfaces.txt``, Section 2.A;
+``plan/evidence/M1.15_revision_B.txt`` (L2, F2); ``brief/layout_C_ownership.txt`` (P15).
+A selected-root candidate (:mod:`powermean.solve.absorbed_root`) is re-admitted by
+its accepted reader, its selected root point by the accepted admission, and its
+convex initializer's own audit, where one ran, by the same checks as any convex
+audit, under the same requested covariance.
 """
 
 from __future__ import annotations
@@ -262,6 +265,7 @@ def _check_scale(
         or meas.correction is None
         or meas.slope_map is None
         or order is None
+        or cert.saturated  # no coefficient gate, no provider call (reported.saturated)
     ):
         if raw_scale is not None or cert.coefficients is not None:
             raise ValueError("unexpected scale or coefficient check on point")
@@ -385,6 +389,10 @@ def _check_certificate(
         if cert is not None:
             raise ValueError("audit.certificate must be None when history has no point")
         return False, None, None
+    if history.route == "linear" and cert is None:
+        # Fixed-effect log-OLS is solved by absorption and holds no certificate
+        # (owner's ruling 52): its history ends "complete" or with a named failure.
+        return False, None, None
     if type(cert) is not FEPointCertificate:
         raise ValueError("a selected point requires its FEPointCertificate")
     if cert.controls != audit.controls:
@@ -463,13 +471,25 @@ def admit_absorbed_graph(
     if type(history.candidate) is AbsorbedRootCandidate:
         root_work, root_steps = bind_root(history.candidate, audit.certificate)
     return _capture_admission(
-        audit, history, (sample, None), has_scale, w_bytes, req_id, keep_influence,
-        prepared, same_preparation, same_outcome_sample, root_work, root_steps,
+        audit,
+        history,
+        (sample, None),
+        has_scale,
+        w_bytes,
+        req_id,
+        keep_influence,
+        prepared,
+        same_preparation,
+        same_outcome_sample,
+        root_work,
+        root_steps,
     )
 
 
 def _consume_fit_audit(
-    audit: CandidateAudit, *, request: CovarianceRequest | None, keep_influence: bool,
+    audit: CandidateAudit,
+    *,
+    keep_influence: bool,
     sample_map: SampleIdentityMap | None = None,
 ) -> AdmittedAbsorbedGraph:
     """Consume a just-produced internal audit, not a public imported graph.
@@ -482,12 +502,16 @@ def _consume_fit_audit(
     history, cert = audit.history, audit.certificate
     sample = history.sample
     scale = None if cert is None else cert._scale
+    w_bytes: bytes | None
     if scale is not None:
         binding = dict(scale.input.binding.items)
-        w_bytes = binding["W"][1]
-        request_id = binding["request"]
+        # These tokens were written by the fit's own scale admission.
+        _, w_bytes = cast("tuple[object, bytes]", binding["W"])
+        request_id = cast("tuple[object, ...]", binding["request"])
     else:
-        slope_map = None if cert is None or cert.measures is None else cert.measures.slope_map
+        slope_map = (
+            None if cert is None or cert.measures is None else cert.measures.slope_map
+        )
         w_bytes = None if slope_map is None else slope_map.tobytes()
         request_id = None
     root_work: AdmissionWork | None = None
@@ -496,8 +520,18 @@ def _consume_fit_audit(
         root_work, root_steps = bind_root(history.candidate, cert)
     snapshot = None if sample_map is None else sample_map._owned_snapshot(sample)
     return _capture_admission(
-        audit, history, (sample, snapshot), scale is not None, w_bytes, request_id,
-        keep_influence, None, None, False, root_work, root_steps,
+        audit,
+        history,
+        (sample, snapshot),
+        scale is not None,
+        w_bytes,
+        request_id,
+        keep_influence,
+        None,
+        None,
+        False,
+        root_work,
+        root_steps,
     )
 
 
@@ -518,16 +552,18 @@ def _capture_admission(
     """Build the same detached finite receipt from already admitted values."""
     sample, snapshot = sample_parts
     cert = audit.certificate
-    pt = None if cert is None else cert.point
+    pt = history.point if cert is None else cert.point
     var_name = None if history.variance is None else type(history.variance).__name__
     route: AbsorbedRoute = history.route
     n_kept = None if cert is None else cert.basis.n_kept
     fp = sample_fingerprint(sample.data) if snapshot is None else snapshot.fingerprint
     sp = prepared is not None if same_preparation is None else bool(same_preparation)
+    # A linear point without certificate names its fitted index ``index``.
+    q = None if pt is None else getattr(pt, "q", getattr(pt, "index", None))
     vb = (
         (None, None, None)
-        if pt is None
-        else (pt.theta.tobytes(), pt.base.tobytes(), pt.q.tobytes())
+        if pt is None or q is None
+        else (pt.theta.tobytes(), pt.base.tobytes(), q.tobytes())
     )
     return AdmittedAbsorbedGraph(
         audit,

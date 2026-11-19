@@ -1,11 +1,15 @@
 """The local automatic start of the fitted-index route: one block, no slope, PPML.
 
-The convex start is ``log(mean Z)``, zero slopes and effects from one profile sweep.
-Internal module: ``powermean`` exports nothing of it.  An adaptation of the analytic
-block formula: Blanchard, Higham and Higham (IMA J. Numer. Anal. 41, 2021, Sections 1
-and 2) and SciPy v1.16.2 ``scipy/special/_logsumexp.py`` support evaluating it from
-shifted components and supply no error bound for it.  No code is copied; every
-profiler and reduction of the package is unchanged.
+``design/02_computation.md``, Section 5.2 (local automatic initialization, decision
+D75) and Section 6 (the convex start: ``log(mean Z)``, zero slopes, effects from one
+profile sweep); ``design/06_reuse_map.md``, X4 and the row ``solve/absorbed_start``; the
+correction-B record ``plan/evidence/M1.12_revision_B.txt`` with its two prospective
+reviews; decisions D51 and D75.  Task M1.12, correction B, private: ``powermean``
+exports nothing of it.  New code, a labeled ADAPTATION of the accepted analytic block
+formula and not a source port: X4 (Blanchard, Higham and Higham, IMA J. Numer. Anal.
+41, 2021, Sections 1 and 2; SciPy v1.16.2 ``scipy/special/_logsumexp.py``) supports
+evaluating it from shifted components and supplies no error bound for it.  No code is
+copied; every accepted profiler, reduction and source-verification byte is unchanged.
 
 The domain (:func:`applies`).  Only the automatic first attempt (``attempt == 0``) of a
 problem with exactly one fixed-effect block, no retained slope column and the exact
@@ -42,8 +46,8 @@ smaller shifted exponential that underflows to zero, or a finite negative differ
 that overflows to ``-inf``, is a vanishing tail and permitted.  No exponential of a log
 sum, no raw sum of ``a z`` or of ``a exp(b)``, no ``log1p`` branch, constant, clamp,
 zero detector, threshold or second arithmetic path.  Rounding of the logs, exponentials,
-sums, quotient and final cancellation remains: no correctly rounded, error-bounded
-or convergence guarantee is claimed.
+sums, quotient and final cancellation remains: no correctly rounded, error-bounded,
+strict-R1 or convergence guarantee is claimed.
 
 The procedure (:func:`local_start`), from the caller's requested start (the plain
 unweighted ``log(mean z)`` in every level, formed and guarded before):
@@ -111,7 +115,7 @@ IMPLEMENTATION = (
     "absorbed_start.local_start: one-block replacement at the base from paired "
     "max-shifted sums"
 )
-# The one sweep of the default convex start.
+# The one sweep of the default convex start (design/02, Section 6).
 INITIAL_SWEEPS = 1
 DOMAIN = (
     "the local start covers the first attempt with one block, no slope column and "
@@ -213,7 +217,7 @@ def replacement(numerator: Components, denominator: Components) -> FloatArray:
 
 @dataclass(frozen=True, eq=False)
 class LocalInitializer:
-    """The outcome of the local automatic start, whatever its status.
+    """The outcome of the local automatic start, whatever its status (decision D75).
 
     Attributes
     ----------

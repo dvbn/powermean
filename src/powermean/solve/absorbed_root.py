@@ -1,13 +1,14 @@
 """The joint system with absorbed effects outside ``tau in [1, 2]``: sparse root Newton.
 
-Root Newton: the actual Jacobian by equilibrated LU with its reciprocal condition
-recorded, the merit ``S' M^-1 S / 2`` with a fixed positive-definite ``M``, Armijo on
-differences, native stops, then the certificate.  A joint fit outside ``[1, 2]`` starts
-from the certified solution at the nearer of ``tau = 1`` and ``tau = 2``, with the
-continuation as fallback, and its result is a selected local root, certified as a
-regular root, not as unique.  The nearest convex start is PPML below 1 and Gamma above
-2, on the same sample and formulation; the cancelled and mixed Gamma start is
-unchanged, and caller starts are kept.  The analogue with absorbed
+``design/02_computation.md``, Sections 5.3 (root Newton: the actual Jacobian by
+equilibrated LU with its reciprocal condition recorded, the merit ``S' M^-1 S / 2``
+with a fixed positive-definite ``M``, Armijo on differences, native stops, then the
+certificate), 5.7, 6 ("Joint outside [1,2]: the certified solution at the nearer of
+tau = 1 and tau = 2"; the continuation fallback) and 7; ``DESIGN.md``, Sections 3.4 (a
+selected local root, certified as a regular root, not as unique), 6.2 and 6.3;
+decisions D51 and D57; the human approval of 31 October 2026 of the nearest convex
+start (PPML below 1, Gamma above 2, on the same sample and formulation; the cancelled
+and mixed Gamma start unchanged; caller starts kept).  The analogue with absorbed
 effects of :mod:`powermean.solve.joint_root`; the convex solvers, their starts,
 options and certificate are unchanged and never see a variance outside ``[1, 2]``.
 
@@ -21,7 +22,7 @@ matrix is formed.  A point ``gamma = [theta, alpha]`` is a
 :func:`~powermean.fe.profile_arithmetic.reconstruct_index`, which the point's
 admission repeats and compares bit for bit).  At a stage variance its fresh rows are
 ``b = a r`` and ``C = a c`` with the OBSERVED curvature of the accepted row kernel,
-signed, and its moment is the raw ``S = B'b``
+signed (decision D57), and its moment is the raw ``S = B'b``
 (:func:`~powermean.solve.absorbed_certificate_geometry.moment`).
 
 The steps of :func:`solve_absorbed_root`, in order:
@@ -96,7 +97,12 @@ from powermean.fe.certificate_basis import CertificateBasis, embed, owned_basis
 from powermean.fe.certificate_coordinates import coordinates
 from powermean.fe.reductions import immutable_array
 from powermean.model.rows import evaluate_rows
-from powermean.model.variance import CancelledFamily, FloatArray, PowerVariance
+from powermean.model.variance import (
+    CancelledFamily,
+    FloatArray,
+    PowerVariance,
+    score_unit,
+)
 from powermean.solve.absorbed_certificate import (
     CandidateAudit,
     FEPointCertificate,
@@ -141,7 +147,7 @@ from powermean.solve.cancelled_records import MeritMetric, RootOptions
 from powermean.solve.certificate import outside_convex
 from powermean.solve.factorization import SingularJacobianError
 from powermean.solve.joint_root import GAMMA, NOT_ROOT, nearest_convex
-from powermean.solve.absorbed import AbsorbedOptions
+from powermean.solve.m1_options import AbsorbedOptions
 from powermean.solve.newton_absorbed import IndexCandidate
 from powermean.solve.newton_profiled import ProfiledCandidate
 from powermean.solve.newton_trace import NativeReason, Timing
@@ -498,7 +504,7 @@ Certified = FEPointCertificate | _Unformed
 
 
 def stage_status(certified: Certified, native: NativeReason) -> Status:
-    """The status of a stage point.
+    """The status of a stage point by the accepted table (design 02, Section 7).
 
     The certificate's level, then the gates that describe the point (``nonfinite``
     for an evaluation that is not formed, ``singular_system`` for a failed curvature
@@ -779,6 +785,11 @@ def _root(
     assert start is not None
     options = fit.options
     certifier = _StageCertifier(fit, merit)
+    response, weights = fit.sample.problem.response, fit.sample.data.weight_values
+
+    def unit(variance: CancelledFamily) -> float:
+        return score_unit(response, weights, variance)
+
     kernel: RootKernel[_State] = RootKernel(
         _equations(fit),
         _direction(fit),
@@ -787,6 +798,8 @@ def _root(
         fit.root_options,
         RootBudget(max(0, options.max_evaluations - initializer.evaluations)),
         fit.work,
+        unit,
+        certified_stop=True,
     )
     iterations = RootBudget(max(0, options.max_iter - initializer.iterations))
     run = RootRun(kernel, iterations, certifier, initializer.certified)

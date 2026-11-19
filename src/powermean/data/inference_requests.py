@@ -1,34 +1,41 @@
 """The canonical records of the expanded covariance requests.
 
-Internal records.  Nothing here parses a ``vcov`` value, reads data, resolves a
-convention or computes: the stages that implement the requests form these records from
-what a caller passes.
+``design/04_inference_and_effects.md``, Sections 2, 2.3 and 5;
+``plan/evidence/M1_contract.txt``, Sections 2 (rule B9), 3.1 and 6(a) to (d);
+decisions D4, D55 and D60 to D65.  Private records of milestone M1, written before the
+requests are implemented.  Nothing in the package builds or reads them yet: the
+interface refuses every request that it refused at the end of milestone M0 (decision
+D41), and :class:`~powermean.data.specs.Inference` stays the record of the covariance
+that a fit computes.  Nothing here parses a ``vcov`` value, reads data, resolves a
+convention or computes; the tasks that implement and expose the requests (M1.16 to
+M1.20, M1.45) form these records from what a caller passes.
 
 ==========================  ======================================================
 :class:`HCRequest`          ``vcov="HC0"`` to ``"HC5"`` and ``"HC4m"``, exact strings
 :class:`ClusterRequest`     cluster dimensions, the multiway form and the ``"psd"``
-                            key, valid on a signed multiway request only
+                            key, valid on a signed multiway request only (6(d))
 :class:`HacRequest`         ``{"hac": time, "unit": ..., "lag": ..., "step": ...}``
 :class:`ConleyRequest`      ``{"conley": [lat, lon], "cutoff": ..., "units": ...,
                             "distance": ..., "pool_times": True}``
 ==========================  ======================================================
 
-The omitted and explicit settings, the value rules and the serialization are those of
-:mod:`powermean.data.request_values`: a setting that a request omits holds
-:data:`~powermean.data.request_values.OMITTED`, ``None`` is never an omission, and
-``from_dict`` reads a mapping only.  Units need an explicit cutoff.  No request record
-has a field ``ssc``: a convention is a keyword of the call, never a key of a covariance
-mapping, and its record,
+The omitted and explicit settings (rule B9), the value rules and the serialization
+are those of :mod:`powermean.data.request_values`: a setting that a request omits
+holds :data:`~powermean.data.request_values.OMITTED`, ``None`` is never an omission,
+and ``from_dict`` reads a mapping only.  Units need an explicit cutoff.  No request
+record has a field ``ssc``: a convention is a keyword of the call, never a key of a
+covariance mapping (6(e)), and its record,
 :class:`~powermean.data.inference_conventions.ConventionValues`, is in
 :mod:`powermean.data.inference_conventions` with the retained declarations.
 
-Not decided here, and left to the stages that compute the requests: whether the data
-hold an integer time on a regular grid, ties or gaps, coordinates in range, enough
-distinct locations, the repeated locations or frequency counts that require
-``pool_times``; the bound of an explicit lag, so that no bound is read from the wording
-of ``specification.hac_lag_too_long``; leverage and residual degrees of freedom; the
-convention in force, its source and the owner of a factor; retained metadata, their
-alignment and missing values.
+Not decided here, and left to the owner tasks: whether the data hold an integer time
+on a regular grid, ties or gaps, coordinates in range, enough distinct locations, the
+repeated locations or frequency counts that require ``pool_times`` (M1.19, M1.20); the
+bound of an explicit lag, pending verification HAC-C (contract, Section 3.4), so that
+no bound is read from the wording of ``specification.hac_lag_too_long``; leverage and
+residual degrees of freedom (M1.18); the convention in force, its source and the owner
+of a factor (M1.16); retained metadata, their alignment and missing values (M1.15,
+M1.45).
 """
 
 from __future__ import annotations
@@ -74,10 +81,10 @@ DISTANCES: tuple[str, ...] = get_args(Distance)
 
 @dataclass(frozen=True)
 class HCRequest:
-    """A named HC covariance: ``vcov="HC0"`` to ``"HC5"`` and ``"HC4m"``.
+    """A named HC covariance: ``vcov="HC0"`` to ``"HC5"`` and ``"HC4m"`` (6(a)).
 
     The method owns its scalar factor and takes the reference distribution of the
-    convention in force; neither is resolved here.
+    convention in force (contract, Section 3.1); neither is resolved here.
 
     Parameters
     ----------
@@ -108,7 +115,7 @@ class HCRequest:
 
 @dataclass(frozen=True)
 class ClusterRequest:
-    """Cluster dimensions, their multiway form and the ``"psd"`` key.
+    """Cluster dimensions, their multiway form and the ``"psd"`` key (6(d)).
 
     Parameters
     ----------
@@ -117,9 +124,10 @@ class ClusterRequest:
         order; a repeated dimension is kept.
     multiway : {"cgm", "ddg"}, optional
         The multiway form; omitted, the signed form ``"cgm"`` with two or more
-        dimensions.
-    psd : {"cgm", "none"}, optional
-        The treatment of an indefinite signed estimate, given for this
+        dimensions (file 04, Section 2).
+    psd : {"cgm", "none", "fixest"}, optional
+        Decision D4's treatment of an indefinite signed estimate (``"fixest"``:
+        ``fixest``'s rule, :mod:`powermean.inference.psd`), given for this
         request; valid on a signed multiway request only: two or more dimensions and
         the signed form.  Omitted, the convention in force decides.
 
@@ -190,21 +198,21 @@ class ClusterRequest:
 
 @dataclass(frozen=True)
 class HacRequest:
-    """A HAC covariance: ``{"hac": time, "unit": ..., "lag": ..., "step": ...}``.
+    """A HAC covariance: ``{"hac": time, "unit": ..., "lag": ..., "step": ...}`` (6(b)).
 
     No kernel, prewhitening or other setting exists: the kernel is Bartlett, without
-    prewhitening.
+    prewhitening (decision D63; contract, Section 3.4).
 
     Parameters
     ----------
     time : str
         The time variable, the key ``"hac"``; that it holds integers on a regular grid
-        is checked on the data when the request is computed.
+        is checked on the data by the owner task.
     unit : str, optional
         The panel unit; omitted, one series.
     lag : int, optional
-        A nonnegative integer, zero included; omitted, the automatic rule
-        selects it.  ``None`` is refused.
+        A nonnegative integer, zero included; omitted, the automatic rule of decision
+        D63 selects it.  ``None`` is refused.
     step : int, optional
         The step of the time grid, a positive integer; omitted, one period.
 
@@ -256,7 +264,7 @@ class HacRequest:
 
 @dataclass(frozen=True)
 class ConleyRequest:
-    """A Conley covariance.
+    """A Conley covariance (6(c)).
 
     ``{"conley": [lat, lon], "cutoff": ..., "units": ..., "distance": ...,
     "pool_times": True}``.
@@ -265,18 +273,18 @@ class ConleyRequest:
     ----------
     latitude, longitude : str
         The two coordinate variables, in degrees, the key ``"conley"`` in that order;
-        their range is checked on the data when the request is computed.
+        their range is checked on the data by the owner task.
     cutoff : float, optional
-        A nonnegative finite number, zero included; omitted, the automatic rule
-        selects it in kilometers.
+        A nonnegative finite number, zero included; omitted, the automatic rule of
+        decision D64 selects it in kilometers.
     units : {"km", "mi"}, optional
         The units of an explicit cutoff; omitted, kilometers.  Refused without a
         cutoff.
     distance : {"triangular", "spherical"}, optional
-        The distance; omitted, triangular.
+        The distance; omitted, triangular (decision D64).
     pool_times : True, optional
-        The confirmation of pooling across times at one location, which
-        is required where a location holds several rows or a frequency
+        The confirmation of pooling across times at one location (decision D62), which
+        the owner task requires where a location holds several rows or a frequency
         count above one; any value other than ``True`` is refused.
 
     Raises

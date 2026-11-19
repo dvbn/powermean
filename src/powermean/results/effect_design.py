@@ -1,9 +1,9 @@
 """Selection and frozen learned-design contrasts for coefficient targets.
 
-A direct level regressor has a constant design derivative only if no other fitted term
-reads it. Interactions, transformations and categorical coding require a full
-learned-design contrast. This module invents no selectors or formula grammar. Internal
-full-row and derivative records support those targets.
+Design/04 Section 9.2: a direct level regressor has a constant design derivative
+only if no other fitted term reads it. Interactions, transformations and categorical
+coding require a full learned-design contrast. This module invents no selectors or
+formula grammar. Private full-row and derivative records support those targets now.
 """
 
 from __future__ import annotations
@@ -88,7 +88,7 @@ def needs_design(term: str) -> SpecificationError:
 
 
 def numeric_contrast(contrast: tuple[float, float] | None) -> tuple[float, float]:
-    """The one-unit default, or an explicit finite numeric (d0,d1)."""
+    """The approved one-unit default, or an explicit finite numeric (d0,d1)."""
     if contrast is None:
         return 0.0, 1.0
     if not isinstance(contrast, tuple) or len(contrast) != 2:

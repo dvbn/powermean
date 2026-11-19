@@ -1,13 +1,14 @@
 """The joint system outside ``tau in [1, 2]``: nearest convex start, then root Newton.
 
-Root Newton: the actual Jacobian by equilibrated LU, the merit ``S' M^-1 S / 2`` with
-a fixed positive-definite ``M``, Armijo on differences, native stops, then the
-certificate.  A joint fit outside ``[1, 2]`` starts from the certified solution at the
-nearer of ``tau = 1`` and ``tau = 2``, with the continuation as fallback, and its result
-is a selected local root, certified as a regular root, not as unique.  The nearest
-convex start is PPML below 1 and Gamma above 2, on the same sample and formulation;
-the cancelled and mixed Gamma start is unchanged, and caller starts are kept.  The
-convex Newton solver, its start, options and certificate are unchanged and
+``design/02_computation.md``, Sections 5.3 (root Newton: the actual Jacobian by
+equilibrated LU, the merit ``S' M^-1 S / 2`` with a fixed positive-definite ``M``,
+Armijo on differences, native stops, then the certificate), 5.7 (its options), 6
+("Joint outside [1,2]: the certified solution at the nearer of tau = 1 and tau = 2";
+the continuation fallback) and 7; ``DESIGN.md``, Sections 3.4 (a selected local root,
+certified as a regular root, not as unique), 6.2 and 6.3; the human approval of 31
+October 2026 of the nearest-convex start (PPML below 1, Gamma above 2, on the same
+sample and formulation; the cancelled and mixed Gamma start unchanged; caller starts
+kept).  The convex Newton solver, its start, options and certificate are unchanged and
 never see a variance outside ``[1, 2]``.
 
 The steps of :func:`solve_joint_root`, in order:
@@ -34,8 +35,8 @@ The steps of :func:`solve_joint_root`, in order:
    :func:`powermean.solve.certificate.certify` on that stage's equation with the fixed
    merit factor.  The continuation leaves from the initializer's own ``tau``.
 4. The conclusion.  The point of the target stage, certified afresh on the target
-   equation, with the status that
-   :func:`powermean.solve.status.compose_status` gives that certificate and the
+   equation, with the status that the accepted rules
+   (:func:`powermean.solve.status.compose_status`) give that certificate and the
    native reason of the retained attempt. Where no root stage opened (the automatic
    initializer was not certified, or the metric could not be factorized) the
    initializer's point is certified on the target equation for diagnosis without the
@@ -69,6 +70,7 @@ from powermean.model.variance import (
     FloatArray,
     PowerVariance,
     _finite_result,
+    score_unit,
 )
 from powermean.solve.assessment import (
     Assessment,
@@ -90,6 +92,7 @@ from powermean.solve.joint_root_records import (
     JointRootCandidate,
     JointRootInitializer,
     JointRootStage,
+    RootConditionEstimate,
     StageSummary,
 )
 from powermean.solve.newton_convex import solve as newton_solve
@@ -110,7 +113,7 @@ from powermean.solve.starts import Start, automatic_start
 from powermean.solve.status import Conclusion, Status, compose_status, conclude
 from powermean.systems.joint import JointSystem, _weighted_moment, _weighted_product
 
-# The nearest convex members of the power family.
+# The nearest convex members of the power family (file 02, Section 6).
 PPML = PowerVariance(1.0)
 GAMMA = PowerVariance(2.0)
 NOT_ROOT = "the joint root solve needs a power variance with tau outside [1, 2]"
@@ -474,8 +477,42 @@ def _without_root(
         work=fit.work.snapshot(),
         timing=fit.timing(),
     )
+    return _root_conclusion(candidate, certificate, ())
+
+
+def _root_conclusion(
+    candidate: JointRootCandidate,
+    certificate: Certificate,
+    stages: tuple[StageOutcome[Certificate], ...],
+) -> Conclusion:
+    """Keep the solve's conditioning diagnostics until its handoff has been bound."""
+    estimates: dict[str | StageSummary, RootConditionEstimate] = {}
+    for key, full in (
+        ("target", certificate),
+        ("initializer", candidate.initializer.certificate),
+    ):
+        if (
+            full is not None
+            and (estimate := RootConditionEstimate.capture(full)) is not None
+        ):
+            estimates[key] = estimate
+    for index, stage in enumerate(stages):
+        if stage.certified is certificate:
+            estimate = estimates.get("target")
+        elif index > 0 or index == candidate.target_stage:
+            # This evaluation will be discarded. It can differ from the full target
+            # certificate if continuation stopped early and the target was rechecked.
+            estimate = RootConditionEstimate.capture(stage.certified, intermediate=True)
+        else:
+            continue
+        if estimate is not None:
+            estimates[candidate.stages[index].summary] = estimate
+    object.__setattr__(candidate, "_condition_estimates", MappingProxyType(estimates))
     return Conclusion(
-        candidate, certificate, reason, joint_root_status(candidate, certificate)
+        candidate,
+        certificate,
+        candidate.reason,
+        joint_root_status(candidate, certificate),
     )
 
 
@@ -511,14 +548,21 @@ def _root(
         merit,
         work,
     )
+    system = fit.system
+
+    def unit(variance: CancelledFamily) -> float:
+        return score_unit(system.active_z, system.active_weights, variance)
+
     kernel = RootKernel(
-        equations_of(fit.system),
-        direction_of(fit.system, options.rcond_min, work),
+        equations_of(system),
+        direction_of(system, options.rcond_min, work),
         _whitener(merit, work),
         options,
         fit.root_options,
         RootBudget(max(0, options.max_evaluations - initializer.evaluations)),
         work,
+        unit,
+        certified_stop=True,
     )
     iterations = RootBudget(max(0, options.max_iter - initializer.iterations))
     run = RootRun(kernel, iterations, certifier, initializer.certified)
@@ -609,6 +653,4 @@ def solve_joint_root(
         work=fit.work.snapshot(),
         timing=fit.timing(),
     )
-    return Conclusion(
-        candidate, certificate, reason, joint_root_status(candidate, certificate)
-    )
+    return _root_conclusion(candidate, certificate, stages)

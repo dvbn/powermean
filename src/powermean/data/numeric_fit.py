@@ -1,9 +1,10 @@
 """Fit-owned numeric rows, independent of preparation and retained object graphs.
 
-This representation is constructed from the already admitted, detached FINAL sample. Its
-buffers and original-row positions serve solve, fresh certification and inference. It
-holds no FESample, dataframe, formula specification, provider or source callback. Public
-constructors and foreign handoffs do not acquire this internal ownership route.
+Design 02, Sections 2, 5.2, 7 and 8: construct this representation from the
+already admitted, detached FINAL sample. Its buffers and original-row positions
+serve solve, fresh certification and inference. It holds no FESample, dataframe,
+formula specification, provider or source callback. Public constructors and
+foreign handoffs do not acquire this internal ownership route.
 """
 
 from __future__ import annotations
@@ -27,8 +28,7 @@ def _immutable_bytes(array: np.ndarray) -> bytes | None:
     owner: object = array
     while type(owner) is np.ndarray:
         owner = owner.base
-    if (type(owner) is bytes and array.flags.c_contiguous
-            and len(owner) == array.nbytes):
+    if type(owner) is bytes and array.flags.c_contiguous and len(owner) == array.nbytes:
         return owner
     return None
 
@@ -54,9 +54,12 @@ def _grouping_headers(source: Grouping) -> Grouping:
     blocks: list[Block] = []
     for block in source.blocks:
         owned = object.__new__(Block)
-        for name, value in (("name", block.name), ("codes", _indices(block.codes).view()),
-                            ("counts", _indices(block.counts).view()),
-                            ("_levels", block._levels)):
+        for name, value in (
+            ("name", block.name),
+            ("codes", _indices(block.codes).view()),
+            ("counts", _indices(block.counts).view()),
+            ("_levels", block._levels),
+        ):
             object.__setattr__(owned, name, value)
         blocks.append(owned)
     result = object.__new__(Grouping)
@@ -91,11 +94,19 @@ class NumericFit:
     @classmethod
     def from_owned_parts(cls, parts: NumericParts) -> NumericFit:
         """Transfer admitted numeric ownership; do not rerun a sample constructor."""
-        return cls(_floats(parts.response), _floats(parts.design),
-                   _floats(parts.offset), _floats(parts.weights),
-                   _indices(parts.positions), _indices(parts.active),
-                   _floats(parts.scale), _grouping_headers(parts.grouping), tuple(parts.columns),
-                   parts.omega, parts.frequency)
+        return cls(
+            _floats(parts.response),
+            _floats(parts.design),
+            _floats(parts.offset),
+            _floats(parts.weights),
+            _indices(parts.positions),
+            _indices(parts.active),
+            _floats(parts.scale),
+            _grouping_headers(parts.grouping),
+            tuple(parts.columns),
+            parts.omega,
+            parts.frequency,
+        )
 
     @property
     def response(self) -> FloatArray:

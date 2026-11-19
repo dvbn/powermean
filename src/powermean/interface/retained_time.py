@@ -1,5 +1,7 @@
 """Exact temporal ordering, inverse permutation, unit boundaries, and spacing evidence.
 
+``design/04_inference_and_effects.md``, Section 2.3; ``plan/evidence/M1_contract.txt``,
+Sections 3.4 and 6(b), (f), (i); decisions D51, D55, D61, D63 and D65.
 :class:`RetainedTimeView` captures the aligned time (and optional panel unit) metadata
 of a retained estimation sample by original row positions:
 
@@ -54,6 +56,8 @@ def _is_missing_metadata(value: object) -> bool:
     """Whether a metadata element is a missing marker or a non-finite float."""
     if value is None or value is pd.NA or value is pd.NaT:
         return True
+    if type(value) is np.longdouble:
+        return not bool(np.isfinite(value))
     if isinstance(value, float | np.floating):
         return not math.isfinite(float(value))
     return isinstance(value, np.datetime64 | np.timedelta64) and bool(np.isnat(value))

@@ -2,7 +2,7 @@
 
     outcome ~ regressors | fixed effects | endogenous ~ instruments
 
-A formula has one to three parts, separated by ``|``.  The
+``DESIGN.md``, Section 4.2.  A formula has one to three parts, separated by ``|``.  The
 first part, ``outcome ~ regressors``, is required: its outcome is one data column,
 written untransformed, and its regressors are Formulaic syntax, passed on as written
 (transformations, categorical expansion, interactions, polynomials and splines;
@@ -11,7 +11,7 @@ terms joined by ``+``, each a name or ``a^b``, the interaction of two classifica
 A part with ``~`` holds the endogenous regressors and the excluded instruments; it is
 the last part, and the second when there are no fixed effects (``y ~ x | d ~ z``).  The
 fixed-effect and instrument parts are parsed as metadata only; nothing here evaluates
-them.
+them, and ``fit`` refuses them until their milestones (decision D41).
 
 Only top-level characters carry this grammar.  A character is at top level when it is
 outside quotes (``'...'`` and ``"..."``), outside backticks (a column name) and outside
@@ -32,13 +32,14 @@ standard library and the foundation only.
 from __future__ import annotations
 
 import keyword
+import re
 from dataclasses import dataclass
 from itertools import pairwise
 
 from powermean.errors import SpecificationError
 from powermean.messages import format_keys
 
-# The four forms of a formula, listed by the error of a malformed formula.
+# The four forms of DESIGN.md, Section 4.2, listed by the error of a malformed formula.
 FORMS: tuple[str, ...] = (
     "outcome ~ regressors",
     "outcome ~ regressors | fixed effects",
@@ -95,7 +96,7 @@ def malformed(formula: str) -> SpecificationError:
 
 
 def parse_formula(formula: str) -> FormulaParts:
-    """Split ``formula`` into its parts.
+    """Split ``formula`` into its parts (``DESIGN.md``, Section 4.2).
 
     Parameters
     ----------
@@ -234,3 +235,65 @@ def _top_level(text: str, formula: str) -> list[bool]:
     if awaited:
         raise malformed(formula)
     return top
+
+
+# A bare name raised to an integer power by ``^`` or ``**``.
+_POWER = re.compile(r"(?<![\w.)\]])([A-Za-z_]\w*)\s*(?:\^|\*\*)\s*(\d+)(?![\w.])")
+
+
+def _outside_calls(text: str) -> str:
+    """``text`` with call arguments, braced code and quoted text (names too) blanked.
+
+    Formulaic evaluates the content of ``{...}`` as Python, so ``{x**2}`` is the
+    square and is not a formula power.
+    """
+    kept: list[str] = []
+    calls = 0  # the open parentheses that belong to a function call
+    opened: list[bool] = []  # per open parenthesis, whether it is a call
+    braces = 0  # the open braces of Python code
+    quote = ""
+    previous = ""
+    for char in text:
+        if quote:
+            keep = False
+            quote = "" if char == quote else quote
+        elif char in _QUOTES:
+            quote, keep = char, False
+        elif char == "{":
+            braces += 1
+            keep = False
+        elif char == "}" and braces:
+            braces -= 1
+            keep = False
+        elif braces:
+            keep = False
+        elif char == "(":
+            keep = not calls
+            opened.append(previous.isalnum() or previous in ("_", ".", "`"))
+            calls += opened[-1]
+        elif char == ")" and opened:
+            calls -= opened.pop()
+            keep = not calls
+        else:
+            keep = not calls
+        kept.append(char if keep else " ")
+        previous = char if not char.isspace() else previous
+    return "".join(kept)
+
+
+def collapsed_powers(regressors: str) -> tuple[tuple[str, str, str], ...]:
+    """The powers of one variable among ``regressors``, each with its replacement.
+
+    Formulaic reads ``x^2`` and ``x**2`` as the interaction of ``x`` with itself,
+    which is ``x``: the term adds no column.  Each such term is returned once, in
+    order, as written, with its variable and with the expression that computes the
+    power: ``("x^2", "x", "I(x**2)")``.  A power of a sum, ``(a + b)^2``, keeps its
+    Formulaic meaning and is not returned; nothing is read inside a function call
+    (``I(x**2)``), a quoted string or a name in backticks.
+    """
+    found: dict[str, tuple[str, str, str]] = {}
+    for match in _POWER.finditer(_outside_calls(regressors)):
+        written, name, power = match.group(0), match.group(1), match.group(2)
+        if int(power) > 1:
+            found.setdefault(written, (written, name, f"I({name}**{power})"))
+    return tuple(found.values())

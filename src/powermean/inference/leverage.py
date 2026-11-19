@@ -1,9 +1,12 @@
 """Full-design per-replica leverage and the exact structural unit-leverage test.
 
-Expected-information leverage for the nonlinear HC methods, full nuisance geometry
-for absorbed fits.  Internal module: the leverage that the named HC methods of
-:mod:`powermean.inference.hc` adjust their scores with.  No public name, option or
-default; nothing here reads a request or applies a factor.
+``design/04_inference_and_effects.md``, Section 2.3 (D55, D57: expected-information
+leverage for the nonlinear HC methods, full nuisance geometry for absorbed fits);
+``plan/evidence/M1_contract.txt``, rules B5 and B6 and Section 3.2;
+``plan/evidence/M1_validation_plan.txt``, Section 4 (HC-1 to HC-6, witnesses W2 and
+W3); decisions D49, D51, D54 and D57.  Task M1.18, private: the leverage that the
+named HC methods of :mod:`powermean.inference.hc` adjust their scores with.  No public
+name, option or default; nothing here reads a request or applies a factor.
 
 Geometry.  With the full design ``B`` (the slopes ``X`` alone, or ``[X, E_J]`` with the
 kept incidence of :mod:`powermean.fe.certificate_basis`), the raw weights ``a`` and the
@@ -21,17 +24,22 @@ row of zero weight has ``h_i = 0`` and is no sampling unit.  The hat is invarian
 column scales and to the order (a change of basis of ``B``), and the expected geometry
 is used for every working variance: at ``tau = 1`` it equals the observed one, at
 ``tau = 2`` it is the weighted least-squares hat of ``X`` while the observed curvature
-``z/m`` is not.
+``z/m`` is not (the discriminating case of HC-2).
 
 Dense slopes (:func:`dense_leverage`).  The full column rank of ``X`` on the active
-rows is decided first, exactly, by the rational echelon of the structural test below
-(:func:`exact_full_rank`): a dependent column refuses, since the thin QR that follows
-cannot tell.  Then ``sqrt(g_i) x_i`` is factored once by a Householder QR (LAPACK
-through ``numpy.linalg.qr``); the hat is the squared norm of the ``i``-th row of the
+rows is decided first, exactly, by the structural test below (:func:`exact_full_rank`):
+a dependent column refuses, since the thin QR that follows cannot tell. Without
+effects, two disjoint minors can first prove full rank and no structural units
+(:func:`_two_minor_no_unit`). Otherwise the decision is proved from ``K`` rows
+where that proof succeeds (:func:`_dense_decided`), and by the rational echelon
+otherwise. Then
+``sqrt(g_i) x_i`` is factored once by a Householder QR (LAPACK through
+``numpy.linalg.qr``); the hat is the squared norm of the ``i``-th row of the
 thin ``Q``, ``||q_i||^2 = g_i x_i' (X'GX)^-1 x_i``, divided by ``f_i`` for frequency
 counts.  The projector's diagonal is formed without the Gram matrix or its inverse,
 whose conditioning is the square of the design's: the stable choice of the references'
-``hatvalues``.  Limits, documented: a row whose exact hat is one
+``hatvalues`` (D51), with the independent dense and exact witnesses of
+``tests/inference/test_leverage.py``.  Limits, documented: a row whose exact hat is one
 computes a value within rounding of one, not one; nothing is clamped, floored or
 inferred from it (structural unit leverage is decided exactly, below).  The thin ``Q``
 has ``K`` orthonormal columns whatever the rank of ``X``, so its trace is ``K`` by
@@ -39,38 +47,14 @@ construction and is NOT a rank witness (an exactly rank-one ``3 x 2`` design wou
 report ``p = 2``): the integer trace check of a dense design is an arithmetic witness
 of the computed hats alone, and the rank is the exact decision made before it.  The
 exact decision is made again by a caller that refuses before any solve
-(:func:`powermean.inference.hc.hc_preflight`); the two do not share the one
-decision.
-
-Absorbed full design (:func:`absorbed_leverage`).  The expected Hessian
-``H = B' diag(g) B`` is assembled by the certificate assembly (no dense
-indicator), ``W = H^-T E_s`` by the sparse actions of
-:func:`powermean.inference.bread.slope_map_of`, and the hat is the decomposition of
-the reference's ``hatvalues`` for fixed effects, nuisance diagonal plus
-residualized-slope diagonal, both on the SAME full basis:
-
-    h_i = (g_i / f_i) [ d_i' R^-1 d_i  +  v_i' S v_i ],
-    R = E_J' diag(g) E_J,    v_i = B_i W,    S = A^-1,    A = W_X = (X~' G X~)^-1,
-
-where ``d_i`` is the row of ``E_J``, ``X~ = X - E_J R^-1 E_J' G X`` the slopes
-residualized on the effects with weights ``g`` (``X~_i = S v_i``), so that
-``v_i' S v_i = x~_i' S^-1 x~_i`` is the residualized-slope hat and ``d_i' R^-1 d_i``
-the nuisance hat.  The nuisance quadratic forms are solved on the distinct code tuples
-of the rows, in batches of right-hand sides against the transient ordinary factor of
-the equilibrated ``R`` (the same ``equilibration``, ``scaled_ordinary`` and
-``factorized`` of the certificate): no dense ``N x G`` matrix, no ``N x N`` hat, no
-dense inverse of ``R``.  Each right-hand side is solved on its own by the factor, so
-the batch size changes no bit of a hat; it bounds the memory of one solve
-(``rows_per_solve``, a named parameter, not a tolerance).  Two more integer witnesses
-hold exactly in real arithmetic and are checked as integers: the nuisance trace
-``sum f_i g_i d_i' R^-1 d_i / f_i`` rounds to ``|J|`` and the slope trace to ``K``.
-Slope-only residualized hats never stand for the full hat.
+(:func:`powermean.inference.hc.hc_preflight`); sharing the one decision between the
+two is a later change, not a tolerance.
 
 Structural unit leverage and exact rank (:func:`exact_full_rank`,
 :func:`structural_unit_leverage`).  ``1 - h_i = 0`` for a replica exactly when
 removing that ONE replica (``f_i`` to ``f_i - 1``) lowers the full-design rank, which
 needs ``f_i = 1`` since ``f_i h_i <= 1``; deleting a whole compressed row is not the
-test (``X = [[1, 0], [1, 1]]``, ``f = (3, 3)`` has ``h = 1/3`` and no refusal,
+test (W2: ``X = [[1, 0], [1, 1]]``, ``f = (3, 3)`` has ``h = 1/3`` and no refusal,
 though either row's deletion lowers the rank).  The property depends on the design
 alone, not on the point or the weights, so it is decided before solving and exactly:
 in the rational arithmetic of the exact values of the doubles, the reduced row echelon
@@ -83,7 +67,8 @@ rank (every coordinate a pivot), the active rows and the structural rows.  No ro
 hat, threshold or floor enters.  Limit, documented: the cost is that of an exact
 Gauss-Jordan elimination on a ``(K + |J|) x n`` matrix with sparse integer indicator
 rows, of the order of ``(K + |J|)^2 n`` rational operations at worst; it is the exact
-test, not an approximation.
+test of the contract, not an approximation, and a cheaper exact algorithm for very
+large nuisance bases is a later change, not a tolerance.
 
 Ownership (:func:`detached`).  A :class:`Leverage` handed to another record is copied
 whole: every array header and every nested record anew, so that a caller's later edit
@@ -93,40 +78,39 @@ bytes alone do not prevent a change of shape or of metadata on a shared header.
 
 from __future__ import annotations
 
+import importlib
 import math
 from dataclasses import dataclass, replace
 from fractions import Fraction
-from typing import Literal
+from typing import Any, Literal, cast
 
 import numpy as np
 from numpy.typing import NDArray
 
 from powermean.data.accounting import frozen_index
+from powermean.data.design import _minor_nonsingular_mod65537
 from powermean.fe.absorb_numeric import checked_product
 from powermean.fe.certificate_basis import CertificateBasis
-from powermean.inference.absorbed_code_tuples import CachedCodeTuples, _code_tuples
-from powermean.inference.bread import SlopeMap, bread_influence, slope_map_of
+from powermean.inference.bread import SlopeMap
 from powermean.model.order import IndexArray
 from powermean.model.rows import _immutable
 from powermean.model.variance import FloatArray, _finite_array, _finite_result
 from powermean.solve.absorbed_certificate_factor import (
-    Calls,
     FactorRecord,
-    factorized,
-)
-from powermean.solve.absorbed_certificate_geometry import (
-    SparseMatrix,
-    equilibration,
-    hessian,
-    scaled_ordinary,
 )
 
 BoolArray = NDArray[np.bool_]
 Geometry = Literal["expected"]
-# The nuisance quadratic forms are solved on this many distinct code tuples at a time:
-# a bound on the memory of one solve (|J| by rows_per_solve doubles), not a tolerance;
-# each right-hand side is solved on its own, so the hats do not depend on it.
-ROWS_PER_SOLVE = 256
+# A dense design's exact decision tries this many proposed rows per basis row before
+# it tests every row exactly (:func:`_dense_decided`): a count of attempts, not a
+# tolerance.
+SWAP_TRIES = 4
+# A bounded optional proof, not rank tolerances. Small or wider designs keep the
+# original decision; failure of either modular minor is only inconclusive.
+_MINOR_MIN_COLUMNS = 16
+_MINOR_MAX_COLUMNS = 256
+
+_linalg = cast("Any", importlib.import_module("scipy.linalg"))
 
 
 # -------------------------------------------------------------------- records
@@ -177,7 +161,7 @@ class Leverage:
     p : int
         ``round(trace)``, equal to ``rank`` (checked).
     geometry : str
-        ``"expected"``: the expected-information hat, the least-squares hat
+        ``"expected"``: the expected-information hat of D57, the least-squares hat
         where the expected curvature is one.
     slope_hat, nuisance_hat : array or None
         The two parts of an absorbed hat, per replica; ``None`` for dense slopes.
@@ -391,156 +375,6 @@ def dense_leverage(
     )
 
 
-# ------------------------------------------------------------ absorbed design
-
-
-def _nuisance_block(matrix: SparseMatrix, k: int) -> SparseMatrix:
-    """``R``: the trailing block of the canonical CSC ``H`` beyond the ``k`` slopes."""
-    size = matrix.shape[0] - k
-    columns = matrix.columns
-    keep = (matrix.indices >= k) & (columns >= k)
-    rows = matrix.indices[keep] - k
-    cols = columns[keep] - k
-    data = matrix.data[keep]
-    indptr = np.concatenate(([0], np.cumsum(np.bincount(cols, minlength=size))))
-    return SparseMatrix(
-        (size, size),
-        frozen_index(np.asarray(indptr, dtype=np.intp)),
-        frozen_index(np.asarray(rows, dtype=np.intp)),
-        _immutable(np.asarray(data, dtype=np.float64)),
-    )
-
-
-def _nuisance_forms(
-    block: SparseMatrix, distinct: IndexArray, rows_per_solve: int
-) -> tuple[FloatArray, NuisanceSolve]:
-    """``e_c' R^-1 e_c`` for each distinct tuple ``c``, by batched solves."""
-    scale = equilibration(block)
-    ordinary = scaled_ordinary(block, scale)
-    record, factor = factorized(ordinary, "ordinary")
-    if factor is None:
-        raise ValueError(f"the nuisance Gram matrix has no factor: {record.reason}")
-    calls = Calls()
-    forms = np.zeros(distinct.shape[0])
-    with np.errstate(over="ignore", under="ignore", invalid="ignore"):
-        inverse_scale = 1.0 / scale
-    for start in range(0, distinct.shape[0], rows_per_solve):
-        batch = distinct[start : start + rows_per_solve]
-        rhs = np.zeros((scale.size, batch.shape[0]))
-        for column in range(batch.shape[1]):
-            kept = batch[:, column] >= 0
-            rhs[batch[kept, column], np.flatnonzero(kept)] = inverse_scale[
-                batch[kept, column]
-            ]
-        solved = calls.solve(factor, rhs, "N")
-        with np.errstate(over="ignore", under="ignore", invalid="ignore"):
-            forms[start : start + batch.shape[0]] = np.einsum("ji,ji->i", rhs, solved)
-    found = _finite_result(forms, "nuisance leverage")
-    provenance = NuisanceSolve(
-        scale, record, int(distinct.shape[0]), tuple(calls.actions().items())
-    )
-    return found, provenance
-
-
-def _slope_forms(
-    design: FloatArray, basis: CertificateBasis, columns: FloatArray
-) -> FloatArray:
-    """``v_i' S v_i`` with ``v_i = B_i W`` and ``S = W_X^-1``: the residualized hat."""
-    k = design.shape[1]
-    ones = np.ones(design.shape[0])
-    v = bread_influence(design, basis, ones, columns)
-    residualized = np.linalg.solve(columns[:k], v.T).T
-    with np.errstate(over="ignore", under="ignore", invalid="ignore"):
-        forms: FloatArray = np.einsum("ij,ij->i", v, residualized)
-    return _finite_result(forms, "slope leverage")
-
-
-def absorbed_leverage(
-    design: FloatArray,
-    basis: CertificateBasis,
-    weights: FloatArray,
-    fisher: FloatArray,
-    *,
-    frequency: bool,
-    rows_per_solve: int = ROWS_PER_SOLVE,
-    code_tuples: CachedCodeTuples | None = None,
-) -> Leverage:
-    """The per-replica hats of the full design ``[X, E_J]`` (module docstring).
-
-    Parameters
-    ----------
-    design : array
-        ``X``, the scaled slopes on every row of the grouping (zero columns allowed).
-    basis : CertificateBasis
-        The kept nuisance coordinates ``J`` of the same rows.
-    weights : array
-        The raw weights ``a`` of the rows, nonnegative; a zero weight makes no replica.
-    fisher : array
-        The expected row curvature ``w_i``, positive: ones for the linear equation.
-    frequency : bool
-        Whether the weights are frequency counts.
-    rows_per_solve : int, optional
-        The distinct code tuples solved together; a memory bound, never a result.
-
-    Returns
-    -------
-    Leverage
-        The hats with both parts, ``W``, the nuisance provenance, the trace and ``p``.
-
-    Raises
-    ------
-    ValueError
-        Misaligned inputs, a design that is not identified (no scale or no factor),
-        or a trace that does not round to its rank.
-    FloatingPointError
-        A value that is not representable in float64.
-    """
-    kind = _frequency(frequency)
-    matrix, a, w = _rows(design, weights, fisher)
-    if type(basis) is not CertificateBasis:
-        raise TypeError("basis must be a CertificateBasis")
-    if basis.grouping.n_rows != matrix.shape[0]:
-        raise ValueError("the basis belongs to other rows")
-    if not isinstance(rows_per_solve, int) or rows_per_solve < 1:
-        raise ValueError("rows_per_solve must be a positive integer")
-    k, kept = int(matrix.shape[1]), basis.n_kept
-    g = checked_product(a, w, "Gram weight")
-    f = _multiplicity(a, frequency=kind)
-    unit = _unit(g, a, w, frequency=kind)
-    full = hessian(matrix, g, basis)
-    distinct, inverse = (
-        _code_tuples(basis) if code_tuples is None else code_tuples.for_basis(basis)
-    )
-    block = _nuisance_block(full, k)
-    forms, provenance = _nuisance_forms(block, distinct, rows_per_solve)
-    nuisance = _finite_result(unit * forms[inverse], "nuisance leverage")
-    slope_map: SlopeMap | None = None
-    slope = np.zeros(matrix.shape[0])
-    if k:
-        slope_map = slope_map_of(full, k, bread="expected")
-        forms_x = _slope_forms(matrix, basis, slope_map.columns)
-        slope = _finite_result(unit * forms_x, "slope leverage")
-        _traced(slope, f, k, "residualized-slope")
-    _traced(nuisance, f, kept, "nuisance")
-    hat = _finite_result(nuisance + slope, "leverage")
-    trace, p = _traced(hat, f, k + kept, "full-design")
-    return Leverage(
-        hat=_immutable(hat),
-        gram_weights=_immutable(g),
-        multiplicity=_immutable(f),
-        frequency=kind,
-        trace=trace,
-        rank=k + kept,
-        p=p,
-        geometry="expected",
-        slope_hat=_immutable(slope),
-        nuisance_hat=_immutable(nuisance),
-        slope_map=slope_map,
-        nuisance=provenance,
-        diagonal=None,
-    )
-
-
 # ------------------------------------------------- structural unit leverage
 
 Row = dict[int, Fraction]  # a sparse rational row of B': active row -> value
@@ -610,14 +444,150 @@ def _echelon(rows: list[Row]) -> dict[int, Row]:
     return pivots
 
 
+def _exact_inverse(rows: list[list[Fraction]]) -> list[list[Fraction]] | None:
+    """The exact inverse of a square rational matrix by Gauss-Jordan, else ``None``."""
+    k = len(rows)
+    work = [
+        row[:] + [Fraction(int(i == j)) for j in range(k)] for i, row in enumerate(rows)
+    ]
+    for column in range(k):
+        pivot = next((r for r in range(column, k) if work[r][column]), None)
+        if pivot is None:
+            return None
+        work[column], work[pivot] = work[pivot], work[column]
+        lead = work[column][column]
+        work[column] = [value / lead for value in work[column]]
+        for r in range(k):
+            factor = work[r][column]
+            if r != column and factor:
+                work[r] = [
+                    a - factor * b for a, b in zip(work[r], work[column], strict=True)
+                ]
+    return [row[k:] for row in work]
+
+
+def _coordinate(row: list[float], column: list[Fraction]) -> Fraction:
+    """The exact value of ``row`` times ``column``, the doubles read exactly."""
+    return sum(
+        (Fraction(x) * c for x, c in zip(row, column, strict=True) if x), Fraction(0)
+    )
+
+
+def _two_minor_no_unit(matrix: FloatArray, active: IndexArray) -> bool:
+    """One-sided proof of full rank and no structural units, without effects.
+
+    Two disjoint nonsingular K-row minors remain full rank after deleting any
+    one row: at least one minor is untouched. Deleting one frequency replica
+    cannot remove more rows. No assertion follows from an unsuccessful proof.
+    Only the first 2K active rows are gathered, in their existing order.
+    """
+    k = int(matrix.shape[1])
+    if (
+        not _MINOR_MIN_COLUMNS <= k <= _MINOR_MAX_COLUMNS
+        or active.size < 2 * k
+        or matrix.dtype != np.dtype(np.float64)
+    ):
+        return False
+    for start in (0, k):
+        if not _minor_nonsingular_mod65537(matrix[active[start : start + k]]):
+            return False
+    return True
+
+
+def _dense_decided(
+    matrix: FloatArray, multiplicity: FloatArray, active: IndexArray
+) -> FullRank | None:
+    """The exact decision of a design without effects from ``K`` rows, or ``None``.
+
+    Floating point only proposes; every verdict returned is proved exactly. A pivoted
+    QR of the active rows proposes ``K`` rows ``S``; their exact inverse proves that
+    ``X`` has full column rank (else ``None``: the elimination decides). The rows of
+    unit leverage are the ``s`` in ``S`` whose basis vector ``e_s`` lies in the column
+    space of ``X``; no other row's does, since ``X_S b = 0`` forces ``b = 0``. With
+    ``c_j = x_j X_S^-1``, ``e_s`` lies there exactly when ``c_js = 0`` for every other
+    row ``j``. The proposed ``j`` are tried first; where none is proved nonzero, every
+    row is tested. These are the pivot rows whose reduced row is a unit vector in the
+    elimination, whatever its order: a vector of the row space of a reduced echelon
+    form is the sum of its pivot rows weighted by its entries on the pivot columns.
+    """
+    rows = matrix[active]
+    m, k = rows.shape
+    if m < k:
+        return None
+    with np.errstate(all="ignore"):
+        top = np.max(np.abs(rows), axis=0)
+        proposal = rows / np.where(top > 0, top, 1.0)
+        try:
+            _, order = _linalg.qr(proposal.T, mode="r", pivoting=True)
+        except (ValueError, np.linalg.LinAlgError):
+            return None
+    chosen = np.sort(np.asarray(order[:k], dtype=np.intp))
+    exact = [[Fraction(x) for x in rows[i].tolist()] for i in chosen.tolist()]
+    inverse = _exact_inverse(exact)
+    if inverse is None:
+        return None
+    with np.errstate(all="ignore"):
+        try:
+            approx = np.linalg.solve(proposal[chosen].T, proposal.T).T
+        except np.linalg.LinAlgError:
+            approx = np.zeros((m, k))
+    others = np.ones(m, dtype=bool)
+    others[chosen] = False
+    single = multiplicity[active] == 1.0
+    unit: list[int] = []
+    for place, s in enumerate(chosen.tolist()):
+        column = [inverse[r][place] for r in range(k)]
+        scores = np.where(
+            others & np.isfinite(approx[:, place]), np.abs(approx[:, place]), -1.0
+        )
+        tries = min(SWAP_TRIES, m - 1)
+        best: IndexArray | list[int] = (
+            np.argpartition(-scores, tries - 1)[:tries] if tries > 0 else []
+        )
+        if any(
+            scores[j] > 0 and _coordinate(rows[j].tolist(), column)
+            for j in sorted(best, key=lambda j: -scores[j])
+        ):
+            continue
+        if any(_coordinate(rows[j].tolist(), column) for j in np.flatnonzero(others)):
+            continue
+        if single[s]:
+            unit.append(int(active[s]))
+    return FullRank(
+        k,
+        k,
+        0,
+        frozen_index(active),
+        frozen_index(np.asarray(sorted(unit), dtype=np.intp)),
+    )
+
+
 def _decided(
     matrix: FloatArray, multiplicity: FloatArray, basis: CertificateBasis | None
 ) -> FullRank:
-    """The exact decision on validated rows: full column rank, else ``ValueError``."""
+    """The exact decision on validated rows: full column rank, else ``ValueError``.
+
+    Without effects, two disjoint modular minors can prove full rank and no unit
+    rows. An inconclusive proof leaves the original ``K``-row decision
+    (:func:`_dense_decided`) and exact elimination unchanged. Every design with
+    effects, and every refusal, takes the exact elimination of all rows.
+    """
     active = np.flatnonzero(multiplicity > 0)
     k, kept = int(matrix.shape[1]), 0 if basis is None else basis.n_kept
     if not active.size or not k + kept:
         raise ValueError("the design needs a row of positive weight and a column")
+    if basis is None:
+        if _two_minor_no_unit(matrix, active):
+            return FullRank(
+                k,
+                k,
+                0,
+                frozen_index(active),
+                frozen_index(np.empty(0, dtype=np.intp)),
+            )
+        found = _dense_decided(matrix, multiplicity, active)
+        if found is not None:
+            return found
     pivots = _echelon(_coordinate_rows(matrix, basis, active))
     single = multiplicity[active] == 1.0
     unit = sorted(
@@ -779,11 +749,9 @@ def detached(leverage: Leverage) -> Leverage:
 
 
 __all__ = [
-    "ROWS_PER_SOLVE",
     "FullRank",
     "Leverage",
     "NuisanceSolve",
-    "absorbed_leverage",
     "dense_leverage",
     "detached",
     "exact_full_rank",

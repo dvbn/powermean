@@ -1,6 +1,8 @@
 """The retained final work of an absorbed candidate: owned parts, sequence and calls.
 
-Internal module: the result-local admission of one attempt's final record, used by
+``design/02_computation.md``, Sections 1 and 7; the M1.14 readiness revision A, Section
+1 (``plan/evidence/M1.14_readiness.txt``) and implementation revision A; decision D51.
+Task M1.14, private: the result-local admission of one attempt's final record, used by
 :mod:`powermean.solve.absorbed_certificate_history`.  No certificate verdict is formed
 and no optimizer is replayed.
 
@@ -45,7 +47,7 @@ from powermean.solve.absorbed_certificate_final_parts import (
 from powermean.solve.absorbed_direction import IndexPoint, IndexWork, Recovery
 from powermean.solve.absorbed_loss import FinalRows, final_rows
 from powermean.solve.absorbed_rhs import FORCING_CAP, RHSCall, RHSGuard, RHSResult
-from powermean.solve.absorbed import AbsorbedOptions
+from powermean.solve.m1_options import AbsorbedOptions
 from powermean.solve.newton_absorbed import IndexAttempt, IndexCandidate, IndexFinal
 from powermean.solve.newton_profiled import ProfiledAttempt, ProfiledCandidate
 from powermean.solve.profiled_indications import Alarm

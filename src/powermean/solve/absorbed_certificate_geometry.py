@@ -1,6 +1,8 @@
 """The fresh observed geometry of an admitted absorbed point: raw S, H and scaling.
 
-Internal module.  Mathematically ``B = [X, E_J]`` (``X`` the sample's scaled slopes,
+``design/02_computation.md``, Section 7; the M1.14 readiness specification, Section 2
+(``plan/evidence/M1.14_readiness.txt``) and its dispatch; decisions D51 and D54.  Task
+M1.14, private.  Mathematically ``B = [X, E_J]`` (``X`` the sample's scaled slopes,
 ``E_J`` the kept incidence of :mod:`powermean.fe.certificate_basis`), ``S = B'b`` and
 ``H = B' diag(C) B`` from the fresh rows; ``B`` is never formed.
 
@@ -43,9 +45,9 @@ import numpy as np
 
 from powermean.data.accounting import frozen_index
 from powermean.data.sample_fe_source import Derived
-from powermean.fe._cancel_storage import IndexStorage
 from powermean.fe import absorb_numeric as _numeric
 from powermean.fe import reductions as _reductions
+from powermean.fe._cancel_storage import IndexStorage
 from powermean.fe.absorb_numeric import checked_product, group_sums
 from powermean.fe.certificate_basis import CertificateBasis, SupportCheck
 from powermean.fe.reductions import immutable_array
@@ -68,7 +70,9 @@ from powermean.solve.compact_assembly import (
 )
 from powermean.solve.compact_matrix import CompactMatrix, matrix_nnz
 from powermean.solve.compact_scaling import equilibration_parts, one_norm_parts
-from powermean.solve.sparse_matrix import SparseMatrix
+from powermean.solve.sparse_matrix import SparseMatrix as _SparseMatrix
+
+SparseMatrix = _SparseMatrix
 
 ZERO_SCALE = "zero row/column in the Hessian"
 
@@ -131,8 +135,13 @@ class FEGeometry:
         if isinstance(h, CompactMatrix):
             found.append(("H partition", h.binding()))
         else:
-            found.extend((("H", _bytes(h.data)), ("H rows", _bytes(h.indices)),
-                          ("H columns", _bytes(h.indptr))))
+            found.extend(
+                (
+                    ("H", _bytes(h.data)),
+                    ("H rows", _bytes(h.indices)),
+                    ("H columns", _bytes(h.indptr)),
+                )
+            )
         weights = sample.data.weights
         found += [
             ("sample", sample),
@@ -165,6 +174,14 @@ def _bytes(
     """An array by value (dtype, shape and bytes), or ``None``."""
     if values is None:
         return None
+    if type(values) is np.ndarray and values.flags.c_contiguous:
+        owner: object = values.base
+        if type(owner) is np.ndarray:
+            owner = owner.base
+        # A contiguous view of the entire immutable buffer already holds the
+        # exact bytes the binding needs.
+        if type(owner) is bytes and len(owner) == values.nbytes:
+            return (values.dtype.str, values.shape, owner)
     return (values.dtype.str, values.shape, values.tobytes())
 
 
@@ -217,7 +234,9 @@ class _Entries:
 
 
 def _slope_values(
-    design: FloatArray, curvature: FloatArray, k: int,
+    design: FloatArray,
+    curvature: FloatArray,
+    k: int,
 ) -> Iterator[FloatArray]:
     """The original checked slope products/reductions, one column at a time."""
     for column in range(k):
@@ -241,7 +260,8 @@ def _mixed_values(
     basis: CertificateBasis,
     k: int,
     selected: tuple[tuple[IndexStorage, IndexStorage], ...] | None = None,
-    *, shared: bool = False,
+    *,
+    shared: bool = False,
 ) -> Iterator[tuple[IndexArray, int, int, FloatArray]]:
     """Original orientations, sharing only inside an original owned consumer.
 
@@ -250,11 +270,18 @@ def _mixed_values(
     generic/injected calls retain both products and both reducer invocations.
     """
     slope_level = checked_product(design, curvature[:, None], "Hessian term")
-    level_slope = (slope_level if shared else
-                   checked_product(curvature[:, None], design, "Hessian term"))
-    for number, (block, position) in enumerate(zip(
-        basis.grouping.blocks, basis.positions, strict=True,
-    )):
+    level_slope = (
+        slope_level
+        if shared
+        else checked_product(curvature[:, None], design, "Hessian term")
+    )
+    for number, (block, position) in enumerate(
+        zip(
+            basis.grouping.blocks,
+            basis.positions,
+            strict=True,
+        )
+    ):
         if selected is None:
             kept = np.flatnonzero(position >= 0)
             index = k + position[kept]
@@ -271,21 +298,32 @@ def _mixed_values(
 
 
 def _mixed_entries(
-    design: FloatArray, curvature: FloatArray, basis: CertificateBasis,
-    entries: _EntrySink, *, shared: bool = False,
+    design: FloatArray,
+    curvature: FloatArray,
+    basis: CertificateBasis,
+    entries: _EntrySink,
+    *,
+    shared: bool = False,
 ) -> None:
     """Original dynamic coordinates and callback order for every fresh batch."""
     k = design.shape[1]
-    batches = (_mixed_values(design, curvature, basis, k, shared=True) if shared
-               else _mixed_values(design, curvature, basis, k))
+    batches = (
+        _mixed_values(design, curvature, basis, k, shared=True)
+        if shared
+        else _mixed_values(design, curvature, basis, k)
+    )
     for index, count, direction, values in batches:
         if direction == 0:
             entries.add(
-                np.tile(np.arange(k), count), np.repeat(index, k), values.ravel(),
+                np.tile(np.arange(k), count),
+                np.repeat(index, k),
+                values.ravel(),
             )
         elif direction == 1:
             entries.add(
-                np.repeat(index, k), np.tile(np.arange(k), count), values.ravel(),
+                np.repeat(index, k),
+                np.tile(np.arange(k), count),
+                values.ravel(),
             )
         else:
             entries.add(index, index, values)
@@ -424,7 +462,7 @@ def one_norm(matrix: SparseMatrix | CompactMatrix) -> float:
 
 
 def symmetric_mean(x: FloatArray, y: FloatArray) -> FloatArray:
-    """``(x + y)/2`` where the sum is finite, else ``x/2 + y/2`` (range safe)."""
+    """``(x + y)/2`` where the sum is finite, else ``x/2 + y/2`` (range safe, D54)."""
     with np.errstate(over="ignore", under="ignore"):
         total = x + y
         found: FloatArray = np.where(np.isfinite(total), total / 2, x / 2 + y / 2)
@@ -567,7 +605,8 @@ def assembled(
     numeric = point._numeric_problem
     matrix = (
         (np.zeros((point.sample.count, 0)) if design is None else design.matrix)
-        if numeric is None else numeric.design
+        if numeric is None
+        else numeric.design
     )
     owned = immutable_array(matrix) if numeric is None else matrix.view()
     s = moment(owned, rows.b, basis)
@@ -584,7 +623,9 @@ def assembled(
 
 
 def _preparing_hessian(
-    design: FloatArray, curvature: FloatArray, layout: JointLayout,
+    design: FloatArray,
+    curvature: FloatArray,
+    layout: JointLayout,
 ) -> tuple[CompactMatrix, _JointStructure | None]:
     """The first original private assembly also records its fixed potential slots."""
     assert layout.block is not None
@@ -610,7 +651,9 @@ def _preparing_hessian(
 
 
 def _prepared_hessian(
-    design: FloatArray, curvature: FloatArray, layout: JointLayout,
+    design: FloatArray,
+    curvature: FloatArray,
+    layout: JointLayout,
     structure: _JointStructure,
 ) -> CompactMatrix:
     """Same fresh checked values, with no repeated coordinates, masks or sorting."""
@@ -619,13 +662,18 @@ def _prepared_hessian(
     for values in _slope_values(design, curvature, k):
         entries.add(values)
     shared = _shared_assembly(design, curvature, layout)
-    mixed = (_mixed_values(design, curvature, layout.basis, k, structure.mixed,
-                           shared=True) if shared else
-             _mixed_values(design, curvature, layout.basis, k, structure.mixed))
+    mixed = (
+        _mixed_values(design, curvature, layout.basis, k, structure.mixed, shared=True)
+        if shared
+        else _mixed_values(design, curvature, layout.basis, k, structure.mixed)
+    )
     for _, _, direction, values in mixed:
         entries.add(values.ravel() if direction != 2 else values)
-    pairs = (layout._pair_values(curvature, shared=True) if shared else
-             layout._pair_values(curvature))
+    pairs = (
+        layout._pair_values(curvature, shared=True)
+        if shared
+        else layout._pair_values(curvature)
+    )
     for selected, (_, _, sums) in zip(structure.pairs, pairs, strict=True):
         values = sums[selected.view()]
         entries.add(values)
@@ -676,39 +724,67 @@ def fresh_geometry(
 
 
 def _shared_assembly(
-    design: FloatArray, curvature: FloatArray, layout: JointLayout,
+    design: FloatArray,
+    curvature: FloatArray,
+    layout: JointLayout,
 ) -> bool:
     """Current original private consumers, not a stored numerical eligibility flag."""
-    return (original_values() and original_entries(layout)
-            and type(design) is np.ndarray and type(curvature) is np.ndarray
-            and design.dtype == curvature.dtype == np.dtype(np.float64)
-            and design.dtype.metadata is None and curvature.dtype.metadata is None
-            and design.ndim == 2 and curvature.shape == (design.shape[0],)
-            and type(layout.basis) is CertificateBasis
-            and (type(layout.basis.grouping) is _numeric.Grouping
-                 or type(layout.basis.grouping) is Derived)
-            and type(layout.basis.grouping.blocks) is tuple
-            and all(type(block) is _numeric.Block
-                    for block in layout.basis.grouping.blocks))
+    return (
+        original_values()
+        and original_entries(layout)
+        and type(design) is np.ndarray
+        and type(curvature) is np.ndarray
+        and design.dtype == curvature.dtype == np.dtype(np.float64)
+        and design.dtype.metadata is None
+        and curvature.dtype.metadata is None
+        and design.ndim == 2
+        and curvature.shape == (design.shape[0],)
+        and type(layout.basis) is CertificateBasis
+        and (
+            type(layout.basis.grouping) is _numeric.Grouping
+            or type(layout.basis.grouping) is Derived
+        )
+        and type(layout.basis.grouping.blocks) is tuple
+        and all(type(block) is _numeric.Block for block in layout.basis.grouping.blocks)
+    )
 
 
 def original_values() -> bool:
     """Only original defining emitters/reducers omit the dynamic sink callbacks."""
-    return (all(globals()[name] is value for name, value in _VALUE_PRODUCERS)
-            and _numeric._input_original is _ARITHMETIC_ORIGINAL
-            and _ARITHMETIC_ORIGINAL()
-            and all(getattr(_reductions, name) is call
-                    for name, call in _REDUCTION_CALLS))
+    return (
+        all(globals()[name] is value for name, value in _VALUE_PRODUCERS)
+        and _numeric._input_original is _ARITHMETIC_ORIGINAL
+        and _ARITHMETIC_ORIGINAL()
+        and all(getattr(_reductions, name) is call for name, call in _REDUCTION_CALLS)
+    )
 
 
 _ARITHMETIC_ORIGINAL = _numeric._input_original
-_REDUCTION_CALLS = tuple((call.__name__, call)
-                         for call in _reductions._PREPARED_ORIGINALS)
+_REDUCTION_CALLS = tuple(
+    (call.__name__, call) for call in _reductions._PREPARED_ORIGINALS
+)
 _SLOPE_ENTRIES = _slope_entries
 _MIXED_ENTRIES = _mixed_entries
-_VALUE_PRODUCERS = tuple((name, globals()[name]) for name in (
-    "_slope_entries", "_mixed_entries", "_slope_values", "_mixed_values", "_total",
-    "checked_product", "group_sums", "_preparing_hessian", "_prepared_hessian",
-    "CompactEntries", "JointLayout", "_PreparingEntries", "_ValueEntries",
-    "_shared_assembly", "original_entries", "_numeric", "_reductions", "Derived",
-))
+_VALUE_PRODUCERS = tuple(
+    (name, globals()[name])
+    for name in (
+        "_slope_entries",
+        "_mixed_entries",
+        "_slope_values",
+        "_mixed_values",
+        "_total",
+        "checked_product",
+        "group_sums",
+        "_preparing_hessian",
+        "_prepared_hessian",
+        "CompactEntries",
+        "JointLayout",
+        "_PreparingEntries",
+        "_ValueEntries",
+        "_shared_assembly",
+        "original_entries",
+        "_numeric",
+        "_reductions",
+        "Derived",
+    )
+)

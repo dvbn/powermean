@@ -32,7 +32,7 @@ def _raw_multiway(
 def _reissue_port_warnings(
     held: list[warnings.WarningMessage], adjustment: PsdAdjustment | None
 ) -> None:
-    """Reissue raw port warnings only when no eigenvalue adjustment is active."""
+    """Reissue raw port warnings only when no D4 adjustment is active."""
     if adjustment is not None and adjustment.active:
         return
     for item in held:

@@ -1,6 +1,7 @@
 """The fresh certificate of a point of the linear path, by the accepted gates.
 
-A public log OLS fit is certified
+``design/02_computation.md``, Sections 1 (rule 3), 5.5 and 7; ``DESIGN.md``, Section
+5.3; decisions D41, D47, D49 and D51; task M0.22.  A public log OLS fit is certified
 before it is reported: :func:`certify_linear` evaluates the original linear equation
 afresh at the proposed point (:mod:`powermean.solve.linear_evaluation`), from the
 retained log response, raw offset, scaled design and typed weights, and reads nothing
@@ -16,7 +17,7 @@ the equilibrated ``C`` (:func:`~powermean.solve.quantities.newton_step`), the in
 correction as the root mean square of ``X p`` over the observations of the rows of
 positive weight, each counting its frequency weight when the caller states
 ``frequency`` (:func:`~powermean.solve.quantities.root_mean_square`), and the
-coefficient gate on the reported corrections against the standard errors at
+coefficient gate of D49 on the reported corrections against the standard errors at
 the point (:func:`~powermean.solve.reported.coefficient_check`), which a provider of
 the inference stage supplies through the callback :class:`LinearScaleProvider`,
 called once with the fresh evaluation when a correction is formed, and whose record
@@ -30,7 +31,7 @@ correction is formed, the index and the coefficient corrections are missing and 
 provider is not called, even at exactly zero residuals: nothing is replaced by a
 mathematical zero.  Exactly zero standard errors with an exactly zero correction
 certify an exact root only when every other gate passes, and the inference is then
-degenerate.
+degenerate (D49).
 
 The records mirror those of the joint certificate under the same names, so that the
 result layer reads either: :class:`LinearCertificate` is not a
@@ -65,6 +66,7 @@ from powermean.solve.reported import (
     CoefficientCheck,
     ReportedScale,
     coefficient_check,
+    saturated_rows,
 )
 
 
@@ -88,6 +90,7 @@ class LinearMeasures(NamedTuple):
     index_correction: float
     reported: ReportedScale | None
     coefficients: CoefficientCheck | None
+    saturated: bool = False
 
     @property
     def evaluated(self) -> bool:
@@ -137,11 +140,15 @@ class LinearCertificate:
     reported : ReportedScale or None
         What the provider returned at the point, if it was called.
     coefficients : CoefficientCheck or None
-        The coefficient gate, when a correction and a provider were present.
+        The coefficient gate of D49, when a correction and a provider were present.
     errors : mapping
         The text of each error that a step raised, by its gate.
     strict, secondary : tuple of str
         The gates that do not pass at ``tol`` and at ``tol_secondary``.
+    saturated : bool
+        Whether the fit is saturated, as many observations as coefficients
+        (:func:`powermean.solve.reported.saturated_rows`): the coefficient gate does not
+        apply, the provider is not called, and every covariance of the fit is missing.
     """
 
     gamma: FloatArray
@@ -159,6 +166,7 @@ class LinearCertificate:
     errors: Mapping[GateName, str]
     strict: tuple[GateName, ...]
     secondary: tuple[GateName, ...]
+    saturated: bool = False
 
     @property
     def level(self) -> Level | None:
@@ -176,7 +184,7 @@ class LinearCertificate:
 
     @property
     def degenerate(self) -> bool:
-        """Whether a reported standard error is zero: degenerate inference."""
+        """Whether a reported standard error is zero: degenerate inference (D49)."""
         return self.coefficients is not None and self.coefficients.degenerate
 
 
@@ -204,6 +212,7 @@ def _certificate(
         errors=MappingProxyType(dict(errors)),
         strict=failed_gates(measures, controls.tol),
         secondary=failed_gates(measures, controls.tol_secondary),
+        saturated=measures.saturated,
     )
 
 
@@ -251,11 +260,14 @@ def _measures(
     index = math.nan
     scale: ReportedScale | None = None
     check: CoefficientCheck | None = None
+    exact = saturated_rows(
+        problem.active_weights, problem.dimension, frequency=frequency
+    )
     if step.correction is None:
         errors["conditioning"] = step.error
     else:
         index = linear_index_correction(problem, step.correction, frequency=frequency)
-        if reported is not None:
+        if reported is not None and not exact:
             scale = _scale_of(reported(evaluation), evaluation)
             check = coefficient_check(
                 scale.corrections(step.correction),
@@ -272,6 +284,7 @@ def _measures(
         index_correction=index,
         reported=scale,
         coefficients=check,
+        saturated=exact,
     )
     return measures, errors
 

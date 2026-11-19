@@ -1,18 +1,22 @@
 """Lifted per-column symmetric conjugate gradient, with its work and breakdown state.
 
-The accelerator pair is the established symmetric-Kaczmarz and conjugate-gradient
-combination that ``reghdfe`` uses by default (``reghdfe.ado`` lines 226 to 227;
-``reghdfe.mata`` ``accelerate_cg`` and ``transform_sym_kaczmarz``), taken as a
-behavioral reference only: nothing of that source is copied, and its Hestenes stopping
-rule, ``safe_divide`` floors, free "iteration 0" and one-block shortcut are not
-inherited.  ``reghdfe`` itself warns against pairing CG with the forward
-(nonsymmetric) Kaczmarz walk.
+``design/02_computation.md``, Sections 5.2 and 8.1 (accelerated alternating
+projections); ``design/06_reuse_map.md``, ``fe/absorb`` (adapt: add acceleration);
+the adopted contract ``plan/evidence/M1.4_contract.txt``, Sections B and C; decision
+D51.  Task M1.4.  The accelerator pair is the established symmetric-Kaczmarz and
+conjugate-gradient combination that pinned S9 ``reghdfe`` uses by default
+(``reghdfe.ado`` lines 226 to 227; ``reghdfe.mata`` ``accelerate_cg`` and
+``transform_sym_kaczmarz``), taken as a behavioral reference only: nothing of that
+source is copied, and its Hestenes stopping rule, ``safe_divide`` floors, free
+"iteration 0" and one-block shortcut are not inherited.  S9 itself warns against
+pairing CG with the forward (nonsymmetric) Kaczmarz walk.
 
 Operator.  ``T`` applies ``Q_1, ..., Q_G, Q_{G-1}, ..., Q_1`` (the literal symmetric
 order of :func:`powermean.fe.absorb_numeric.symmetric_order`) and ``A z = z - T z``.
 On the positive-weight support ``A`` is self-adjoint and positive semidefinite in
-the weighted inner product, with the common block-mean-zero space as its kernel;
-this is the reason for the pairing, not a floating-point guarantee.
+the weighted inner product, with the common block-mean-zero space as its kernel
+(the review in ``plan/evidence/M1.4_scope_review.txt``); this is the reason for the
+pairing, not a floating-point guarantee.
 
 Recurrence, per active column ``j`` with its own scalars, never pooled:
 ``r = A z``, ``p = r``, ``rho = <r, r>_w``; then ``v = A p``, ``den = <p, v>_w``,
@@ -42,7 +46,7 @@ that is not positive, at a candidate whose fresh check passed ends the call
 fails its check keeps the rules above.  Without a requirement every path is the one
 above.
 
-Work.
+Work (contract C, frozen before outputs; labels corrected by the task's correction).
 A forward traversal of all blocks is one sweep; the symmetric operator costs two
 sweeps for ``G > 1`` and visits ``2G - 1`` blocks when it completes (one sweep and one
 visit for ``G = 1``, which the orchestrator handles as the direct projection and never
@@ -170,8 +174,14 @@ class Point:
 
 
 def evaluate_point(
-    values: FloatArray, coefficients: Coefficients, prepared: PreparedWeights,
-    *, _inputs=None,
+    values: FloatArray,
+    coefficients: Coefficients,
+    prepared: PreparedWeights,
+    *,
+    _inputs: (
+        Callable[[FloatArray], Callable[[IndexArray, int, int], FloatArray] | None]
+        | None
+    ) = None,
 ) -> Point:
     """The residual ``Y - lift(a)`` and the fresh check of all blocks at it.
 
@@ -182,9 +192,11 @@ def evaluate_point(
     residual = candidate(values, coefficients, prepared.grouping)
     attempted = Attempted()
     try:
-        check = (fresh_check(residual, prepared, attempted, _inputs=_inputs)
-                 if _inputs is not None and fresh_check is _INPUT_FRESH
-                 else fresh_check(residual, prepared, attempted))
+        check = (
+            fresh_check(residual, prepared, attempted, _inputs=_inputs)
+            if _inputs is not None and fresh_check is _INPUT_FRESH
+            else fresh_check(residual, prepared, attempted)
+        )
     except FloatingPointError as error:
         return Point(coefficients, residual, None, str(error), attempted.count)
     return Point(coefficients, residual, check, None, attempted.count)
@@ -269,8 +281,14 @@ def _positive_finite(scalars: FloatArray) -> bool:
 
 
 def _operator(
-    rows: FloatArray, prepared: PreparedWeights, attempted: Attempted,
-    *, _inputs=None,
+    rows: FloatArray,
+    prepared: PreparedWeights,
+    attempted: Attempted,
+    *,
+    _inputs: (
+        Callable[[FloatArray], Callable[[IndexArray, int, int], FloatArray] | None]
+        | None
+    ) = None,
 ) -> Coefficients:
     """``A`` applied to ``rows``, as block coefficients: the literal symmetric walk.
 
@@ -279,15 +297,22 @@ def _operator(
     order = symmetric_order(prepared.n_blocks)
     _, coefficients, _ = (
         walk(rows, prepared, order, attempted, _inputs=_inputs)
-        if _inputs is not None and walk is _INPUT_WALK else
-        walk(rows, prepared, order, attempted)
+        if _inputs is not None and walk is _INPUT_WALK
+        else walk(rows, prepared, order, attempted)
     )
     return coefficients
 
 
 def _initialize(
-    point: Point, active: IndexArray, prepared: PreparedWeights, attempted: Attempted,
-    *, _inputs=None,
+    point: Point,
+    active: IndexArray,
+    prepared: PreparedWeights,
+    attempted: Attempted,
+    *,
+    _inputs: (
+        Callable[[FloatArray], Callable[[IndexArray, int, int], FloatArray] | None]
+        | None
+    ) = None,
 ) -> tuple[Recurrence, str | None]:
     """``r = A z``, ``p = r``, ``rho = <r, r>_w`` on the active columns.
 
@@ -295,9 +320,11 @@ def _initialize(
     a column that fails the fresh check.
     """
     grouping = prepared.grouping
-    r = (_operator(point.residual[:, active], prepared, attempted, _inputs=_inputs)
-         if _inputs is not None and _operator is _INPUT_OPERATOR else
-         _operator(point.residual[:, active], prepared, attempted))
+    r = (
+        _operator(point.residual[:, active], prepared, attempted, _inputs=_inputs)
+        if _inputs is not None and _operator is _INPUT_OPERATOR
+        else _operator(point.residual[:, active], prepared, attempted)
+    )
     rows = lift(r, grouping)
     rho = weighted_inner(prepared, rows, rows)
     reason = None
@@ -315,7 +342,11 @@ def _advance(
     point: Point,
     recurrence: Recurrence,
     attempted: Attempted,
-    *, _inputs=None,
+    *,
+    _inputs: (
+        Callable[[FloatArray], Callable[[IndexArray, int, int], FloatArray] | None]
+        | None
+    ) = None,
 ) -> tuple[Point, Coefficients, str | None]:
     """One CG update of the coefficients: ``v``, ``den``, ``alpha``, ``a``, ``r``.
 
@@ -325,9 +356,11 @@ def _advance(
     """
     grouping = prepared.grouping
     p_rows = lift(recurrence.p, grouping)
-    v = (_operator(p_rows, prepared, attempted, _inputs=_inputs)
-         if _inputs is not None and _operator is _INPUT_OPERATOR else
-         _operator(p_rows, prepared, attempted))
+    v = (
+        _operator(p_rows, prepared, attempted, _inputs=_inputs)
+        if _inputs is not None and _operator is _INPUT_OPERATOR
+        else _operator(p_rows, prepared, attempted)
+    )
     den = weighted_inner(prepared, p_rows, lift(v, grouping))
     if not _positive_finite(den):
         reason = (
@@ -343,9 +376,11 @@ def _advance(
         added(current, scaled(recurrence.p, alpha)),
     )
     r = subtracted(recurrence.r, scaled(v, alpha))
-    point = (evaluate_point(values, coefficients, prepared, _inputs=_inputs)
-             if _inputs is not None and evaluate_point is _INPUT_EVALUATE else
-             evaluate_point(values, coefficients, prepared))
+    point = (
+        evaluate_point(values, coefficients, prepared, _inputs=_inputs)
+        if _inputs is not None and evaluate_point is _INPUT_EVALUATE
+        else evaluate_point(values, coefficients, prepared)
+    )
     return point, r, None
 
 
@@ -394,7 +429,10 @@ def conjugate_gradient(
     tolerance: float,
     max_sweeps: int,
     requirement: Requirement | None = None,
-    _inputs=None,
+    _inputs: (
+        Callable[[FloatArray], Callable[[IndexArray, int, int], FloatArray] | None]
+        | None
+    ) = None,
 ) -> Outcome:
     """Absorb ``values`` from the coefficients by lifted per-column symmetric CG.
 
@@ -422,22 +460,50 @@ def conjugate_gradient(
         raises ``FloatingPointError`` before any work.
     """
     required = require_requirement(requirement, values.shape[1])
-    if _inputs is not None and (_start is not _INPUT_START or _iterate is not _INPUT_ITERATE):
+    if _inputs is not None and (
+        _start is not _INPUT_START or _iterate is not _INPUT_ITERATE
+    ):
         _inputs = None
     progress = (
-        _start(values, prepared, coefficients, tolerance=tolerance,
-               max_sweeps=max_sweeps, requirement=required, _inputs=_inputs)
-        if _inputs is not None else
-        _start(values, prepared, coefficients, tolerance=tolerance,
-               max_sweeps=max_sweeps, requirement=required)
+        _start(
+            values,
+            prepared,
+            coefficients,
+            tolerance=tolerance,
+            max_sweeps=max_sweeps,
+            requirement=required,
+            _inputs=_inputs,
+        )
+        if _inputs is not None
+        else _start(
+            values,
+            prepared,
+            coefficients,
+            tolerance=tolerance,
+            max_sweeps=max_sweeps,
+            requirement=required,
+        )
     )
     while not isinstance(progress, Outcome):
         progress = (
-            _iterate(values, prepared, progress, tolerance=tolerance,
-                     max_sweeps=max_sweeps, requirement=required, _inputs=_inputs)
-            if _inputs is not None else
-            _iterate(values, prepared, progress, tolerance=tolerance,
-                     max_sweeps=max_sweeps, requirement=required)
+            _iterate(
+                values,
+                prepared,
+                progress,
+                tolerance=tolerance,
+                max_sweeps=max_sweeps,
+                requirement=required,
+                _inputs=_inputs,
+            )
+            if _inputs is not None
+            else _iterate(
+                values,
+                prepared,
+                progress,
+                tolerance=tolerance,
+                max_sweeps=max_sweeps,
+                requirement=required,
+            )
         )
     return progress
 
@@ -459,7 +525,10 @@ def _start(
     tolerance: float,
     max_sweeps: int,
     requirement: Requirement | None,
-    _inputs=None,
+    _inputs: (
+        Callable[[FloatArray], Callable[[IndexArray, int, int], FloatArray] | None]
+        | None
+    ) = None,
 ) -> Outcome | Progress:
     """The initial check and, if a column fails it and the budget admits, ``A z``.
 
@@ -467,9 +536,11 @@ def _start(
     ``A z`` on every column instead.
     """
     sweeps, _ = operator_cost(prepared.n_blocks)
-    point = (evaluate_point(values, coefficients, prepared, _inputs=_inputs)
-             if _inputs is not None and evaluate_point is _INPUT_EVALUATE else
-             evaluate_point(values, coefficients, prepared))
+    point = (
+        evaluate_point(values, coefficients, prepared, _inputs=_inputs)
+        if _inputs is not None and evaluate_point is _INPUT_EVALUATE
+        else evaluate_point(values, coefficients, prepared)
+    )
     work = Work().checked(point.passes)
     if point.check is None:
         return Outcome(point, RANGE, point.failure or RANGE, work)
@@ -486,8 +557,8 @@ def _start(
     try:
         recurrence, reason = (
             _initialize(point, active, prepared, attempted, _inputs=_inputs)
-            if _inputs is not None and _initialize is _INPUT_INITIALIZE else
-            _initialize(point, active, prepared, attempted)
+            if _inputs is not None and _initialize is _INPUT_INITIALIZE
+            else _initialize(point, active, prepared, attempted)
         )
     except FloatingPointError as error:
         return Outcome(point, RANGE, str(error), work.visited(attempted.count))
@@ -505,7 +576,10 @@ def _iterate(
     tolerance: float,
     max_sweeps: int,
     requirement: Requirement | None,
-    _inputs=None,
+    _inputs: (
+        Callable[[FloatArray], Callable[[IndexArray, int, int], FloatArray] | None]
+        | None
+    ) = None,
 ) -> Outcome | Progress:
     """One CG update: the reserved operator, the candidate, its check, ``beta``.
 
@@ -522,8 +596,8 @@ def _iterate(
     try:
         new_point, r, reason = (
             _advance(values, prepared, point, recurrence, attempted, _inputs=_inputs)
-            if _inputs is not None and _advance is _INPUT_ADVANCE else
-            _advance(values, prepared, point, recurrence, attempted)
+            if _inputs is not None and _advance is _INPUT_ADVANCE
+            else _advance(values, prepared, point, recurrence, attempted)
         )
     except FloatingPointError as error:
         return Outcome(point, RANGE, str(error), work.visited(attempted.count))

@@ -1,9 +1,13 @@
-"""Detached snapshots of support, recession, and collinearity diagnostic problems."""
+"""Detached snapshots of support, recession, and collinearity diagnostic problems.
+
+``design/02_computation.md``, Sections 2 and 4; ``plan/evidence/M1.15_contract.txt``;
+``brief/layout_C_ownership.txt`` (P07).
+"""
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -206,12 +210,15 @@ class RetainedGammaProblem:
     _offset: FloatArray
     variance: PowerVariance
     omega: float
+    _coordinates: IndexArray | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         """Own all stored numeric arrays and typed observation weights."""
         for name in ("_z", "_design", "_positions", "_offset"):
             object.__setattr__(self, name, owned_array(getattr(self, name)))
         object.__setattr__(self, "_weights", _owned_observation_weights(self._weights))
+        if self._coordinates is not None:
+            object.__setattr__(self, "_coordinates", owned_array(self._coordinates))
 
     @classmethod
     def from_problem(
@@ -239,7 +246,9 @@ class RetainedGammaProblem:
                 problem.variance,
                 float(problem.omega),
             )
-            return cls(*head, *tail)
+            if problem.coordinates is None:
+                return cls(*head, *tail)
+            return cls(*head, *tail, _coordinates=problem.coordinates)
 
         if register_problem is not None:
             return register_problem(problem, _build)
@@ -299,6 +308,20 @@ class RetainedGammaProblem:
             else sum(b.n_levels for b in self._grouping.blocks)
         )
         return self.n_slopes + levels
+
+    @property
+    def coordinates(self) -> IndexArray | None:
+        """Return the original-column LP map as a fresh owned copy, or None."""
+        return None if self._coordinates is None else owned_array(self._coordinates)
+
+    @property
+    def n_coordinates(self) -> int:
+        """Return the actual LP dimension, not the full original width."""
+        return (
+            self.n_parameters
+            if self._coordinates is None
+            else int(self._coordinates.size)
+        )
 
     @property
     def positive(self) -> IndexArray:

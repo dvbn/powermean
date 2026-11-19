@@ -1,19 +1,23 @@
-"""Internal power-family profiling of the fixed-effect blocks: state, sweeps, status.
+"""Private power-family profiling of the fixed-effect blocks: state, sweeps, status.
 
-The inner profile only, for any positive number of ordered blocks.  No outer slope
-Newton, Schur complement, line search or tightening schedule, no NB2 (the dedicated
-:mod:`powermean.fe.profile_nb2` handles it, and this entry refuses an NB2 problem
+``design/02_computation.md``, Sections 5.2 and 5.7; ``design/06_reuse_map.md``,
+``fe/profile`` (an ADAPTATION of S1 ``fe_direct.ProfileLinearLoss``, lines 58 to 125,
+generalized from exactly two blocks to any positive number of ordered blocks); the
+adopted contract ``plan/evidence/M1.5_contract.txt``, Sections 1, 3 and 4; decision
+D51.  Task M1.5: the inner profile only.  No outer slope Newton, Schur complement,
+line search or tightening schedule (task M1.11), no NB2 (task M1.6 adds the
+dedicated :mod:`powermean.fe.profile_nb2`, and this entry refuses an NB2 problem
 before any check, stationary or not; the shared record admits the exact NB2
 family, this loop does not), no sample
 deletion, separation, rank, default, covariance, certificate or public path; a
 completed profile is not a full-joint certificate.  The arithmetic is
 :mod:`powermean.fe.profile_arithmetic`; the controls are ``profile_tol`` 2e-11 and
-``profile_max_sweeps`` 20000 of :class:`powermean.solve.absorbed.AbsorbedOptions`,
+``profile_max_sweeps`` 20000 of :class:`powermean.solve.m1_options.AbsorbedOptions`,
 unchanged, taken as explicit arguments (positive finite real, positive integer; 1
 valid) and never chosen here.
 
-State.  :class:`ProfileState` is one owned read-only coefficient
-vector per block, on the transformed scale, bound to the grouping (positions,
+State (contract, Section 1).  :class:`ProfileState` is one owned read-only coefficient
+vector per block, on the transformed scale, bound to the accepted grouping (positions,
 block names, codes, level counts and the ordered level labels; a relabeling that keeps
 the partition is another grouping).  Starting values are the caller's choice and the
 supplied start is recorded in the result; no observation-level index is a warm state,
@@ -22,16 +26,17 @@ base are a new :class:`~powermean.fe.profile_arithmetic.ProfileProblem`, whose s
 totals, sums, index and equations are formed afresh.  The work runs on local copies;
 a failure never modifies the caller's state.
 
-Loop.  The index is reconstructed from the start, the fresh
+Loop (contract, Section 4).  The index is reconstructed from the start, the fresh
 equations of every original block are evaluated there, and an initially passing check
 returns with zero sweeps.  Otherwise each sweep visits the blocks in declared order,
 each block adding its increment at the current index and the index being
 reconstructed before the next block; after EVERY complete sweep the fresh check of all
 original blocks runs at the one returned index, the last allowed sweep included,
 before exhaustion is declared.  The sole accuracy predicate is ``max |e_g|`` at most
-the requested tolerance, equality passing: no coefficient displacement, last-block
-check, scale multiplier, curvature normalization or roundoff allowance (an
-allowance ``tol + 32 eps mean(a + b)`` is not taken).  One
+the requested tolerance, equality passing (``e_g`` in the unit of the score:
+:mod:`powermean.fe.profile_arithmetic`): no coefficient displacement, last-block
+check, scale multiplier, curvature normalization or source roundoff allowance (the
+source's ``tol + 32 eps mean(a + b)`` of ``fe_direct.py:104-114`` is not taken).  One
 block has an exact scalar update algebraically, not an automatic completion: its
 fresh check decides like any other.  A zero step or an unchanged coefficient proves
 nothing.
@@ -66,6 +71,8 @@ the checked start as that state; a completed block does not).  Nothing is retrie
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import MemberDescriptorType
+from typing import cast
 
 import numpy as np
 
@@ -77,9 +84,9 @@ from powermean.fe.profile_arithmetic import (
     Coefficients,
     EquationCheck,
     NumeratorSums,
+    ProfileProblem,
     ProfileReductions,
     ProfileSum,
-    ProfileProblem,
     _profile_reductions,
     block_step,
     fresh_equations,
@@ -237,7 +244,7 @@ class ProfileResult:
 class _Counters:
     """The mutable counters of one call; frozen into :class:`Work` at the end."""
 
-    __slots__ = ("values", "reductions")
+    __slots__ = ("reductions", "values")
 
     def __init__(self) -> None:
         """Start every counter at zero."""
@@ -266,16 +273,21 @@ class _Counters:
 
 
 _REDUCTION_COUNTERS = _Counters
-_REDUCTION_SLOT = vars(_Counters)["reductions"]
+_REDUCTION_SLOT: MemberDescriptorType = vars(_Counters)["reductions"]
 
 
 def _local_reductions(counters: _Counters) -> ProfileReductions | None:
     """No new getter/callback reads on a foreign or modified counter record."""
     try:
-        if (type(counters) is _REDUCTION_COUNTERS
-                and vars(_REDUCTION_COUNTERS).get("reductions") is _REDUCTION_SLOT):
+        if (
+            type(counters) is _REDUCTION_COUNTERS
+            and vars(_REDUCTION_COUNTERS).get("reductions") is _REDUCTION_SLOT
+        ):
             try:
-                return _REDUCTION_SLOT.__get__(counters, _REDUCTION_COUNTERS)
+                return cast(
+                    "ProfileReductions | None",
+                    _REDUCTION_SLOT.__get__(counters, _REDUCTION_COUNTERS),
+                )
             except AttributeError:
                 pass  # An initializer that issued no local reduction state.
     except MemoryError:
@@ -307,9 +319,7 @@ def _bound(state: ProfileState, problem: ProfileProblem) -> ProfileState:
         mine is theirs
         and type(mine) is Grouping
         and not mine.positions.flags.writeable
-        and all(
-            type(b) is Block and not b.codes.flags.writeable for b in mine.blocks
-        )
+        and all(type(b) is Block and not b.codes.flags.writeable for b in mine.blocks)
     ):
         return state
     same = (
@@ -338,8 +348,7 @@ def _evaluate(
     try:
         reductions = _local_reductions(counters)
         check = (
-            fresh_equations(problem, index, _sums=reductions[0],
-                            _inputs=reductions[2])
+            fresh_equations(problem, index, _sums=reductions[0], _inputs=reductions[2])
             if reductions is not None and fresh_equations is _ACCEPTED_EQUATIONS
             else fresh_equations(problem, index)
         )
@@ -375,8 +384,12 @@ def _numerators(problem: ProfileProblem) -> Numerators | None:
 
 
 def _step(
-    problem: ProfileProblem, q: FloatArray, block: int, numerators: Numerators | None,
-    *, sums: ProfileSum | None = None,
+    problem: ProfileProblem,
+    q: FloatArray,
+    block: int,
+    numerators: Numerators | None,
+    *,
+    sums: ProfileSum | None = None,
 ) -> FloatArray:
     """The step of ``block`` at ``q``, with the call's held invariant sums if any.
 
@@ -395,8 +408,10 @@ def _step(
         )
     variance = problem.variance
     if type(variance) is PowerVariance and variance.tau == 2.0:
-        if (sums is not None
-                and invariant_denominator_block_step is _ACCEPTED_DENOMINATOR_STEP):
+        if (
+            sums is not None
+            and invariant_denominator_block_step is _ACCEPTED_DENOMINATOR_STEP
+        ):
             step, numerators[block] = invariant_denominator_block_step(
                 problem, q, block, numerators.get(block), _sums=sums
             )

@@ -7,7 +7,8 @@ the strict type check.  This module imports ``formulaic``, ``formulaic.errors``,
 with ``importlib.import_module`` and casts them to protocols or typed views of the
 objects used, each typed as :mod:`powermean.formula` uses it, and no further.  Nothing
 is wrapped: ``formulaic.model_matrix`` is Formulaic's function, ``formulaic.ModelSpec``
-its class, ``formulaic_errors.FormulaSyntaxError`` its exception and
+its class, ``formulaic.Formula`` its parser and ``formulaic.SimpleFormula`` the class of
+a parsed side, ``formulaic_errors.FormulaSyntaxError`` its exception and
 ``PandasMaterializer`` its native pandas materializer class, which the tests check.  A
 context is typed as a mapping, so that a frame depth, with which Formulaic would read
 the variables of a caller, is a type error, and ``model_matrix`` accepts the explicit
@@ -19,7 +20,7 @@ Formulaic concern the stages that may not import this package.
 from __future__ import annotations
 
 import importlib
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Protocol, TypedDict, Unpack, cast, overload
 
 import pandas as pd
@@ -61,6 +62,22 @@ class Factor(Protocol):
         """Set the kind of an owned factor copy."""
 
 
+class FactorValues(Protocol):
+    """Evaluated values carrying the encoder chosen by Formulaic."""
+
+    def __init__(self, values: object, *, metadata: object) -> None: ...
+
+    @property
+    def __wrapped__(self) -> object:
+        """The evaluated data before encoding."""
+
+
+class FactorMetadata(Protocol):
+    """Formulaic's per-evaluation contrast metadata."""
+
+    spans_intercept: bool
+
+
 class EvaluatedFactor(Protocol):
     """One evaluated factor at the materializer's encoding boundary."""
 
@@ -69,8 +86,15 @@ class EvaluatedFactor(Protocol):
         """The fitted factor expression."""
 
     @property
-    def values(self) -> object:
+    def values(self) -> FactorValues:
         """Formulaic's wrapped evaluated values."""
+
+    @property
+    def metadata(self) -> FactorMetadata:
+        """The encoder metadata for these values."""
+
+    def replace(self, *, values: FactorValues) -> EvaluatedFactor:
+        """Copy the factor with new data for its encoder."""
 
 
 class Term(Protocol):
@@ -198,10 +222,20 @@ class Override(Protocol):
     ) -> Callable[[Callable[P, R]], Callable[P, R]]: ...
 
 
+class SimpleFormula(Protocol):
+    """A parsed ``formulaic.SimpleFormula``: its terms, in order."""
+
+    def __iter__(self) -> Iterator[Term]:
+        """The terms of the formula."""
+
+
 class Formulaic(Protocol):
     """The module ``formulaic``."""
 
     ModelSpec: type[Spec]
+    SimpleFormula: type[SimpleFormula]
+    Formula: Callable[..., object]
+    """Formulaic's parser entry point: ``Formula(text, _context=...)``, unevaluated."""
 
     def model_matrix(
         self,

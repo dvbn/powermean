@@ -1,4 +1,4 @@
-"""Direct fixed-tau no-FE IOLS solver package."""
+"""Direct fixed-tau no-FE IOLS solver package (tasks M1.36, M1.37, M1.38)."""
 
 from __future__ import annotations
 

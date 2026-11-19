@@ -1,61 +1,68 @@
 """Covariances of the fitted point from its retained primitives, on the reported scale.
 
-Covariances are recomputed from the stored contributions, with no refit, and mapped to
-the reported scale.
+``design/04_inference_and_effects.md``, Sections 1 to 3 and 5 ("recomputed from the
+stored contributions, no refit"); ``design/01_statistical_core.md``, Section 3.1 (the
+map of a covariance to the reported scale); decisions D41, D49, D54 and D55.
 
 A covariance is formed again from the retained :class:`~powermean.inference.
 contributions.Influence` of the point, the primitive scores ``s_i``, the actual sum
-Jacobian ``-C`` and its map ``A = C^-1``, by the ``"stata"`` convention
-(:mod:`powermean.inference.convention`): the robust estimator with ``N/(N - 1)``, or one
-cluster dimension with ``G/(G - 1)``, the observed bread, the normal reference,
-frequency weights as replicated rows.  Nothing is solved, the point is unchanged, no row
-is reselected and no factor is applied twice.
+Jacobian ``-C`` and its map ``A = C^-1``, by the accepted ``"stata"`` convention
+(:mod:`powermean.inference.convention`): the robust estimator with ``N/(N - 1)``, or
+one cluster dimension with ``G/(G - 1)``, the observed bread, the normal reference,
+frequency weights as replicated rows.  Nothing is solved, the point is unchanged, no
+row is reselected and no factor is applied twice.
 
-Reported scale (:func:`report`).  ``V`` of the solver's coordinates ``theta`` is mapped
-by :class:`~powermean.model.order_scale.OrderScale`, entry by entry with exact
-exponents: ``V_jk / (d_j d_k) / omega^2``, and the standard errors ``sqrt(V_jj)`` by ``1
-/ (d_j |omega|)``.  This is the direct map, not the dense product ``M V M'`` of a
-materialized transform: where the column scales differ by hundreds of octaves the
-product forms an intermediate ``M V`` whose entry underflows while the result is
-representable, and the symmetric part then reports half of an off-diagonal entry (the
-witness of ``omega = 1``, ``d = (2^600, 2^-600)``, ``V = [[2^900, 2^-600], [2^-600,
-2^-1000]]``, whose reported covariance is ``[[2^-300, 2^-600], [2^-600, 2^200]]``).  A
-reported entry that is not representable raises ``FloatingPointError``: nothing is
-floored, and a genuine zero covariance keeps its diagnostics.  Negative order reverses
-no covariance and no standard error; at ``omega = 0`` the order multiplier is absent and
-the inverse column scaling remains.
+Reported scale (:func:`report`).  ``V`` of the solver's coordinates ``theta`` is
+mapped by the accepted :class:`~powermean.model.order_scale.OrderScale`, entry by
+entry with exact exponents: ``V_jk / (d_j d_k) / omega^2``, and the standard errors
+``sqrt(V_jj)`` by ``1 / (d_j |omega|)``.  This is the direct map of file 01, Section
+3.1, not the dense product ``M V M'`` of a materialized transform: where the column
+scales differ by hundreds of octaves the product forms an intermediate ``M V`` whose
+entry underflows while the result is representable, and the symmetric part then
+reports half of an off-diagonal entry (the witness of ``omega = 1``, ``d = (2^600,
+2^-600)``, ``V = [[2^900, 2^-600], [2^-600, 2^-1000]]``, whose reported covariance is
+``[[2^-300, 2^-600], [2^-600, 2^200]]``).  A reported entry that is not
+representable raises ``FloatingPointError``: nothing is floored, and a genuine zero
+covariance keeps its diagnostics (D49, D54).  Negative order reverses no covariance
+and no standard error; at ``omega = 0`` the order multiplier is absent and the
+inverse column scaling remains.
 
-Cluster dimensions (:func:`cluster_codes`).  A later request names a classification that
-the preparation retained with the fit: the requested cluster column, or a column of
-``Columns.metadata``, as raw typed values aligned with the retained rows, which are the
-input rows of the system.  The codes are the integers of first appearance of the exact
-values, without conversion to doubles (``2^53`` and ``2^53 + 1`` stay two labels); a
-missing value on the estimation sample is refused, since no row is dropped after the
-fit, and so is a floating-point value that is not finite, which the preparation reads as
-missing, and a name that was not retained.  No new data, array or mapping supplies a
-classification here: that transport belongs to the inference interface.
+Cluster dimensions (:func:`cluster_codes`).  A later request names a classification
+that the preparation retained with the fit: the requested cluster column, or a column
+of ``Columns.metadata``, as raw typed values aligned with the retained rows, which are
+the input rows of the system.  The codes are the integers of first appearance of the
+exact values, without conversion to doubles (``2^53`` and ``2^53 + 1`` stay two
+labels); a missing value on the estimation sample is refused, since no row is dropped
+after the fit (file 04, Section 2.2), and so is a floating-point value that is not
+finite, which the preparation reads as missing (``design/02``, Section 2, step 2), and
+a name that was not retained.  No new
+data, array or mapping supplies a classification here: that transport belongs to the
+inference interface of milestone M1.
 
-Requests (:func:`request`).  ``"robust"``; a mapping ``{"cluster": name}``; a mapping of
-several dimensions, ``{"cluster": "a + b"}``, with the optional keys ``"multiway"`` and
-``"psd"``, checked by the canonical
+Requests (:func:`request`).  ``"robust"``; a mapping ``{"cluster": name}``; a
+mapping of several dimensions, ``{"cluster": "a + b"}``, with the optional keys
+``"multiway"`` and ``"psd"`` (``design/04``, Sections 2 and 5;
+``plan/evidence/M1_contract.txt``, Section 6(d)), checked by the canonical
 :class:`~powermean.data.inference_requests.ClusterRequest`; the exact strings of the
-seven named HC methods, ``"HC0"`` to ``"HC5"`` and ``"HC4m"``; the
+seven named HC methods, ``"HC0"`` to ``"HC5"`` and ``"HC4m"`` (Section 6(a)); the
 :class:`~powermean.data.specs.Inference` record itself; ``None`` for the covariance
-requested at the fit.  The name of a cluster dimension is a retained classification: a
-column the preparation read, or the interaction ``a^b`` of two columns that it formed
-and retained under that requested name, whose codes number the observed pairs of exact
-values by first appearance; a dimension that was not retained is refused as any other
-name that was not, with no new sample, data, array or refit.  The key ``ssc`` of a
-mapping is unknown, the key ``adjustment`` and the expected bread of a robust or cluster
-covariance are refused as not available.  The keywords ``ssc`` and ``bread`` of a
-request carry the explicit convention and the bread of a named HC method; a post-fit
-robust or cluster request also accepts the explicit convention, taking the fit's when
-omitted; its bread remains observed.  An omitted bread is the observed one.  The
-convention of an omitted ``ssc`` is resolved by the inference layer (the fit's, after
-the fit).  A request matches the record of the fit, which then answers it, when it names
-the same covariance: the same kind, the same typed cluster request (dimensions, form and
-``"psd"`` key, as given), and a convention that is the record's own (omitted, or the one
-the fit requested).
+requested at the fit.  The name of a cluster dimension is a retained classification:
+a column the preparation read, or the interaction ``a^b`` of two columns that it
+formed and retained under that requested name (``design/04``, Section 2.2; decision
+D41), whose codes number the observed pairs of exact values by first appearance; a
+dimension that was not retained is refused as any other name that was not, with no new
+sample, data, array or refit.  The key ``ssc`` of a mapping is unknown (Section 6(e)),
+the key ``adjustment`` and the expected bread of a robust or cluster covariance are
+refused as not available before their milestones (decision D41).  The keywords ``ssc``
+and ``bread`` of a request (Section 6(e)) carry the explicit convention and the bread
+of a named HC method; a post-fit robust or cluster request also accepts the explicit
+convention, taking the fit's when omitted; its bread remains observed.  An omitted
+bread is the observed one (rule B2).  The convention of an omitted ``ssc`` is resolved
+by the inference layer (contract, Section 3.1: the fit's, after the fit).  A request
+matches the record of the fit, which then answers it (rule B10), when it names the
+same covariance: the same kind, the same typed cluster request (dimensions, form and
+``"psd"`` key, as given), and a convention that is the record's own (omitted, or the
+one the fit requested).
 
 A named HC record (:func:`hc_record`, :func:`hc_default`) holds the kernel's covariance
 of ``theta`` with the method's factor applied once, the reported covariance and the
@@ -68,7 +75,7 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 import pandas as pd
@@ -81,6 +88,7 @@ from powermean.data.retained import OrderSample
 from powermean.data.specs import Bread, Inference, explicit_bread, explicit_ssc
 from powermean.data.specs import Covariance as CovarianceKind
 from powermean.errors import SpecificationError
+from powermean.formula.validity import raw_invalid_count
 from powermean.inference.contributions import Influence
 from powermean.inference.convention import (
     ClusterCodes,
@@ -94,17 +102,23 @@ from powermean.model.order_scale import OrderScale
 from powermean.model.variance import FloatArray
 from powermean.results.retained import Convention, CovarianceRecord
 
-# The keys of a vcov mapping that are reserved and not yet available.
+if TYPE_CHECKING:
+    from powermean.results.saturated import SaturatedCovariance
+
+# The keys of a vcov mapping that the design names and a later milestone owns.
 LATER_KEYS: frozenset[str] = frozenset({"adjustment"})
-# The keys of a cluster mapping of vcov; "ssc" is not one.
+# The keys of a cluster mapping of vcov (contract, 6(d)); "ssc" is not one (6(e)).
 CLUSTER_KEYS: tuple[str, ...] = ("cluster", "multiway", "psd")
 VALID_SPECS = (
     "'robust', 'HC0', 'HC1', 'HC2', 'HC3', 'HC4', 'HC4m', 'HC5', or a mapping with "
     "the key 'cluster'"
 )
-# Default values, not a test of keyword omission: an explicit ssc carries its own
-# requested-convention provenance.
+# Historical first-milestone values, not a test of keyword omission: an explicit
+# ssc now carries its own requested-convention provenance (D65, 6(e)).
 INACTIVE: Mapping[str, str] = {"ssc": "stata", "bread": "observed"}
+# The diagnostic of a named HC request left missing by a hat value of one (owner's
+# rulings 74 and 88): the identifier of its note.
+UNIT_LEVERAGE = "covariance.unstable_leverage"
 # A cluster request by its typed settings: the dimensions, the form and "psd".
 ClusterKey = tuple[tuple[str, ...], object, object]
 
@@ -129,13 +143,13 @@ class Request:
         """Whether ``record`` is the covariance of this request, its own cached record.
 
         A robust or cluster request matches the record of its kind and typed cluster
-        request: a default record under the ``"stata"`` convention, omitted or explicit;
-        a record of the convention engine under its requested convention, or any where
-        the request gives none (it takes the fit's convention in force, the record's).
-        A named HC request matches the record of its method and bread whose requested
-        convention is its own, or any where the request gives none (it takes the fit's
-        convention in force, under which the method's factor and reference are the
-        record's).
+        request: a record of the first milestone under the ``"stata"`` convention,
+        omitted or explicit; a record of the convention engine under its requested
+        convention, or any where the request gives none (it takes the fit's
+        convention in force, the record's).  A named HC request matches the record of
+        its method and bread whose requested convention is its own, or any where the
+        request gives none (it takes the fit's convention in force, under which the
+        method's factor and reference are the record's).
         """
         if self.method is None:
             if record.method is not None or record.kind != self.kind:
@@ -166,8 +180,8 @@ def _request_key(found: Request) -> ClusterKey | None:
 def _record_key(record: CovarianceRecord) -> ClusterKey | None:
     """The typed cluster request of a record, or ``None`` for a robust one.
 
-    A record of the convention engine holds its bound request; a default record its one
-    cluster variable.
+    A record of the convention engine holds its bound request; a record of the first
+    milestone its one cluster variable.
     """
     answer = record.answer
     if answer is not None:
@@ -315,7 +329,11 @@ def hc_record(
         count=applied.counts.count,
         clusters=None,
         rank=found.estimate.rank,
-        diagnostics=found.estimate.diagnostics,
+        diagnostics=(
+            (*found.estimate.diagnostics, UNIT_LEVERAGE)
+            if found.undefined
+            else found.estimate.diagnostics
+        ),
         bread=bread,
         convention=convention,
         reference=applied.reference.kind,
@@ -335,14 +353,14 @@ def hc_default(
     found : HCCovariance
         The kernel's record at the certified point.
     scale : OrderScale
-        The order scale of the fit.
+        The accepted order scale of the fit.
     bread : {"observed", "expected"}
         The bread of the request.
 
     Returns
     -------
     tuple
-        The covariance of ``theta`` as the default convention record
+        The covariance of ``theta`` as the convention record of the first milestone
         (kind ``"hc"``, the method's factor, ``N``, the primitive's estimate and the
         reference), against which the handoff binds the standard errors that the
         certificate's coefficient gate read, and its record on the reported scale.
@@ -352,9 +370,15 @@ def hc_default(
     FloatingPointError
         A reported entry or standard error is not representable in float64.
     """
-    reported, errors = report(found.covariance, scale)
+    if found.undefined:
+        # Ruling 74: the gate read the unadjusted estimate of the same rows
+        # (``gate_covariance``); the request's covariance and errors are missing.
+        reported = found.covariance
+        errors = np.full(reported.shape[0], np.nan)
+    else:
+        reported, errors = report(found.covariance, scale)
     convention = Covariance(
-        covariance=found.covariance,
+        covariance=found.gate_covariance,
         kind="hc",
         factor=found.factor,
         count=found.applied.counts.count,
@@ -415,6 +439,8 @@ def _missing(value: object) -> bool:
     """
     if value is None or value is pd.NA or value is pd.NaT:
         return True
+    if type(value) is np.longdouble:
+        return not bool(np.isfinite(value))
     if isinstance(value, float | np.floating):
         return not math.isfinite(float(value))
     return isinstance(value, np.datetime64 | np.timedelta64) and bool(np.isnat(value))
@@ -470,26 +496,46 @@ def cluster_codes(sample: OrderSample, name: str) -> ClusterCodes:
     values = sample.metadata[name]
     if values.shape != (sample.count,):
         raise ValueError(f"cluster dimension {name!r} is not aligned with the rows")
-    labels: dict[Any, int] = {}
-    codes = np.empty(sample.count, dtype=np.intp)
-    missing = 0
-    for position, value in enumerate(values.tolist()):
-        if _missing(value):
-            missing += 1
-            continue
-        codes[position] = labels.setdefault(value, len(labels))
+    if _integer_vector(values):
+        return ClusterCodes(name, _first_appearance(values))
+    missing = raw_invalid_count(values)
     if missing:
         raise SpecificationError(
             "specification.cluster_missing_values", {"name": name, "count": missing}
         )
+    labels: dict[Any, int] = {}
+    codes = np.empty(sample.count, dtype=np.intp)
+    for position, value in enumerate(values.tolist()):
+        codes[position] = labels.setdefault(value, len(labels))
     return ClusterCodes(name, codes)
+
+
+def _integer_vector(values: object) -> bool:
+    """Whether ``values`` is a NumPy vector of integers (signed or unsigned).
+
+    Its elements are Python integers once listed: never missing, and equal as keys of
+    a classification exactly when they are equal integers.
+    """
+    return type(values) is np.ndarray and values.ndim == 1 and values.dtype.kind in "iu"
+
+
+def _first_appearance(values: np.ndarray) -> np.ndarray:
+    """The codes of an integer vector, numbered by first appearance of each value.
+
+    The numbering of the label loop of :func:`cluster_codes`: ``pandas.factorize``
+    without sorting assigns ``0, 1, ...`` to the distinct values in the order in which
+    they first appear, and equal integers share a code.
+    """
+    codes, _ = pd.factorize(values, sort=False)
+    numbered: np.ndarray = np.asarray(codes, dtype=np.intp)
+    return numbered
 
 
 # -------------------------------------------------------------------------- requests
 
 
 def _refuse(value: object) -> SpecificationError:
-    """The refusal of a value that names no covariance."""
+    """The refusal of a value that names no covariance of the first milestone."""
     return SpecificationError(
         "specification.invalid_value",
         {"argument": "vcov", "value": value, "valid": VALID_SPECS},
@@ -513,10 +559,10 @@ def _cluster_dimensions(value: object) -> tuple[str, ...]:
 
 
 def _mapping_request(spec: Mapping[str, object]) -> Request:
-    """A request from a ``vcov`` mapping: a cluster request and its keys.
+    """A request from a ``vcov`` mapping: a cluster request and its keys (6(d), (e)).
 
-    One dimension without ``"multiway"`` or ``"psd"`` is the single cluster variable;
-    every other request is the typed
+    One dimension without ``"multiway"`` or ``"psd"`` is the one cluster of the first
+    milestone; every other request is the typed
     :class:`~powermean.data.inference_requests.ClusterRequest`, which checks the form,
     the ``"psd"`` treatment and where it is valid.
     """
@@ -572,8 +618,8 @@ def _named(spec: object) -> Request:
 def _with_keywords(found: Request, ssc: object, bread: object) -> Request:
     """The request with the explicit ``ssc`` and ``bread`` of its call, if given.
 
-    A named HC method takes any value of their domains; a robust or cluster request also
-    takes any convention, with observed bread.
+    A named HC method takes any value of their domains (contract, Section 6(e)); a
+    robust or cluster request also takes any convention, with observed bread.
     """
     if found.method is None:
         if given(bread) and explicit_bread(bread) != "observed":
@@ -625,7 +671,7 @@ def request(
         a ``"psd"`` treatment outside its domain (``specification.invalid_value``),
         ``"psd"`` outside a signed multiway request (``specification.conflicting``),
         the key ``"adjustment"`` or the expected bread of a robust or cluster
-        covariance, which are not yet available
+        covariance, which arrive at a later milestone
         (``specification.unimplemented``), or an explicit convention or bread outside
         its domain (``specification.invalid_value``).
     """
@@ -643,7 +689,9 @@ def request(
     return _with_keywords(found, ssc, bread)
 
 
-def frame(record: CovarianceRecord, names: tuple[str, ...]) -> pd.DataFrame:
+def frame(
+    record: CovarianceRecord | SaturatedCovariance, names: tuple[str, ...]
+) -> pd.DataFrame:
     """The reported covariance as a labeled table with its method in ``attrs``.
 
     The table is a fresh writable copy: editing it changes no retained state.

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 import pandas as pd
@@ -12,6 +12,7 @@ import pandas as pd
 from powermean._prepare.compose import Columns, _owned_index
 from powermean.data.accounting import CodeArray, frozen_codes, frozen_index
 from powermean.data.retained import OrderSample
+from powermean.data.sample_fe_state import RowLedger
 from powermean.data.weights import WeightKind
 from powermean.model.order import IndexArray
 from powermean.model.variance import FloatArray
@@ -21,6 +22,19 @@ from powermean.results.absorbed_sample import RetainedSampleSnapshot
 from powermean.results.cancelled_retained import RetainedCancelledEnvelope
 from powermean.results.fe_helpers import detached_record
 from powermean.systems.cancelled import CancelledAccounting
+
+
+class ClosedRows(NamedTuple):
+    """The ledger of a sample step that ran steps 5 and 6 alone: no retained sample.
+
+    A cancelled fit at ``tau = 2`` with zero outcomes; read by :class:`FESampleView`
+    where it reads a retained outcome's ledger.  ``fitted`` is the order sample of the
+    rows that remain, which the fit used.
+    """
+
+    ledger: RowLedger
+    fitted: OrderSample
+    sample: None = None
 
 
 class FESampleView:
@@ -46,7 +60,7 @@ class FESampleView:
         *,
         dependence: tuple[str, ...] = (),
         fe_snapshot: RetainedSampleSnapshot | None = None,
-        outcome_snapshot: RetainedOutcomeSnapshot | None = None,
+        outcome_snapshot: RetainedOutcomeSnapshot | ClosedRows | None = None,
         cancelled_envelope: RetainedCancelledEnvelope | None = None,
     ) -> None:
         self._order_sample = order_sample
@@ -59,6 +73,14 @@ class FESampleView:
         self._cancelled_envelope = cancelled_envelope
 
     @property
+    def _fitted(self) -> OrderSample:
+        """The order sample of the fitted rows when no retained sample states them."""
+        snapshot = self._outcome_snapshot
+        return (
+            snapshot.fitted if isinstance(snapshot, ClosedRows) else self._order_sample
+        )
+
+    @property
     def fingerprint(self) -> str:
         """Return the fingerprint from the actual retained state, detached outward."""
         if self._fe_snapshot is not None:
@@ -68,7 +90,7 @@ class FESampleView:
             and self._outcome_snapshot.sample is not None
         ):
             return self._outcome_snapshot.sample.fingerprint
-        return self._order_sample.fingerprint
+        return self._fitted.fingerprint
 
     @property
     def omega(self) -> float:
@@ -90,7 +112,7 @@ class FESampleView:
             and self._outcome_snapshot.sample is not None
         ):
             return self._outcome_snapshot.sample.conditioned
-        return self._order_sample.conditioned
+        return self._fitted.conditioned
 
     @property
     def column_names(self) -> tuple[str, ...]:
@@ -135,7 +157,11 @@ class FESampleView:
             and self._outcome_snapshot.sample is not None
         ):
             return self._outcome_snapshot.sample.effective_n
-        return self._order_sample.effective_n
+        if isinstance(self._outcome_snapshot, RetainedOutcomeSnapshot):
+            ledger = self._outcome_snapshot._ledger
+            totals = ledger.totals
+            return ledger.count if totals is None else totals["retained"]
+        return self._fitted.effective_n
 
     @property
     def zeros(self) -> int:
@@ -147,7 +173,14 @@ class FESampleView:
             and self._outcome_snapshot.sample is not None
         ):
             return int(np.count_nonzero(self._outcome_snapshot.sample.data.y == 0))
-        return int(np.count_nonzero(self._order_sample.data.y == 0))
+        if isinstance(self._outcome_snapshot, RetainedOutcomeSnapshot):
+            # The ledger uses input row numbers. The response has already been
+            # compacted for the order-specific exclusions that precede closure.
+            rows = self._order_sample.retained_index[
+                self._outcome_snapshot._ledger.positions
+            ]
+            return int(np.count_nonzero(self._order_sample.data.y[rows] == 0))
+        return int(np.count_nonzero(self._fitted.data.y == 0))
 
     @property
     def weight_kind(self) -> WeightKind | None:
@@ -183,6 +216,17 @@ class FESampleView:
         return 0
 
     @property
+    def dropped_separated_by_fixed_effect(self) -> int:
+        """Return the dropped separated by fixed effect from retained state."""
+        if self._fe_snapshot is not None:
+            return int(self._fe_snapshot.ledger.counts["separated_by_fixed_effect"])
+        if self._outcome_snapshot is not None:
+            return int(
+                self._outcome_snapshot.ledger.counts["separated_by_fixed_effect"]
+            )
+        return 0
+
+    @property
     def dropped_collinear(self) -> tuple[str, ...]:
         """Return the dropped collinear from retained state, detached."""
         if self._cancelled_envelope is not None:
@@ -209,11 +253,24 @@ class FESampleView:
 
     @property
     def counts(self) -> Mapping[str, int]:
-        """Return the counts from the actual retained state, detached outward."""
+        """Return the counts from the actual retained state, detached outward.
+
+        The ledger is read once (one fresh copy, LEANLOG2), from the snapshot that
+        :attr:`dropped_singleton`, :attr:`dropped_separated` and
+        :attr:`dropped_separated_by_fixed_effect` read, so the counts equal theirs.
+        """
         base_counts = dict(self._order_sample.counts)
-        if self._fe_snapshot is not None or self._outcome_snapshot is not None:
-            base_counts["singleton"] = self.dropped_singleton
-            base_counts["separated"] = self.dropped_separated
+        snapshot: RetainedSampleSnapshot | RetainedOutcomeSnapshot | ClosedRows | None
+        snapshot = self._fe_snapshot
+        if snapshot is None:
+            snapshot = self._outcome_snapshot
+        if snapshot is not None:
+            found = snapshot.ledger.counts
+            base_counts["singleton"] = int(found["singleton"])
+            base_counts["separated"] = int(found["separated"])
+            base_counts["separated_by_fixed_effect"] = int(
+                found["separated_by_fixed_effect"]
+            )
             base_counts["retained"] = self.count
         return MappingProxyType(base_counts)
 

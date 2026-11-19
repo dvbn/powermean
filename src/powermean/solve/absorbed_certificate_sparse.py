@@ -1,6 +1,8 @@
 """Conditioning, scaled score and full correction of the absorbed certificate.
 
-Internal module: the measures composed from the factors and counted actions of
+``design/02_computation.md``, Section 7; the M1.14 readiness specification, Section 3
+(``plan/evidence/M1.14_readiness.txt``); decision D51.  Task M1.14, private: the
+measures composed from the factors and counted actions of
 :mod:`powermean.solve.absorbed_certificate_factor`; no dense inverse, truncation,
 ridge, pseudoinverse, cutoff, incomplete factor or other solver.
 
@@ -20,12 +22,12 @@ numerical test, not Cholesky parity or an inertia proof.
 An eligible categorical block may be eliminated analytically before either
 factorization (:mod:`powermean.solve.absorbed_certificate_block`). Its implicit
 FULL factors retain the finite/pivot test and complete whitened score. Original
-full-matrix norms, inverse actions and inference maps are unchanged; the
+full-matrix norms, inverse actions and inference maps are unchanged; the approved
 block ordering can change numerical boundary outcomes. No factor is retained
 across points, and ordinary and curvature systems remain separate.
 
-Selected roots (the metric is the symmetrized observed negative Jacobian when positive
-definite, else the fixed merit metric).  Given the
+Selected roots (``design/02_computation.md``, Section 7: "the symmetrized observed
+negative Jacobian when positive definite, else the fixed merit metric").  Given the
 fixed :class:`~powermean.solve.absorbed_root_records.MeritFactor` of a root solve and
 a curvature that is not positive definite (or refused), the score is
 ``||D_M^-1/2 L_M^-1 Pr_M (S/s_M)||``, whose square is ``S' M^-1 S`` for the
@@ -50,7 +52,7 @@ from powermean.fe.absorb_numeric import checked_difference, checked_product
 from powermean.fe.certificate_basis import embed, lift
 from powermean.fe.reductions import immutable_array
 from powermean.model.order import IndexArray
-from powermean.model.variance import FloatArray
+from powermean.model.variance import FloatArray, score_unit
 from powermean.solve.absorbed_certificate_block import (
     Block,
     BlockFactor,
@@ -68,15 +70,16 @@ from powermean.solve.absorbed_certificate_factor import (
     inverse_norm,
     stored_lower,
 )
-from powermean.solve.absorbed_certificate_geometry import (
-    FEGeometry,
-    SparseMatrix,
-    moment,
-)
+from powermean.solve.absorbed_certificate_geometry import FEGeometry, moment
 from powermean.solve.absorbed_certificate_point import WorkStep
-from powermean.solve.compact_matrix import CompactMatrix
 from powermean.solve.absorbed_root_records import MeritFactor, ScoreMetric
-from powermean.solve.quantities import euclidean_norm, root_mean_square
+from powermean.solve.compact_matrix import CompactMatrix
+from powermean.solve.quantities import (
+    euclidean_norm,
+    relative_score,
+    root_mean_square,
+)
+from powermean.solve.sparse_matrix import SparseMatrix
 
 SUPPORT = "the positive-curvature rows lose the rank of the nuisance coordinates"
 NOT_FINITE = "the curvature factor holds a value that is not finite"
@@ -145,7 +148,10 @@ def conditioning(
 
 
 def whitened_score(
-    matrix: SparseMatrix | CompactMatrix, scaled: FloatArray, calls: Calls, block: Block | None = None
+    matrix: SparseMatrix | CompactMatrix,
+    scaled: FloatArray,
+    calls: Calls,
+    block: Block | None = None,
 ) -> tuple[FactorRecord, float]:
     """The curvature factor of ``matrix`` and ``||L^-1 Pr scaled / sqrt(d)||``.
 
@@ -164,6 +170,9 @@ def whitened_score(
         return record, math.nan
     lower, upper = factor_side(factor, "L"), factor_side(factor, "U")
     finite = np.isfinite(lower.data).all() and np.isfinite(upper.data).all()
+    # The remaining triangular solve needs only the extracted lower factor.
+    # Release SuperLU's native factors before SciPy creates its solve workspace.
+    del factor, upper
     if not np.array_equal(perm_r, perm_c):
         reason = "a threshold-zero off-diagonal pivot (perm_r != perm_c)"
     elif not (finite and np.isfinite(d).all()):
@@ -273,7 +282,10 @@ def _corrected(
 
 
 def _ordinary(
-    geometry: FEGeometry, rcond_min: float, calls: Calls, block: Block | None = None,
+    geometry: FEGeometry,
+    rcond_min: float,
+    calls: Calls,
+    block: Block | None = None,
     prepared: tuple[FactorRecord, SuperLU] | None = None,
 ) -> tuple[FactorRecord, tuple[float, float, str], Correction, FloatArray | None]:
     """The ordinary factor, its conditioning and, only when conditioned, ``delta``."""
@@ -283,7 +295,8 @@ def _ordinary(
         return record, (math.nan, math.nan, geometry.refusal), nothing, None
     record, factor = (
         block_factorized(geometry.ordinary, "ordinary", block)
-        if prepared is None else prepared
+        if prepared is None
+        else prepared
     )
     if factor is None:
         return record, (math.nan, math.nan, record.reason), nothing, None
@@ -295,11 +308,31 @@ def _ordinary(
     return record, measured, found, slope_map(factor, scale, k, calls) if k else None
 
 
+def _unit(geometry: FEGeometry) -> float:
+    """The unit of the score at the geometry's point: ``mean(z) ** (2 - tau)``.
+
+    The transformed outcome and the raw weights that the fresh rows were formed from;
+    1 for a linear point and for a variance that is not a power.
+    """
+    point = geometry.point
+    if point.variance is None:
+        return 1.0
+    numeric = point._numeric_problem
+    z = point.sample.problem.response if numeric is None else numeric.z
+    return score_unit(z, geometry.rows.weights, point.variance)
+
+
 def sparse_measures(
-    geometry: FEGeometry, rcond_min: float, merit: MeritFactor | None = None,
-    *, ordinary: tuple[FactorRecord, SuperLU] | None = None,
+    geometry: FEGeometry,
+    rcond_min: float,
+    merit: MeritFactor | None = None,
+    *,
+    ordinary: tuple[FactorRecord, SuperLU] | None = None,
 ) -> SparseMeasures:
     """Both factors, the conditioning, the scaled score and the correction (docstring).
+
+    The score is read relative to the unit of the criterion
+    (:func:`~powermean.solve.quantities.relative_score`).
 
     A scaling refusal of the geometry refuses both factors before any call.  With
     ``merit`` (a selected root's fixed metric) a curvature that is not positive
@@ -318,6 +351,9 @@ def sparse_measures(
             errors["curvature"] = (
                 curvature.reason or "the curvature is not positive definite"
             )
+    score = relative_score(
+        score, _unit(geometry), unit_free_metric=metric == "fixed_merit"
+    )
     ordinary_record, measured, found, mapped = _ordinary(
         geometry, rcond_min, calls, block, ordinary
     )

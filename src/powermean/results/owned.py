@@ -1,14 +1,16 @@
 """Owned copies of the records that a result retains and of those it hands out.
 
-Owned immutable arrays may be shared across records.  The records of the earlier stages
-keep their arrays in bytes of their own, which NumPy refuses to write or to make
-writable again.  Immutable bytes do not freeze the metadata of the array object that
-views them: ``array.shape = (1, 1)`` succeeds on such an array, and so does an
-assignment to its ``dtype`` or ``strides``, and every holder of that object sees the
-change.  A record is bound to its arrays by identity, so a caller that keeps the object
-it handed to the result, or one that the result handed out, can change what the result
-reads afterwards: the labels of a sample through the shape of its positions, the
-coefficients through the shape of the certificate's candidate.
+``design/04_inference_and_effects.md``, Section 2.3 ("owned immutable arrays may be
+shared across records"); ``design/02_computation.md``, Section 1, rule 4;
+``design/11_engineering.md``, Section 5, rule 2; decisions D41 and D55.  The records
+of the earlier stages keep their arrays in bytes of their own, which NumPy refuses to
+write or to make writable again.  Immutable bytes do not freeze the metadata of the
+array object that views them: ``array.shape = (1, 1)`` succeeds on such an array,
+and so does an assignment to its ``dtype`` or ``strides``, and every holder of that
+object sees the change.  A record is bound to its arrays by identity, so a caller that
+keeps the object it handed to the result, or one that the result handed out, can
+change what the result reads afterwards: the labels of a sample through the shape of
+its positions, the coefficients through the shape of the certificate's candidate.
 
 So the result layer never retains an array object that another holder has, and never
 hands one out: :func:`owned_array` forms, for an array, a fresh object of the same
@@ -24,7 +26,7 @@ before it checks and retains them, and :class:`~powermean.results.result.Result`
 re-forms the certificate and the last state on every access and in every refusal that
 carries them, so that an edit of the caller's record, or of a record handed out,
 reaches nothing retained.  Object columns of the sample's metadata, whose elements
-are no bytes, are re-formed by the owned selection of
+are no bytes, are re-formed by the owned selection of the accepted
 :class:`~powermean.data.raw.AlignedColumns`.
 """
 
@@ -187,6 +189,7 @@ def owned_sample(sample: OrderSample) -> OrderSample:
             scale=owned_array(sample.design.scale),
         ),
         metadata=sample.metadata.take(count),
+        separation=None if sample.separation is None else replace(sample.separation),
     )
 
 

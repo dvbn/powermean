@@ -1,28 +1,40 @@
-"""The dispatch of one fit: the stages composed, the point certified afresh.
+"""The dispatch of one fit: the accepted stages composed, the point certified afresh.
 
-A solver proposes, the certificate decides.  :func:`fit_prepared` takes a prepared
-problem and the typed specification of one fit, derives the sample of the mean order
-on the frozen domain, and composes the stages in their order, with no fallback of
-solver, start,
+``DESIGN.md``, Sections 4.1, 4.4, 4.6, 5.1 and 5.3; ``design/02_computation.md``,
+Sections 1 (rule 3: a solver proposes, the certificate decides), 5.1, 5.5, 6, 7 and 9;
+``design/01_statistical_core.md``, Sections 3.1 to 3.3; decisions D41, D45, D49, D51
+and D58; task M0.22.  :func:`fit_prepared` takes a prepared problem and the typed
+specification of one fit, derives the sample of the mean order on the frozen domain,
+and composes the accepted stages in their order, with no fallback of solver, start,
 tolerance or sample and no second acceptance policy:
 
+- without fixed effects, a regressor that is an exact linear combination of the
+  regressors before it in the formula is omitted, in formula order, by the
+  collinearity step of the routes with fixed effects called without blocks
+  (:func:`powermean.data.collinearity.analyze_collinearity`), before anything is
+  solved (owner's rulings 109 and 110).  One ``coverage.collinear_omitted`` note
+  names each omitted regressor, as on those routes; the sample of the fit holds the
+  other columns (:func:`powermean.data.retained.without_columns`) and the fit is that
+  of the formula without the omitted regressors.  A design that the step leaves
+  whole reaches the stages below as before, a design of deficient numerical rank
+  included;
 - nonzero order: the transformed problem of the sample (``Z = Y^omega``, the offset
-  ``omega o``, formed once by the preparation) becomes the
-  :class:`~powermean.systems.joint.JointSystem`; the start is the automatic
+  ``omega o``, formed once by the preparation) becomes the accepted
+  :class:`~powermean.systems.joint.JointSystem`; the start is the accepted automatic
   one (the plain mean of ``Z`` in the intercept, zero slopes) or the user's vector on
-  the reported scale mapped to the solver's coordinates by the forward map
+  the reported scale mapped to the solver's coordinates by the accepted forward map
   of the order scale; the convex Newton solver runs with the resolved options and
   the :class:`~powermean.solve.certificate.CertificateAssessor` of its retry, whose
   provider reports corrections and standard errors by the direct map of the order
   scale; and :func:`~powermean.solve.status.conclude` certifies the retained
   candidate afresh.  Native success of the solver certifies nothing;
-- zero order: the log response, the raw offset and the SVD solve of
+- zero order: the log response, the raw offset and the accepted SVD solve of
   :func:`powermean.solve.linear.solve`; the point is certified afresh against the
   original linear equation (:func:`~powermean.solve.linear_status.conclude_linear`),
   with the standard errors of the fresh evaluation supplied by the linear callback
   of the inference stage; no working variance enters the equation, which the
   estimator keeps as provenance only.  A start given by the caller is accepted and
-  recorded as at any order: the same shape check, the
+  recorded as at any order (``design/02``, Section 6): the same shape check, the
   same forward map (``theta_j = d_j beta_j`` at the order zero), owned in both
   coordinates by the result; the least-squares solve computes its solution
   independently of it, and no iterative trace is invented for it;
@@ -33,23 +45,23 @@ tolerance or sample and no second acceptance policy:
   below 1, Gamma above 2) run by the unchanged convex solver and certificate; the
   resolved root-Newton options are recorded with the other settings.  Whether the
   equation has a finite root is not characterized for ``tau < 1``, or above 2 with
-  zero outcomes: no row is dropped for it, the solver and
+  zero outcomes (``design/02``, Section 4): no row is dropped for it, the solver and
   the certificate decide, and a ``CoverageWarning`` says so once, here;
 - the records are handed to :func:`powermean.results.handoff.bind`, which checks the
   binding of every record to the retained inputs and forms the result.
 
 The covariance requested at the fit supplies the standard errors of the certificate's
-coefficient gate on every route: the
-robust or one-way provider, for the exact string of a named
+coefficient gate on every route (``plan/evidence/M1_contract.txt``, rule B12(a)): the
+robust or one-way provider of the first milestone, for the exact string of a named
 HC method the provider of :mod:`powermean.inference.hc_provider`, or, for a typed
 cluster request (several dimensions, a multiway form, a ``"psd"`` key or an explicit
 ``ssc``) and for the robust covariance with an explicit ``ssc``, the provider of
 :mod:`powermean.results.cluster_covariance`
 (:func:`~powermean.results.point.joint_provider`,
 :func:`~powermean.results.point.linear_provider`).  The refusals of a named method
-that need no point (HC1 at ``N = K``, an explicit second correction, structural unit
-leverage), and those of a request of that engine (a dimension that was not retained or
-has a missing value, fewer than two clusters among the active rows, a convention
+that need no point (HC1 at ``N = K``, an explicit second correction), and those of a
+request of that engine (a dimension that was not retained or has a missing value,
+fewer than two clusters among the active rows, a convention
 without positive degrees of freedom), run before anything is solved
 (:func:`~powermean.results.point.fit_preflight`), so that a refusal costs no solve;
 no other covariance replaces a refused request.
@@ -59,11 +71,13 @@ existing ``NumericalWarning`` once, here, at the dispatch; a retrieval of the re
 emits nothing again.  Any other status raises ``ConvergenceError`` with the last
 state and the certificate (``on_failure="raise"``, the default) or returns the
 result flagged as not certified, with its inference withheld
-(``on_failure="return"``).  Where the automatic start raises its documented
+(``on_failure="return"``).  Where the accepted automatic start raises its documented
 ``FloatingPointError`` before any candidate exists, the same boundary applies with
 the :class:`~powermean.solve.no_point.StartFailure` as the last state and no
 certificate: no point, trace or existence claim is fabricated, and the design with
-no intercept, whose zero start is finite, proceeds.  Where the least-squares solve
+no intercept, whose zero start is finite, proceeds. The IOLS scale-floor refusal
+likewise retains its measured scales before any backend evaluation.  Where the
+least-squares solve
 forms no point, its own reason decides the status and no certificate exists.
 Malformed inputs, an unavailable provider and the refusals of the preparation are
 not convergence failures and are never swallowed.
@@ -72,17 +86,29 @@ not convergence failures and are never swallowed.
 from __future__ import annotations
 
 import warnings
+from dataclasses import replace
+from importlib import import_module
+from typing import TYPE_CHECKING
 
 import numpy as np
 
+from powermean.data.collinearity import COMPLETE, analyze_collinearity
+from powermean.data.collinearity_numeric import numerical_rank
+from powermean.data.collinearity_records import CollinearityProblem
 from powermean.data.computation import Computation, _snapshot
-from powermean.data.retained import OrderSample
-from powermean.errors import CoverageWarning, NumericalWarning, SpecificationError
+from powermean.data.retained import OrderSample, without_columns
+from powermean.errors import (
+    CoverageWarning,
+    ExistenceError,
+    IdentificationError,
+    NumericalWarning,
+    SampleError,
+    SpecificationError,
+)
 from powermean.inference.hc import HCPreflight
-from powermean.interface.fe_dispatch import fit_fe_prepared
 from powermean.interface.options import Specification
 from powermean.interface.preparation import PreparedProblem
-from powermean.model.variance import FloatArray, PowerVariance
+from powermean.model.variance import FloatArray, NB2Variance, PowerVariance
 from powermean.results.handoff import (
     Handoff,
     bind,
@@ -90,6 +116,8 @@ from powermean.results.handoff import (
     linear_solve_of,
     system_of,
 )
+from powermean.results.indefinite import NOTE as INDEFINITE
+from powermean.results.ordinary_support import recession, separation
 from powermean.results.point import (
     fit_preflight,
     frequency_of,
@@ -100,6 +128,7 @@ from powermean.results.result import Result, not_certified
 from powermean.solve.cancelled_records import RootOptions
 from powermean.solve.certificate import CertificateAssessor, outside_convex
 from powermean.solve.iols.candidate import refuse_iols, solve_iols
+from powermean.solve.iols.normalization import IolsScaleFailure, IolsScaleFloorError
 from powermean.solve.iols.options import IolsOptions
 from powermean.solve.joint_root import solve_joint_root
 from powermean.solve.linear_status import conclude_linear
@@ -110,8 +139,13 @@ from powermean.solve.starts import Start, automatic_start, user_start
 from powermean.solve.status import Conclusion, conclude
 from powermean.systems.joint import JointSystem
 
+if TYPE_CHECKING:
+    from powermean.interface.fe_dispatch import fit_fe_prepared
+
 CERTIFIED: tuple[str, ...] = ("verified", "verified_secondary")
 INTERCEPT = "Intercept"
+# Around sqrt(machine epsilon), forming y**omega can lose half the significant digits.
+_SMALL_MEAN_ORDER = 1e-8
 
 
 def intercept_column(sample: OrderSample) -> int | None:
@@ -185,7 +219,7 @@ def root_options_of(specification: Specification) -> RootOptions:
     """The resolved root-Newton options of a fit outside ``[1, 2]``.
 
     The record that :func:`~powermean.interface.options.specification_of` resolved,
-    or the defaults, for a specification formed without
+    or the defaults of ``design/02``, Section 5.7, for a specification formed without
     one; the same record is recorded with the settings and run by the solve.
     """
     found = specification.root_options
@@ -196,7 +230,7 @@ def _root_conclusion(
     system: JointSystem,
     sample: OrderSample,
     specification: Specification,
-    provider: ReportedScaleProvider,
+    provider: ReportedScaleProvider | None,
     frequency: bool,
 ) -> Conclusion | StartFailure:
     """The joint root solve outside ``[1, 2]``, from the caller's start or the rule."""
@@ -234,20 +268,24 @@ def _power_handoff(
         sample, specification.inference, system, preflight=preflight
     )
     conclusion: Conclusion | None = None
-    failure: StartFailure | None = None
+    failure: StartFailure | IolsScaleFailure | None = None
     if specification.solver == "iols":
-        iols_candidate = solve_iols(
-            system,
-            intercept=intercept_column(sample),
-            iols_options=specification.iols_options,
-            cert_options=specification.options,
-            unscaled_design=sample.data.design,
-            design_scale=sample.design.scale,
-            omega=specification.estimator.mean.omega,
-        )
-        conclusion = conclude(
-            system, iols_candidate, reported=provider, frequency=frequency
-        )
+        try:
+            iols_candidate = solve_iols(
+                system,
+                intercept=intercept_column(sample),
+                iols_options=specification.iols_options,
+                cert_options=specification.options,
+                unscaled_design=sample.data.design,
+                design_scale=sample.design.scale,
+                omega=specification.estimator.mean.omega,
+            )
+        except IolsScaleFloorError as error:
+            failure = error.failure.with_slope_name(sample.data.column_names)
+        else:
+            conclusion = conclude(
+                system, iols_candidate, reported=provider, frequency=frequency
+            )
     elif outside_convex(system.variance):
         found = _root_conclusion(system, sample, specification, provider, frequency)
         if isinstance(found, StartFailure):
@@ -293,7 +331,7 @@ def _linear_handoff(
     A requested start is validated and mapped as on the power route, before the
     solve, and handed over for the record; the solve does not read it.  The equation
     is captured before its one solve (:func:`~powermean.results.handoff.
-    linear_solve_of`) and the pair is handed over with its candidate.
+    linear_solve_of`, task M1.22) and the pair is handed over with its candidate.
     """
     if specification.start is not None:
         mapped_start(sample, specification.start)
@@ -324,8 +362,28 @@ def _linear_handoff(
     )
 
 
+def not_identified_fields(result: Result) -> dict[str, int]:
+    """The counts of ``identification.not_identified`` from the result's sample."""
+    counts = result.sample.counts
+    by_effect, singleton = (
+        counts.get("separated_by_fixed_effect", 0),
+        counts.get("singleton", 0),
+    )
+    separated = counts.get("separated", 0) + by_effect
+    return {
+        "count": separated + singleton,
+        "separated": separated,
+        "separated_by_fixed_effect": by_effect,
+        "singleton": singleton,
+    }
+
+
 def _report(result: Result, specification: Specification, stacklevel: int) -> Result:
-    """The result, the secondary warning once, or the refusal of a failed fit."""
+    """The result, its notes once, or the refusal of a failed fit.
+
+    The notes of a certified fit: the secondary warning, then the note of a root of
+    indefinite curvature (owner's ruling 78, :mod:`powermean.results.indefinite`).
+    """
     status = result.provenance.status
     if status == "verified_secondary":
         options = specification.options
@@ -338,11 +396,42 @@ def _report(result: Result, specification: Specification, stacklevel: int) -> Re
             ),
             stacklevel=stacklevel + 2,
         )
-        return result
     if status in CERTIFIED:
+        omega = specification.estimator.mean.omega
+        if 0 < abs(omega) <= _SMALL_MEAN_ORDER:
+            warnings.warn(
+                NumericalWarning(
+                    "numerical.small_mean_order",
+                    {"omega": omega},
+                    status=status,
+                    certificate=result.certificate,
+                ),
+                stacklevel=stacklevel + 2,
+            )
+        if result._indefinite_root():
+            warnings.warn(
+                NumericalWarning(
+                    INDEFINITE, status=status, certificate=result.certificate
+                ),
+                stacklevel=stacklevel + 2,
+            )
         return result
     if specification.on_failure == "raise":
-        raise not_certified(result)
+        if status == "empty":
+            raise SampleError("sample.empty", {"count": result.sample.nobs})
+        if status == "not_identified":
+            raise IdentificationError(
+                "identification.not_identified", not_identified_fields(result)
+            )
+        withheld = not_certified(result)
+        if status == "no_finite_root":
+            raise ExistenceError(
+                "existence.no_finite_root",
+                status=status,
+                last_state=withheld.last_state,
+                certificate=withheld.certificate,
+            )
+        raise withheld
     return result
 
 
@@ -382,9 +471,8 @@ def fit_prepared(
         representable in the coordinates of the solver, on either route;
         ``newton_provider="sklearn"`` without a verified installation; for a named
         HC method, before any solve, HC1 at ``N = K``
-        (``specification.no_residual_dof``), an explicit second correction
-        (``specification.conflicting``) or structural unit leverage
-        (``specification.unit_leverage``).
+        (``specification.no_residual_dof``) or an explicit second correction
+        (``specification.conflicting``).
     ValueError
         For a named HC method, before any solve, a design that is not of full column
         rank on its rows of positive weight, whose leverage is undefined.
@@ -404,7 +492,12 @@ def fit_prepared(
     if problem.has_fixed_effects:
         if specification.solver == "iols":
             refuse_iols("fixed effects")
-        fitted = fit_fe_prepared(problem, specification, stacklevel=stacklevel)
+        fit_fe = (
+            fit_fe_prepared
+            if TYPE_CHECKING
+            else import_module("powermean.interface.fe_dispatch").fit_fe_prepared
+        )
+        fitted = fit_fe(problem, specification, stacklevel=stacklevel)
         return _report(fitted, specification, stacklevel)
     if specification.solver == "iols":
         if problem.frame.columns.weights is not None:
@@ -415,16 +508,117 @@ def fit_prepared(
         ):
             refuse_iols("an offset or exposure is given")
     sample = problem.sample(estimator.mean.omega)
-    computation = _computation(sample, specification)
-    preflight = fit_preflight(sample, specification.inference)
     if estimator.route == "linear":
+        sample = _identified(sample, stacklevel)
+        computation = _computation(sample, specification)
+        fit_preflight(sample, specification.inference)
         handoff = _linear_handoff(problem, sample, specification, computation)
     else:
-        _coverage(sample, specification, stacklevel)
-        handoff = _power_handoff(
-            problem, sample, specification, computation, preflight=preflight
+        handoff = _ordinary_power_handoff(
+            problem, sample, specification, stacklevel + 1
         )
     return _report(Result(bind(handoff)), specification, stacklevel)
+
+
+def _ordinary_power_handoff(
+    problem: PreparedProblem,
+    sample: OrderSample,
+    specification: Specification,
+    stacklevel: int,
+) -> Handoff:
+    """Admit the characterized sample and invoke the same ordinary solver once."""
+    estimator = specification.estimator
+    variance = estimator.variance
+    support = None
+    gamma = None
+    if isinstance(variance, NB2Variance) or (
+        isinstance(variance, PowerVariance) and 1 <= variance.tau < 2
+    ):
+        support = separation(sample, problem.frame.base, variance)
+        sample = support.sample
+    if isinstance(variance, PowerVariance) and variance.tau == 2:
+        gamma = recession(sample, variance)
+    refused = gamma is not None or (
+        support is not None and (support.exhausted is not None or support.unresolved)
+    )
+    if not refused and (support is None or not support.full_rank):
+        sample = _identified(sample, stacklevel)
+    computation = _computation(sample, specification)
+    steps = () if support is None else support.steps
+    if refused:
+        if specification.start is not None:
+            mapped_start(sample, specification.start)
+        return Handoff(
+            estimator,
+            problem.frame,
+            sample,
+            specification.inference,
+            computation,
+            keep_influence=specification.keep_influence,
+            requested_start=specification.start,
+            offset_design=problem.offset_design,
+            support=steps,
+            recession=gamma,
+        )
+    preflight = fit_preflight(sample, specification.inference)
+    _coverage(sample, specification, stacklevel)
+    handoff = _power_handoff(
+        problem, sample, specification, computation, preflight=preflight
+    )
+    return replace(handoff, support=steps) if steps else handoff
+
+
+def _identified(sample: OrderSample, stacklevel: int) -> OrderSample:
+    """The sample without its collinear regressors, each named once to the caller.
+
+    The collinearity step of the routes with fixed effects, called without blocks on
+    the retained rows: its exact rank and relation analysis, in formula order (owner's
+    rulings 109 and 110). Full direct rank on the already scaled design needs no
+    Gram matrix or diagnostic records. Only the full analysis may select omissions.
+    A sample for which the step proposes nothing, or does not
+    complete, is returned as it came, the same object.  Otherwise one
+    ``coverage.collinear_omitted`` note per omitted regressor is issued at the
+    caller's line, before the solve, and the sample keeps the other columns
+    (:func:`~powermean.data.retained.without_columns`).
+    """
+    if _full_rank(sample.design.matrix):
+        return sample
+    data = sample.data
+    analysis = analyze_collinearity(
+        CollinearityProblem(data.design, data.column_names, sample.positions, None),
+        None,
+        mode="drop",
+    )
+    reasons = analysis.reasons if analysis.status == COMPLETE else None
+    kept = [j for j, reason in enumerate(reasons or ()) if reason is None]
+    if reasons is None or not kept or len(kept) == len(reasons):
+        return sample
+    for name, reason in zip(data.column_names, reasons, strict=True):
+        if reason is not None:
+            warnings.warn(
+                CoverageWarning("coverage.collinear_omitted", {"name": name}),
+                stacklevel=stacklevel + 2,
+            )
+    return without_columns(sample, kept)
+
+
+def _full_rank(scaled: FloatArray) -> bool:
+    """Use the collinearity step's direct rank on the already scaled design.
+
+    Its unabsorbed analysis excludes zero columns and then scales by column maxima
+    rounded down to powers of two. With no zero column, the second scaling in
+    `within_rank` is the identity because the maxima are already in [1, 2).
+    At full direct rank the Gram rank cannot cause an omission. Uncertain designs
+    still go through the existing analysis and its relation checks.
+    """
+    n, k = scaled.shape
+    if n < k or not np.any(scaled, axis=0).all():
+        return False
+    try:
+        rank = numerical_rank(scaled, [], kind="direct_svd", purpose="within columns")
+    except np.linalg.LinAlgError:
+        return False
+    return rank.rank == int(k)
 
 
 def _coverage(
@@ -432,7 +626,7 @@ def _coverage(
 ) -> None:
     """The ``CoverageWarning`` of an equation whose finite root BBP leaves open.
 
-    The existence of a finite root of the
+    ``design/02_computation.md``, Section 4: the existence of a finite root of the
     joint equation is not characterized for ``tau < 1``, nor for ``tau > 2`` with zero
     outcomes; rank checks only, the solver and the certificate decide, and no row is
     dropped for it.  Emitted once, before the solve, at the caller's line.

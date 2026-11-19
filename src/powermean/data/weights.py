@@ -1,27 +1,36 @@
 """Observation weights of the three kinds: analytic, frequency and probability.
 
-The kind is stated by the caller and never inferred from the values: ``[2.0, 3.0]`` are
-analytic weights unless the caller says ``"frequency"``.  The kinds differ in what a
-later stage does with them, not here.  Analytic and probability weights multiply the
-contributions of their rows; frequency weights are replicated rows, in the counts as in
-the contributions (:mod:`powermean.inference.convention`).  A row of zero weight is kept
-at its position: nothing here selects a row, which is the sample construction (its step
-4).  The raw values are stored as given, never normalized.
+``DESIGN.md``, Section 4.1 (``weights``, ``weight_type``); ``design/04_inference_and_
+effects.md``, Sections 2.2 and 3; decisions D41 and D51.  Port of ``ObservationWeights``
+of ``data.py`` of expreg (source S7 of ``design/06_reuse_map.md``), with S7's
+``"sampling"`` renamed ``"probability"``, the name of the design (ledger note on
+M0.19).  ``PROVENANCE.md``, Section 13, records the source and the changes.
+
+The kind is stated by the caller and never inferred from the values: ``[2.0, 3.0]``
+are analytic weights unless the caller says ``"frequency"``.  The kinds differ in what
+a later stage does with them, not here.  Analytic and probability weights multiply
+the contributions of their rows; frequency weights are replicated rows, in the counts
+as in the contributions (file 04, Section 2.2; :mod:`powermean.inference.convention`).
+A row of zero weight is kept at its position: nothing here selects a row, which is the
+sample construction of task M0.20 (file 02, Section 2, step 4).  The raw values are
+stored as given, never normalized.
 
 Frequency weights are exact counts.  Each is validated as supplied, before any
-conversion to doubles, in this order: a real number that is not a boolean, from 0 to
+conversion to doubles, in S7's order: a real number that is not a boolean, from 0 to
 ``2^53``; finite; equal to its integer.  The total of the counts, summed in integer
 arithmetic, must not exceed ``2^53``.  A count of ``2^53 + 1`` is refused although it
-rounds to the accepted double ``2^53``, and so is the pair ``[2^53, 1]``, whose total in
-doubles rounds to ``2^53`` while its exact total is ``2^53 + 1``: a conversion before
-the check could not be repaired after it.  Serialized records take the same path, since
-:meth:`ObservationWeights.from_dict` constructs the record.  A second check after the
-conversion is implied by the first and is not made.
+rounds to the accepted double ``2^53``, and so is the pair ``[2^53, 1]``, whose total
+in doubles rounds to ``2^53`` while its exact total is ``2^53 + 1``: a conversion
+before the check could not be repaired after it.  Serialized records take the same
+path, since :meth:`ObservationWeights.from_dict` constructs the record.  S7's second
+check after the conversion is implied by the first and is not repeated (the note of
+task M0.6).
 
-The values of every kind are an owned read-only array of finite nonnegative doubles with
-a positive total that is a double (:mod:`powermean.data._arrays`).  The effective count
-``N`` of the ``"stata"`` factors is the exact total of the frequency counts, else the
-number of rows of positive weight (:attr:`ObservationWeights.effective_n`).
+The values of every kind are an owned read-only array of finite nonnegative doubles
+with a positive total that is a double (:mod:`powermean.data._arrays`).  The
+effective count ``N`` of the ``"stata"`` factors (file 04, Section 3) is the exact total
+of the frequency counts, else the number of rows of positive weight
+(:attr:`ObservationWeights.effective_n`, S7's ``effective_n``).
 """
 
 from __future__ import annotations
@@ -48,7 +57,7 @@ from powermean.model.variance import FloatArray
 WeightKind = Literal["analytic", "frequency", "probability"]
 WEIGHT_KINDS: tuple[WeightKind, ...] = get_args(WeightKind)
 # The largest count below which every integer is a double: a larger count may be the
-# rounding of another, so it is refused, each count and their total.
+# rounding of another, so it is refused, each count and their total (S7).
 MAXIMUM_COUNT = 2**53
 
 
@@ -65,23 +74,23 @@ class _RealNumber(SupportsFloat, SupportsInt, Protocol):
 
 
 def _is_real_number(value: object) -> TypeGuard[_RealNumber]:
-    """``numbers.Real`` and not a boolean: the type test on a count.
+    """``numbers.Real`` and not a boolean: the type test of S7 on a count.
 
     ``numbers.Real`` documents ``<``, ``>`` and ``float()``, and every real number of
     Python, ``fractions`` and NumPy also has ``int()``; the typing stubs of
-    ``numbers.Real`` declare neither ``>`` nor ``int()``.  ``_RealNumber`` states what
-    the check of a count uses, and this test establishes it.
+    ``numbers.Real`` declare neither ``>`` nor ``int()``.  ``_RealNumber`` states
+    what the check of a count uses, and this test, that of S7, establishes it.
     """
     return not isinstance(value, (bool, np.bool_)) and isinstance(value, numbers.Real)
 
 
 def _check_counts(values: ArrayLike) -> None:
-    """Frequency weights are exact counts, each checked before its conversion.
+    """Frequency weights are exact counts, each checked before its conversion (S7).
 
-    The values are read into an array of objects, so that a Python integer keeps every
-    digit, and each is tested as it was supplied, in this order: its type and range, its
-    finiteness, then its equality with its integer.  The total of the integers must not
-    exceed ``2^53``.
+    The values are read into an array of objects, so that a Python integer keeps
+    every digit, and each is tested as it was supplied, in S7's order: its type and
+    range, its finiteness, then its equality with its integer.  The total of the
+    integers must not exceed ``2^53``.
     """
     original = np.asarray(values, dtype=object)
     if original.ndim != 1:
@@ -102,7 +111,7 @@ def _check_counts(values: ArrayLike) -> None:
 
 @dataclass(frozen=True, eq=False)
 class ObservationWeights:
-    """The weights of the observations, of one explicit kind.
+    """The weights of the observations, of one explicit kind (S7's record of the name).
 
     Parameters
     ----------
@@ -132,7 +141,7 @@ class ObservationWeights:
     kind: WeightKind = "analytic"
 
     def __post_init__(self) -> None:
-        """Validate the kind and the values, and store the values owned.
+        """Validate the kind and the values, as S7 does, and store the values owned.
 
         The kind is read as ``object``: this is the run-time check of what the field
         declares.
@@ -167,15 +176,15 @@ class ObservationWeights:
     def effective_n(self) -> int:
         """``N``: the exact total of frequency counts, else the rows of positive weight.
 
-        The counts are summed as integers; their total is at most ``2^53``, so it is
-        also the exact sum of the stored doubles.
+        S7 ``RegressionData.effective_n``.  The counts are summed as integers; their
+        total is at most ``2^53``, so it is also the exact sum of the stored doubles.
         """
         if self.frequency:
             return sum(int(value) for value in self.values.tolist())
         return int(np.count_nonzero(self.values))
 
     def to_dict(self) -> dict[str, object]:
-        """The kind and the values, as JSON holds them, losslessly."""
+        """The kind and the values, as JSON holds them, losslessly (S7 ``to_dict``)."""
         return {
             "type": "ObservationWeights",
             "kind": self.kind,

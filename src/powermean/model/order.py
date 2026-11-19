@@ -1,18 +1,20 @@
 """The order layer: the transformed problem of a mean order.
 
-For a mean order ``omega`` the model is ``E(Y^omega | X) = exp(omega X'beta)``, and at
+``design/01_statistical_core.md``, Sections 3.1 to 3.3; ``DESIGN.md``, Section 3.1;
+``design/02_computation.md``, Section 2, step 3; decisions D16, D41 and D51.  For a
+mean order ``omega`` the model is ``E(Y^omega | X) = exp(omega X'beta)``, and at
 ``omega = 0`` it is ``E(log Y | X) = X'beta`` on positive outcomes.  The systems,
 solvers, the certificate and the covariances of the package work on the transformed
-problem and know nothing of ``omega``: :func:`transform_problem` forms that problem, and
-:mod:`powermean.model.order_scale` maps its results back, once.
+problem and know nothing of ``omega``: :func:`transform_problem` forms that problem,
+and :mod:`powermean.model.order_scale` maps its results back, once.
 
     omega != 0   route "power"    Z = Y^omega   offset omega o   gamma = omega beta
     omega = 0    route "linear"   log Y         offset o         least squares
 
 The offset ``o`` has unit coefficient on the log power mean, so the index of the
 transformed problem receives ``omega o``; an exposure ``e`` is the offset ``log e``,
-which the caller forms.  The route names the stage that solves the problem, none of
-which this layer calls.  ``"power"`` goes to an estimating system with a working
+which the caller forms (task M0.19).  The route names the stage that solves the problem,
+none of which this layer calls.  ``"power"`` goes to an estimating system with a working
 variance of the caller's choice: ``omega`` is not a parameter of the working variance.
 ``"linear"`` goes to the linear path, ``powermean.solve.linear.solve(response, design,
 offset=offset, weights=...)``, whose influence record
@@ -23,7 +25,7 @@ nothing is divided by ``omega`` and no working variance enters.  A linear candid
 not a ``JointEvaluation``: the certificate of the linear path, which a public log OLS
 fit needs, is not part of this layer.
 
-The domain, in this order:
+The domain (Section 3.2 and decision D16), in this order:
 
 1. A negative outcome raises ``SampleError`` (``sample.negative_outcome``), at every
    order and whatever ``positive_only``.
@@ -32,25 +34,29 @@ The domain, in this order:
    (``sample.zero_outcome_at_order``) unless ``positive_only`` is true.
 3. With ``positive_only`` the rows of zero outcome are not in the problem, at every
    order: the literal meaning of the flag, under which ``power_effects`` fits all its
-   orders on the positive outcomes.
-   A problem left without a row raises ``SampleError`` (``sample.empty``).
+   orders on the positive outcomes (``design/04_inference_and_effects.md``, Section
+   9.6).  A problem left without a row raises ``SampleError`` (``sample.empty``).
 
 No row leaves silently.  :class:`Selection` holds, aligned with the input rows, the mask
 of the rows kept, their positions, the rows removed and whether the problem conditions
-on positive outcomes, for the sample accounting.  A position ``k`` among the rows of the
-problem, the identifier of a sampling unit of a later system or solve for instance, is
-the input row ``positions[k]``; the caller selects the design, the weights and the
-cluster codes of the problem by ``positions``.  Missing values, ``subset`` and weights
-belong to the data layer: the inputs are finite arrays, and a malformed one raises
-``ValueError`` or ``TypeError``, as in the other numerical layers.
+on positive outcomes, for the sample accounting of task M0.20.  A position ``k`` among
+the rows of the problem, the identifier of a sampling unit of a later system or solve
+for instance, is the input row ``positions[k]``; the caller selects the design, the
+weights and the cluster codes of the problem by ``positions``.  Missing values,
+``subset`` and weights belong to the data layer: the inputs are finite arrays, and a
+malformed one raises ``ValueError`` or ``TypeError``, as in the other numerical layers.
 
-The power.  ``Z = Y^omega`` is formed as ``Y ** omega`` on the rows of the problem, and
-checked in this order: a positive outcome whose power rounds to zero is refused rather
-than made a new zero ("power transformation changed the zero mask"), and so is a power
-beyond the doubles ("non-finite transformed outcome"), each a ``FloatingPointError``; a
-subnormal power is kept.  The transformed offset is the one rounded product ``omega o``,
-refused where it is beyond the doubles or where a nonzero offset rounds to zero.
-Arguments are not modified, and the records hold owned read-only arrays.
+The power (S5, lines 100-106).  ``Z = Y^omega`` is formed as S5 forms it,
+``Y ** omega``, on the rows of the problem, and checked in S5's order and with its
+messages: a positive outcome whose power rounds to zero is refused rather than made a
+new zero ("power transformation changed the zero mask"), and so is a power beyond the
+doubles ("non-finite transformed outcome"), each a ``FloatingPointError``; a subnormal
+power is kept.  S5 refuses ``omega <= 0`` and checks no sign of the outcome, which its
+sample guarantees: the negative orders and log OLS are extensions of the design.  The
+transformed offset is the one rounded product ``omega o``, refused where it is beyond
+the doubles or where a nonzero offset rounds to zero.  Arguments are not modified, and
+the records hold owned read-only arrays.  ``PROVENANCE.md``, Section 11, records the
+source and the changes.
 """
 
 from __future__ import annotations
@@ -129,7 +135,7 @@ class Selection:
     def conditioned(self) -> bool:
         """Whether the problem conditions on positive outcomes: a zero was removed.
 
-        A change of population, which the output states.
+        A change of population, which the output states (file 01, Section 3.2).
         """
         return bool(self.removed.size)
 
@@ -231,13 +237,13 @@ def _selection(outcome: FloatArray, omega: float, positive_only: bool) -> Select
 
 
 def _power(values: FloatArray, omega: float) -> FloatArray:
-    """``Z = Y^omega`` on the rows of the problem, with its checks.
+    """``Z = Y^omega`` on the rows of the problem, as S5 forms and checks it.
 
-    ``values ** omega`` is NumPy's power, its fast paths included (the array of doubles
-    that it returns is taken as it is); a zero outcome is then set to ``+0.0``, since
-    the power of ``-0.0`` at an odd integer order is ``-0.0``.  Refused, in this order:
-    a positive outcome whose power is zero, then a power that is not finite.  At ``omega
-    < 0`` every value is positive.
+    ``values ** omega`` is NumPy's power of the source, its fast paths included (the
+    array of doubles that it returns is taken as it is); a zero outcome is then set to
+    ``+0.0``, since the power of ``-0.0`` at an odd integer order is ``-0.0``.  Refused,
+    in S5's order: a positive outcome whose power is zero, then a power that is not
+    finite.  At ``omega < 0`` every value is positive.
     """
     zero = values == 0
     with np.errstate(over="ignore", under="ignore"):

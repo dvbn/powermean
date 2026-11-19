@@ -1,14 +1,18 @@
 """The owned record of the arrays of an estimation: outcome, design, offset or exposure.
 
-``exposure=e`` is ``offset=log(e)``.
+``DESIGN.md``, Sections 4.1 (``offset``, ``exposure``, ``weights``) and 5.1;
+``design/01_statistical_core.md``, Section 3.1 (``exposure=e`` is ``offset=log(e)``);
+``design/02_computation.md``, Section 2; decisions D41, D51 and D55.  Port of
+``RegressionData`` of ``data.py`` of expreg (source S7 of ``design/06_reuse_map.md``);
+``PROVENANCE.md``, Section 13, records the source and the changes.
 
 A :class:`RegressionData` is an already valid numeric record, not the raw input of the
-sample construction: every row given is kept at its position, a row of zero weight, of
-zero outcome or of missing label included, and nothing is selected, dropped, filled or
-normalized.  Its arrays are owned read-only copies of finite real values
-(:mod:`powermean.data._arrays`), aligned on their rows; the outcome ``y`` is the outcome
-as supplied, nonnegative, whose domain at a mean order the order layer decides
-(``powermean.model.order``).
+sample construction of task M0.20: every row given is kept at its position, a row of
+zero weight, of zero outcome or of missing label included, and nothing is selected,
+dropped, filled or normalized.  Its arrays are owned read-only copies of finite real
+values (:mod:`powermean.data._arrays`), aligned on their rows; the outcome ``y`` is the
+outcome as supplied, nonnegative, whose domain at a mean order the order layer
+decides (``powermean.model.order``).
 
 Offset and exposure are mutually exclusive.  The offset ``o`` has unit coefficient on
 the log power mean; an exposure ``e``, strictly positive and aligned with ``y``, enters
@@ -17,14 +21,14 @@ of the record.  The multiplier of the mean order, ``omega o`` on the transformed
 belongs to the order layer alone and is never applied here.
 
 Row identity is positional: the ``k``-th row of every array is observation ``k``.  The
-labels of the rows (``row_labels``: integers or strings, the positions by default) are
-carried for the accounting and the output and need not be unique, as the labels of a
-pandas index need not be.  The column names of the design are unique nonempty strings
-(``x0``, ``x1``, ... by default).  The weights are an
+labels of the rows (``row_labels``: integers or strings, the positions by default)
+are carried for the accounting and the output and need not be unique, as the labels of
+a pandas index need not be; S7's ``row_ids`` had to be unique.  The column names of the
+design are unique nonempty strings (``x0``, ``x1``, ... by default).  The weights are an
 :class:`~powermean.data.weights.ObservationWeights` of an explicit kind, aligned with
-``y``; without one every row has weight one.  The record carries no fingerprint: the
-fingerprint of the estimation sample is formed on the sample that the sample
-construction builds, not on the input.
+``y``; without one every row has weight one.  S7's fingerprint of the record is not
+carried: the fingerprint of the estimation sample is formed by task M0.20 on the sample
+that it constructs, not on the input.
 """
 
 from __future__ import annotations
@@ -48,9 +52,9 @@ Label = int | str
 def _labels(labels: Sequence[Label] | None, rows: int) -> tuple[Label, ...]:
     """The row labels as a tuple: integers or strings, one per row; duplicates kept.
 
-    The type of each label is tested exactly: a boolean or a NumPy integer is not a
-    label. The ordinary positional-int run is checked by identity in bulk; every other
-    kind keeps the same original ordered rejection.
+    The type of each label is tested exactly, as in S7: a boolean or a NumPy integer
+    is not a label. The ordinary positional-int run is checked by identity in
+    bulk; every other kind keeps the same original ordered rejection.
     """
     found = tuple(range(rows)) if labels is None else tuple(labels)
     if len(found) == rows and all(map(operator.is_, map(type, found), repeat(int))):
@@ -61,7 +65,7 @@ def _labels(labels: Sequence[Label] | None, rows: int) -> tuple[Label, ...]:
 
 
 def _column_names(names: Sequence[str] | None, columns: int) -> tuple[str, ...]:
-    """The column names as a tuple: unique nonempty strings, one per column."""
+    """The column names as a tuple: unique nonempty strings, one per column (S7)."""
     found = tuple(f"x{j}" for j in range(columns)) if names is None else tuple(names)
     if (
         len(found) != columns
@@ -76,7 +80,7 @@ def _column_names(names: Sequence[str] | None, columns: int) -> tuple[str, ...]:
 
 @dataclass(frozen=True, eq=False, init=False)
 class RegressionData:
-    """The arrays of an estimation, validated and owned.
+    """The arrays of an estimation, validated and owned (S7 ``RegressionData``).
 
     Parameters
     ----------
@@ -137,7 +141,7 @@ class RegressionData:
         row_labels: Sequence[Label] | None = None,
         column_names: Sequence[str] | None = None,
     ) -> None:
-        """Validate every input and store it owned."""
+        """Validate every input as S7 does, in S7's order, and store it owned."""
         outcome = frozen_array(y, ndim=1, name="y")
         matrix = frozen_array(design, ndim=2, name="design")
         if outcome.size == 0 or matrix.shape[0] != outcome.size or matrix.shape[1] == 0:
@@ -191,7 +195,7 @@ class RegressionData:
 
     @property
     def weight_values(self) -> FloatArray:
-        """The raw weights, one for every row without weights."""
+        """The raw weights, one for every row without weights (S7 ``weight_values``)."""
         if self.weights is None:
             return frozen_array(np.ones(self.nobs))
         return self.weights.values
@@ -200,14 +204,14 @@ class RegressionData:
     def effective_n(self) -> int:
         """``N``: the exact total of frequency counts, else the rows of positive weight.
 
-        Every row without weights.
+        S7 ``effective_n``; every row without weights.
         """
         if self.weights is None:
             return self.nobs
         return self.weights.effective_n
 
     def to_dict(self) -> dict[str, object]:
-        """Lossless JSON-compatible input record; no inferred or deleted rows.
+        """Lossless JSON-compatible input record; no inferred or deleted rows (S7).
 
         With an exposure, the offset is written as ``None`` and formed again from the
         exposure when the record is read back.
@@ -225,7 +229,7 @@ class RegressionData:
 
     @classmethod
     def from_dict(cls, record: Mapping[str, object]) -> RegressionData:
-        """The record of :meth:`to_dict`, validated as a fresh construction is.
+        """The record of :meth:`to_dict`, validated as a fresh construction is (S7).
 
         Raises ``ValueError`` for a record, or a weight record, of another type.
         """

@@ -1,17 +1,19 @@
 """The raw labels of a formula's fixed-effect terms, read from its data by position.
 
-A missing or non-finite value of a variable that a row uses excludes the row, reported
-by variable group, effects included (step 2 of the sample construction).  A
-fixed-effect term is a name or ``a^b``, the interaction of two classifications.
-Internal module: :func:`powermean._prepare.compose.prepare_frame` calls
-:func:`read_effects` only for a formula with a fixed-effect part.
+``design/02_computation.md``, Section 2, step 2 (a missing or non-finite value of a
+variable that a row uses excludes it, reported by variable group, effects included);
+``DESIGN.md``, Section 4.2 (a fixed-effect term is a name or ``a^b``, the interaction
+of two classifications); the reviewed outline ``plan/evidence/M1.10_contract.txt``,
+Section 2a; decisions D41, D51 and D66.  Task M1.10, private: the public preparation
+still refuses fixed effects (decision D41), and :func:`powermean._prepare.compose.
+prepare_frame` calls :func:`read_effects` only for a formula with a fixed-effect part.
 
 :func:`read_effects` reads, by name, the column of every component of every parsed
 term, both components of an interaction included and each component once, from the
 data of the frame, by position.  Its values are read as the objects that pandas holds
 (``Series.to_numpy(dtype=object)``): an integer beyond ``2**53``, a nullable integer
 beside a missing one, a category, a date with a time zone stay exactly themselves, as
-the grouping (:mod:`powermean.fe.groups`) compares labels as objects.  No
+the accepted grouping (:mod:`powermean.fe.groups`) compares labels as objects.  No
 label is joined, coerced to a string or packed into a pair of integers.  A missing or
 non-finite value of any component marks its row in the mask of the group ``effects``
 (:func:`powermean.formula.validity.values_invalid`), before any grouping; a column
@@ -26,7 +28,9 @@ import numpy as np
 import pandas as pd
 
 from powermean._prepare.dependence import (
-    ColumnProvenance, DependenceProvenance, _retained_original,
+    ColumnProvenance,
+    DependenceProvenance,
+    _retained_original,
 )
 from powermean.data.sample_fe import EffectColumns, _fixed_original
 from powermean.formula import validity
@@ -84,11 +88,12 @@ def read_effects(
 
 
 def _native_effects(
-    data: pd.DataFrame, terms: FixedEffects, provenance: DependenceProvenance,
+    data: pd.DataFrame,
+    terms: FixedEffects,
+    provenance: DependenceProvenance,
 ) -> tuple[EffectColumns, validity.BoolArray] | None:
     """Use the same already owned originals, not another whole object lowering."""
-    if (not _native_effects_original()
-            or type(provenance) is not DependenceProvenance):
+    if not _native_effects_original() or type(provenance) is not DependenceProvenance:
         return None
     columns = {}
     for name in components(terms):
@@ -97,9 +102,13 @@ def _native_effects(
             return None
         state = vars(prior)
         sources = state.get("_retained_sources")
-        column = (state.get("_column_record") if sources is None
-                  else sources[0] if type(sources) is tuple and len(sources) == 1
-                  else None)
+        column = (
+            state.get("_column_record")
+            if sources is None
+            else sources[0]
+            if type(sources) is tuple and len(sources) == 1
+            else None
+        )
         if column is None:
             return None
         columns[name] = column
@@ -115,15 +124,26 @@ def _native_effects(
     return effects, invalid
 
 
-_NATIVE_GLOBALS = tuple((name, globals()[name]) for name in (
-    "EffectColumns", "ColumnProvenance", "DependenceProvenance",
-    "components", "_component", "_retained_original", "_fixed_original",
-))
+_NATIVE_GLOBALS = tuple(
+    (name, globals()[name])
+    for name in (
+        "EffectColumns",
+        "ColumnProvenance",
+        "DependenceProvenance",
+        "components",
+        "_component",
+        "_retained_original",
+        "_fixed_original",
+    )
+)
 _NATIVE_INVALID = validity.values_invalid
 
 
 def _native_effects_original() -> bool:
     """Existing constant-size producer guards, never a row eligibility cache."""
-    return (all(globals().get(name) is original for name, original in _NATIVE_GLOBALS)
-            and validity.values_invalid is _NATIVE_INVALID
-            and _retained_original() and _fixed_original())
+    return (
+        all(globals().get(name) is original for name, original in _NATIVE_GLOBALS)
+        and validity.values_invalid is _NATIVE_INVALID
+        and _retained_original()
+        and _fixed_original()
+    )

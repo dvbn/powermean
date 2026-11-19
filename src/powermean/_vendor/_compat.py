@@ -1,6 +1,6 @@
 """Local equivalents of the four scikit-learn names that the carried files imported.
 
-The carried Newton files import nothing from scikit-learn.  Two names of
+Decision D40: the carried Newton files import nothing from scikit-learn.  Two names of
 their source served the L-BFGS fallback, which is removed with them.  The four others
 are replaced here, each by the part of scikit-learn's object that the carried files
 use, with the arithmetic of scikit-learn:
@@ -17,7 +17,7 @@ scikit-learn              here                                        used by
 
 ``ConvergenceWarning`` is the category of the iteration's own diagnostics.  It is not
 :class:`powermean.errors.NumericalWarning`, which reports the secondary status of the
-certificate, and neither derives from the other.
+certificate (decision D45), and neither derives from the other.
 """
 
 from __future__ import annotations

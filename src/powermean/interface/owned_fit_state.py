@@ -8,56 +8,165 @@ public calls, or verify the implementation by reconstructing a second graph.
 
 from __future__ import annotations
 
+import importlib
+from collections.abc import Callable, Mapping
 from dataclasses import fields
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
 
 from powermean._prepare.compose import PreparedFrame
-from powermean._prepare.dependence import ColumnProvenance, DependenceProvenance, UsedDependence
+from powermean._prepare.dependence import (
+    ColumnProvenance,
+    DependenceProvenance,
+    UsedDependence,
+)
 from powermean._prepare.inputs import Columns
+from powermean._prepare.owned import _owned_index
 from powermean.data.accounting import MissingAccount
-from powermean.data.raw import AlignedColumns, Column, RawInputs, RawWeights, _OwnedMapping
+from powermean.data.raw import (
+    AlignedColumns,
+    Column,
+    RawInputs,
+    RawWeights,
+    _OwnedMapping,
+)
 from powermean.data.sample import SampleBase
 from powermean.data.sample_fe import EffectColumns, _native_parts
 from powermean.formula.frame import Design, ModelFrame
 from powermean.formula.grammar import FormulaParts, Instruments
-from powermean.results.primitive_snapshot import (
-    _ENUMS, _ETS, _EVALUATED_FACTOR, _FACTOR, _MODEL_SPEC, _SCOPED_FACTOR,
-    _SCOPED_TERM, _SIMPLE_FORMULA, _SIMPLE_TERMS, _TERM, _TOKEN, _VARIABLE,
+from powermean.results.retained_input_values import (
+    _owned_dependence_provenance,
+    _owned_effect_columns,
+    _owned_model_frame,
+    _owned_sample_base,
 )
 from powermean.results.retained_labels import _copy_free_labels
-from powermean.results.retained_input_values import (
-    _owned_dependence_provenance, _owned_effect_columns, _owned_index,
-    _owned_model_frame, _owned_sample_base,
-)
 
 _NATIVE_PARTS = _native_parts
 
+_parser_types = cast("Any", importlib.import_module("formulaic.parser.types"))
+_FACTOR: type[Any] = _parser_types.Factor
+_TERM: type[Any] = _parser_types.Term
+_TOKEN: type[Any] = _parser_types.Token
+_mat_types = cast("Any", importlib.import_module("formulaic.materializers.types"))
+_SCOPED_TERM: type[Any] = _mat_types.ScopedTerm
+_SCOPED_FACTOR: type[Any] = _mat_types.ScopedFactor
+_EVALUATED_FACTOR: type[Any] = _mat_types.EvaluatedFactor
+_ETS: type[Any] = cast(
+    "Any", importlib.import_module("formulaic.materializers.base")
+).EncodedTermStructure
+_spec_mod = cast("Any", importlib.import_module("formulaic.model_spec"))
+_MODEL_SPEC: type[Any] = _spec_mod.ModelSpec
+_formula_mod = cast("Any", importlib.import_module("formulaic.formula"))
+_SIMPLE_FORMULA: type[Any] | None = getattr(_formula_mod, "SimpleFormula", None)
+_LEGACY_FORMULA: type[Any] | None = (
+    _formula_mod.Formula if _SIMPLE_FORMULA is None else None
+)
+_parser_mod = cast("Any", importlib.import_module("formulaic.parser.parser"))
+_DEFAULT_PARSER_TYPE: type[Any] = _parser_mod.DefaultFormulaParser
+_DEFAULT_RESOLVER_TYPE: type[Any] = _parser_mod.DefaultOperatorResolver
+_SIMPLE_TERMS = "_SimpleFormula__terms"
+_variables_mod = cast("Any", importlib.import_module("formulaic.utils.variables"))
+_VARIABLE: type[Any] = _variables_mod.Variable
+_SPEC_ENUMS = (
+    _spec_mod.NAAction,
+    _spec_mod.ClusterBy,
+    cast("Any", importlib.import_module("formulaic.formula")).OrderingMethod,
+    _FACTOR.EvalMethod,
+    _FACTOR.Kind,
+    _TOKEN.Kind,
+    _VARIABLE.Role,
+)
+
 _RECORDS = (
-    PreparedFrame, Columns, SampleBase, RawInputs, RawWeights, AlignedColumns,
-    Column, MissingAccount, EffectColumns, ColumnProvenance,
-    DependenceProvenance, UsedDependence, FormulaParts, Instruments, ModelFrame, Design,
+    PreparedFrame,
+    Columns,
+    SampleBase,
+    RawInputs,
+    RawWeights,
+    AlignedColumns,
+    Column,
+    MissingAccount,
+    EffectColumns,
+    ColumnProvenance,
+    DependenceProvenance,
+    UsedDependence,
+    FormulaParts,
+    Instruments,
+    ModelFrame,
+    Design,
 )
 _SCALARS = (
-    bool, int, float, complex, str, bytes,
-    np.bool_, np.int8, np.int16, np.int32, np.int64,
-    np.uint8, np.uint16, np.uint32, np.uint64,
-    np.float16, np.float32, np.float64, np.complex64, np.complex128,
-    np.str_, np.bytes_,
+    bool,
+    int,
+    float,
+    complex,
+    str,
+    bytes,
+    np.bool_,
+    np.int8,
+    np.int16,
+    np.int32,
+    np.int64,
+    np.uint8,
+    np.uint16,
+    np.uint32,
+    np.uint64,
+    np.float16,
+    np.float32,
+    np.float64,
+    np.complex64,
+    np.complex128,
+    np.str_,
+    np.bytes_,
 )
-_DTYPE_TYPES = tuple(type(np.dtype(code)) for code in
-                     ("?", "i1", "i2", "i4", "i8", "u1", "u2", "u4", "u8",
-                      "f2", "f4", "f8", "c8", "c16", "S1", "U1", "M8", "m8", "O"))
+_DTYPE_TYPES = tuple(
+    type(np.dtype(code))
+    for code in (
+        "?",
+        "i1",
+        "i2",
+        "i4",
+        "i8",
+        "u1",
+        "u2",
+        "u4",
+        "u8",
+        "f2",
+        "f4",
+        "f8",
+        "c8",
+        "c16",
+        "S1",
+        "U1",
+        "M8",
+        "m8",
+        "O",
+    )
+)
 # The existing fitted-spec allowlist, inspected rather than serialized. In
 # particular, transform-state arrays are checked by dtype, not copied to bytes.
-# Unknown skeletons (including older Formula factories) keep the general route.
+# Unknown fitted-spec layouts keep the general route.
 _SPEC_RECORDS = (
-    (_MODEL_SPEC, ("formula", "materializer", "materializer_params",
-                   "ensure_full_rank", "na_action", "output", "cluster_by",
-                   "structure", "transform_state", "encoder_state")),
+    (
+        _MODEL_SPEC,
+        (
+            "formula",
+            "materializer",
+            "materializer_params",
+            "ensure_full_rank",
+            "na_action",
+            "output",
+            "cluster_by",
+            "structure",
+            "transform_state",
+            "encoder_state",
+        ),
+    ),
     (_SIMPLE_FORMULA, (_SIMPLE_TERMS, "ordering")),
+    (_LEGACY_FORMULA, ("_structure", "_metadata", "_ordering")),
     (_FACTOR, ("expr", "_eval_method", "_kind", "metadata", "token")),
     (_TOKEN, ("token", "_kind", "source", "source_start", "source_end")),
     (_TERM, ("factors",)),
@@ -67,12 +176,81 @@ _SPEC_RECORDS = (
     (_ETS, ("term", "scoped_terms", "columns")),
     (_VARIABLE, ("roles", "source")),
 )
-_SPEC_ENUMS = tuple(_ENUMS.values())
+
+
+def _plain_keys(state: dict[Any, Any], names: set[str]) -> bool:
+    # Comparing keys can call equality on caller-supplied keys.
+    return all(type(key) is str for key in state) and state.keys() == names
+
+
+def _legacy_resolver(parser: object) -> object | None:
+    if type(parser) is not _DEFAULT_PARSER_TYPE:
+        return None
+    state = vars(parser)
+    if (
+        type(state) is not dict
+        or not _plain_keys(state, {"include_intercept", "operator_resolver"})
+        or type(state["include_intercept"]) is not bool
+    ):
+        return None
+    resolver = state["operator_resolver"]
+    return resolver if type(resolver) is _DEFAULT_RESOLVER_TYPE else None
+
+
+# Read the class dictionary to avoid invoking a replacement default's descriptor.
+# A nested 1.0 formula can use the nested default in both parser slots.
+_LEGACY_DEFAULTS: tuple[tuple[object, object], ...] = (
+    tuple(
+        (parser, _legacy_resolver(parser))
+        for parser in (
+            vars(_LEGACY_FORMULA).get("DEFAULT_PARSER"),
+            vars(_LEGACY_FORMULA).get("DEFAULT_NESTED_PARSER"),
+        )
+    )
+    if _LEGACY_FORMULA is not None
+    else ()
+)
+
+
+def _plain_legacy_parser(parser: object) -> bool:
+    """Recognize the Formulaic 1.0 defaults and detached plain parsers."""
+    resolver = _legacy_resolver(parser)
+    if resolver is None:
+        return False
+    state = vars(resolver)
+    # The native resolver drops the operator table during copying. Allow an
+    # empty resolver dictionary or the cache key on an original default pair.
+    return type(state) is dict and (
+        not state
+        or (
+            _plain_keys(state, {"operator_table"})
+            and any(
+                parser is default_parser and resolver is default_resolver
+                for default_parser, default_resolver in _LEGACY_DEFAULTS
+            )
+        )
+    )
+
+
+def _passive_spec_record(value: Any, passive: Callable[[Any], bool]) -> bool:
+    """Check the exact record's declared fields and any cached state."""
+    kind = type(value)
+    if kind is _LEGACY_FORMULA and not (
+        _plain_legacy_parser(value._parser)
+        and _plain_legacy_parser(value._nested_parser)
+    ):
+        return False
+    names = next(names for record, names in _SPEC_RECORDS if kind is record)
+    state = getattr(value, "__dict__", None)
+    return all(passive(object.__getattribute__(value, name)) for name in names) and (
+        state is None or (type(state) is dict and passive(state))
+    )
 
 
 def _plain_dtype(dtype: object) -> bool:
-    return any(type(dtype) is kind for kind in _DTYPE_TYPES) and (
-        dtype.fields is None and dtype.metadata is None
+    native = cast("np.dtype[Any]", dtype)
+    return any(type(native) is kind for kind in _DTYPE_TYPES) and (
+        native.fields is None and native.metadata is None
     )
 
 
@@ -104,8 +282,10 @@ def _passive_values(values: tuple[object, ...]) -> bool:
                 )
             elif kind is slice:
                 # Formulaic caches term_slices; reject components with index hooks.
-                ok = all(part is None or type(part) is int
-                         for part in (value.start, value.stop, value.step))
+                ok = all(
+                    part is None or type(part) is int
+                    for part in (value.start, value.stop, value.step)
+                )
             elif kind is tuple or kind is list:
                 ok = all(passive(v) for v in value)
             elif kind is dict:
@@ -117,28 +297,38 @@ def _passive_values(values: tuple[object, ...]) -> bool:
                 ok = type(items) is dict and passive(items)
             elif kind is pd.Index or kind is pd.RangeIndex:
                 stored = object.__getattribute__(value, "_data")
-                ok = (type(stored) is np.ndarray and _plain_dtype(stored.dtype)
-                      and stored.dtype == value.dtype and passive(stored)
-                      and passive(value.name))
+                ok = (
+                    type(stored) is np.ndarray
+                    and _plain_dtype(stored.dtype)
+                    and stored.dtype == value.dtype
+                    and passive(stored)
+                    and passive(value.name)
+                )
             elif kind is pd.Series:
-                ok = (_plain_dtype(value.dtype) and passive(value.attrs)
-                      and passive(value.name) and passive(value.index)
-                      and passive(value.to_numpy(copy=False)))
+                ok = (
+                    _plain_dtype(value.dtype)
+                    and passive(value.attrs)
+                    and passive(value.name)
+                    and passive(value.index)
+                    and passive(value.to_numpy(copy=False))
+                )
             elif kind is pd.DataFrame:
-                ok = (all(_plain_dtype(dt) for dt in value.dtypes)
-                      and passive(value.attrs) and passive(value.index)
-                      and passive(value.columns)
-                      and passive(value.to_numpy(copy=False)))
+                ok = (
+                    all(_plain_dtype(dt) for dt in value.dtypes)
+                    and passive(value.attrs)
+                    and passive(value.index)
+                    and passive(value.columns)
+                    and passive(value.to_numpy(copy=False))
+                )
             elif any(kind is enum for enum in _SPEC_ENUMS):
                 ok = passive(object.__getattribute__(value, "value"))
             elif any(kind is record for record, _ in _SPEC_RECORDS):
-                names = next(names for record, names in _SPEC_RECORDS if kind is record)
-                state = getattr(value, "__dict__", None)
-                ok = (all(passive(object.__getattribute__(value, name)) for name in names)
-                      and (state is None or (type(state) is dict and passive(state))))
+                ok = _passive_spec_record(value, passive)
             elif any(kind is record for record in _RECORDS):
-                ok = all(passive(object.__getattribute__(value, field.name))
-                         for field in fields(kind))
+                ok = all(
+                    passive(object.__getattribute__(value, field.name))
+                    for field in fields(kind)
+                )
             else:
                 ok = False
         finally:
@@ -170,6 +360,7 @@ def own_prepared_once(prepared: PreparedFrame) -> PreparedFrame:
         object.__setattr__(owned, name, value)
     return owned
 
+
 def passive_preparation(prepared: PreparedFrame) -> bool:
     """The unchanged public/foreign preparation eligibility predicate."""
     return type(prepared) is PreparedFrame and _passive_values((prepared,))
@@ -198,8 +389,9 @@ def normalized_numeric_inputs(prepared: PreparedFrame) -> bool:
             return False
     columns = list(prepared.base.inputs.metadata.columns.values())
     if prepared.effects is not None:
-        native = (_native_parts(prepared.effects)
-                  if _native_parts is _NATIVE_PARTS else None)
+        native = (
+            _native_parts(prepared.effects) if _native_parts is _NATIVE_PARTS else None
+        )
         effect_columns = prepared.effects.columns if native is None else native[0]
         columns.extend(effect_columns.values())
     for column in columns:
@@ -209,8 +401,11 @@ def normalized_numeric_inputs(prepared: PreparedFrame) -> bool:
         if type(values) is tuple:
             if not _copy_free_labels(values):
                 return False
-        elif not (type(values) is np.ndarray and values.dtype.kind != "O"
-                  and _plain_dtype(values.dtype)):
+        elif not (
+            type(values) is np.ndarray
+            and values.dtype.kind != "O"
+            and _plain_dtype(values.dtype)
+        ):
             return False
     return _copy_free_labels(tuple(labels.names))
 
@@ -224,36 +419,46 @@ def normalized_fit_frame(template: PreparedFrame) -> PreparedFrame:
     """
     frame = object.__new__(PreparedFrame)
     for name, value in (
-        ("columns", template.columns), ("base", _owned_sample_base(template.base)),
+        ("columns", template.columns),
+        ("base", _owned_sample_base(template.base)),
         ("subset_missing", template.subset_missing),
         ("effects", _owned_effect_columns(template.effects)),
         ("dependence", _owned_dependence_provenance(template.dependence)),
-        ("_frame", template._frame), ("_labels", _owned_index(template._labels)),
+        ("_frame", template._frame),
+        ("_labels", _owned_index(template._labels)),
     ):
         object.__setattr__(frame, name, value)
     return frame
+
 
 def _single_fit_provenance(dependence: DependenceProvenance | None) -> bool:
     """Preserve copy hooks outside the normal predicate's metadata/effect columns."""
     if dependence is None:
         return True
-    if type(dependence) is not DependenceProvenance or type(
-        dependence._columns
-    ) is not _OwnedMapping:
+    if (
+        type(dependence) is not DependenceProvenance
+        or type(dependence._columns) is not _OwnedMapping
+    ):
         return False
     for name, provenance in dependence._columns.items():
         if type(provenance) is not ColumnProvenance:
             return False
         descriptors = (
-            name, provenance.name, provenance.roles, provenance.used_in_fit,
-            provenance.source_dtype, provenance.pandas_kind,
+            name,
+            provenance.name,
+            provenance.roles,
+            provenance.used_in_fit,
+            provenance.source_dtype,
+            provenance.pandas_kind,
         )
         if not _passive_values(descriptors):
             return False
         # Inspect already owned original components without expanding a pair.
-        columns = (provenance._retained_sources
-                   if "_retained_sources" in vars(provenance)
-                   else (provenance._column_record,))
+        columns = (
+            provenance._retained_sources
+            if "_retained_sources" in vars(provenance)
+            else (provenance._column_record,)
+        )
         for column in columns:
             if type(column) is not Column:
                 return False
@@ -261,8 +466,11 @@ def _single_fit_provenance(dependence: DependenceProvenance | None) -> bool:
             if type(values) is tuple:
                 if not _copy_free_labels(values):
                     return False
-            elif not (type(values) is np.ndarray and values.dtype.kind != "O"
-                      and _plain_dtype(values.dtype)):
+            elif not (
+                type(values) is np.ndarray
+                and values.dtype.kind != "O"
+                and _plain_dtype(values.dtype)
+            ):
                 return False
     return _passive_values((dependence.used,))
 
@@ -279,14 +487,21 @@ def single_fit_frame(prepared: PreparedFrame) -> PreparedFrame | None:
     effects = prepared.effects
     if effects is not None and type(effects) is not EffectColumns:
         return None
-    native = (_native_parts(effects) if effects is not None
-              and _native_parts is _NATIVE_PARTS else None)
-    effect_columns = (None if effects is None else
-                      effects.columns if native is None else native[0])
+    native = (
+        _native_parts(effects)
+        if effects is not None and _native_parts is _NATIVE_PARTS
+        else None
+    )
+    effect_columns = (
+        None if effects is None else effects.columns if native is None else native[0]
+    )
     descriptors = (
-        prepared.columns, prepared.base.inputs.column_names,
+        prepared.columns,
+        prepared.base.inputs.column_names,
         tuple(prepared.base.inputs.metadata.columns),
-        None if effects is None else (effects.terms, tuple(effect_columns)),
+        None
+        if effects is None
+        else (effects.terms, tuple(cast("Mapping[str, Column]", effect_columns))),
         prepared.base.inputs.weights,
     )
     if not _passive_values(descriptors) or not _single_fit_provenance(
@@ -295,12 +510,13 @@ def single_fit_frame(prepared: PreparedFrame) -> PreparedFrame | None:
         return None
     owned = object.__new__(PreparedFrame)
     for name, value in (
-        ("columns", prepared.columns), ("base", prepared.base),
-        ("subset_missing", prepared.subset_missing), ("effects", effects),
+        ("columns", prepared.columns),
+        ("base", prepared.base),
+        ("subset_missing", prepared.subset_missing),
+        ("effects", effects),
         ("dependence", prepared.dependence),
         ("_frame", _owned_model_frame(prepared._frame)),
         ("_labels", _owned_index(prepared._labels)),
     ):
         object.__setattr__(owned, name, value)
     return owned
-

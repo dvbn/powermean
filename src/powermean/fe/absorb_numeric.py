@@ -1,12 +1,15 @@
 """Range-checked primitives of the weighted absorption: means, walks, lifts, products.
 
-These primitives serve weighted alternating projections on all columns at once, with
-no dense indicator matrix.  Nothing here decides a budget, a stopping or a status: the
+``design/02_computation.md``, Sections 5.2 and 8.1 (weighted alternating projections
+on all columns at once, no dense indicator matrix); ``design/06_reuse_map.md``,
+``fe/absorb`` (an adaptation of S1 ``fe_direct.within`` and S6 ``PreparedWithin``, not
+a port); the adopted contract ``plan/evidence/M1.4_contract.txt``, Sections B and C;
+decision D51.  Task M1.4.  Nothing here decides a budget, a stopping or a status: the
 orchestration is :mod:`powermean.fe.absorb` and the accelerated recurrence
 :mod:`powermean.fe.absorb_acceleration`.
 
 Notation.  ``Y`` or ``z`` is an ``n``-by-``k`` matrix of values, ``w`` the row weights,
-block ``b`` of the grouping (:mod:`powermean.fe.groups`) has codes ``c_b``
+block ``b`` of the accepted grouping (:mod:`powermean.fe.groups`) has codes ``c_b``
 and ``L_b`` levels, its level totals are ``d_b[g] = sum_{c_b(i) = g} w_i``, and a
 block coefficient array ``a_b`` is ``L_b``-by-``k``.  The weighted mean of block ``b``
 is ``M_b(z)[g, j] = sum_{c_b(i) = g} w_i z_ij / d_b[g]`` and its projection
@@ -21,25 +24,29 @@ weight is floored, clipped, normalized or dropped.  Positive totals make each bl
 projection well defined; they are not a certificate of full weighted rank or of
 unique fitted values on zero-weight rows.
 
-Range.  Every arithmetic operation of this module runs under
+Range (contract Section C).  Every arithmetic operation of this module runs under
 ``numpy.errstate(all="raise")``: an invalid operation, an overflow, a division by
 zero or an inexact underflow raises ``FloatingPointError`` and no later finite value
 erases it.  IEEE binary64 and NumPy signal underflow only for a result that is tiny
 AND inexact, so an exactly representable subnormal product or quotient passes and a
-nonzero product rounded to zero refuses (for instance ``w = 2^-1074``,
+nonzero product rounded to zero refuses (the contract's witness ``w = 2^-1074``,
 ``z = 1/2``); exact zeros and exact cancellations pass.  Additions never produce an
 inexact tiny result in binary64, so the checked scope of the reductions is overflow
-and invalid, which the reduction reports.  No floor, bound, rescaling or substitute
-tolerance exists here.
+and invalid, which the accepted reduction reports.  The primitives the checks rely
+on (``multiply``, ``divide``, ``add``, ``subtract`` and ``add.at`` through
+:func:`powermean.fe.reductions.group_sum`) are exercised for exactly this behavior
+by ``tests/fe/test_absorb_numeric.py``, short and SIMD-length arrays alike.  No
+floor, bound, rescaling or substitute tolerance exists here.
 
 Order of operations, documented for the comparisons.  Means: the products ``w_i
 z_ij``, then the sequential row-order sum of each level through ``group_sum`` (the
-``np.add.at`` order), then the division by the total.  Walk: for each visited
+S6 ``np.add.at`` order), then the division by the total.  Walk: for each visited
 block, the means of the current rows, the coefficients increased by them, the rows
 decreased by their gathered means.  Lift: the gathered coefficients added in block
 order.  Inner products: ``(a_ij b_ij) w_i`` summed in row order through the same
 reduction.  These are the adapted mechanics, documented, not a claim of bitwise
-parity with any source routine.
+parity with any source routine; ``tools/verify_ports_absorb.py`` compares the
+components that share a domain with S1 and S6.
 """
 
 from __future__ import annotations
@@ -50,8 +57,9 @@ from dataclasses import dataclass
 import numpy as np
 from numpy.typing import ArrayLike
 
-from powermean.fe.groups import Block, Grouping
 from powermean.fe import reductions as _reductions
+from powermean.fe.groups import Block as _Block
+from powermean.fe.groups import Grouping as _Grouping
 from powermean.fe.reductions import (
     _codes,
     _integer,
@@ -62,8 +70,13 @@ from powermean.fe.reductions import (
 from powermean.model.order import IndexArray
 from powermean.model.variance import FloatArray
 
+Block = _Block
+Grouping = _Grouping
 Coefficients = tuple[FloatArray, ...]
 BoolArray = np.ndarray[tuple[int], np.dtype[np.bool_]]
+type InputReductions = Callable[
+    [FloatArray], Callable[[IndexArray, int, int], FloatArray] | None
+]
 
 WEIGHTS = "weights must be a real vector with one finite nonnegative value per row"
 TOTALS = "every level of every block must have a finite positive total weight"
@@ -118,8 +131,8 @@ def group_sums(values: FloatArray, codes: IndexArray, n_levels: int) -> FloatArr
     cannot signal, so that the reduction and the surrounding products share one
     error state.  ``values`` is a vector or a matrix with one row per code.
 
-    Plain double one-column matrices use the same checked row-order ``add.at``
-    on their owned column view. Generic inputs retain the original conversion
+    Plain double one-column matrices use the checked row-order kernel on
+    their owned column view. Generic inputs retain the original conversion
     and callback path, and vectors and wider matrices retain ``group_sum``.
     """
     if (
@@ -136,7 +149,7 @@ def group_sums(values: FloatArray, codes: IndexArray, n_levels: int) -> FloatArr
 
 
 def _column_sum(values: FloatArray, codes: IndexArray, count: int) -> FloatArray:
-    """Keep the checks and copies, executing an owned single column as a vector."""
+    """Keep D66's checks/copies, executing an owned single column as a vector."""
     a = _values(values)
     count = _integer(count, "count")
     c = _codes(codes, len(a), count)
@@ -144,7 +157,17 @@ def _column_sum(values: FloatArray, codes: IndexArray, count: int) -> FloatArray
 
 
 def _column_sum_rows(a: FloatArray, c: IndexArray, count: int) -> FloatArray:
-    """The unchanged column/vector refusal-replay kernel, after input lowering."""
+    """Sum one column in row order, replaying the original refusal path."""
+    if (
+        a.ndim == 2
+        and a.shape[1] == 1
+        and np.bincount is _reductions._BINCOUNT
+        and c.dtype == np.intp
+    ):
+        with np.errstate(over="ignore", invalid="ignore"):
+            found = np.bincount(c, weights=a[:, 0], minlength=count)
+        if np.isfinite(found).all():
+            return immutable_array(found[:, None])
     out = np.zeros((count, *a.shape[1:]))
     with np.errstate(over="raise", invalid="raise"):
         if a.ndim == 2 and a.shape[1] == 1:
@@ -214,9 +237,7 @@ class PreparedWeights:
             raise ValueError("totals must be the checked sums of the weights by level")
         object.__setattr__(self, "weights", weights)
         object.__setattr__(self, "totals", totals)
-        object.__setattr__(
-            self, "_zero_codes", _zero_code_vector(self.grouping.n_rows)
-        )
+        object.__setattr__(self, "_zero_codes", _zero_code_vector(self.grouping.n_rows))
 
     @property
     def n_rows(self) -> int:
@@ -307,7 +328,14 @@ def prepare_weights(grouping: Grouping, weights: ArrayLike) -> PreparedWeights:
 
 
 def group_means(
-    z: FloatArray, block: int, prepared: PreparedWeights, *, _inputs=None,
+    z: FloatArray,
+    block: int,
+    prepared: PreparedWeights,
+    *,
+    _inputs: (
+        Callable[[FloatArray], Callable[[IndexArray, int, int], FloatArray] | None]
+        | None
+    ) = None,
 ) -> FloatArray:
     """``M_b(z)``: the weighted means of every column of ``z`` by level of block ``b``.
 
@@ -335,8 +363,11 @@ def group_means(
         consume = None if _inputs is None else _inputs(products)
     except MemoryError:
         consume = None  # Optional lowering only, before the required sum.
-    sums = (group_sums(products, encoded.codes, encoded.n_levels) if consume is None
-            else consume(encoded.codes, encoded.n_levels, block))
+    sums = (
+        group_sums(products, encoded.codes, encoded.n_levels)
+        if consume is None
+        else consume(encoded.codes, encoded.n_levels, block)
+    )
     return checked_quotient(sums, prepared.totals[block][:, None], "weighted mean")
 
 
@@ -347,7 +378,7 @@ class Attempted:
     begins, before that arithmetic can refuse, so an operation that refuses by range
     is counted.  The record is local to one operator application, sweep or fresh
     check and is never stored; the work record of the absorption reports its count
-    beside the reserved budget units (exact visits and diagnostic passes).
+    beside the reserved budget units (contract C: exact visits and diagnostic passes).
     """
 
     __slots__ = ("count",)
@@ -407,7 +438,11 @@ def walk(
     prepared: PreparedWeights,
     order: Sequence[int],
     attempted: Attempted | None = None,
-    *, _inputs=None,
+    *,
+    _inputs: (
+        Callable[[FloatArray], Callable[[IndexArray, int, int], FloatArray] | None]
+        | None
+    ) = None,
 ) -> tuple[FloatArray, Coefficients, int]:
     """Apply ``Q_b`` along ``order``, accumulating the subtracted means by block.
 
@@ -424,9 +459,11 @@ def walk(
     for block in order:
         if attempted is not None:
             attempted.begin()
-        means = (group_means(rows, block, prepared, _inputs=_inputs)
-                 if _inputs is not None and group_means is _INPUT_CALLS[0]
-                 else group_means(rows, block, prepared))
+        means = (
+            group_means(rows, block, prepared, _inputs=_inputs)
+            if _inputs is not None and group_means is _INPUT_CALLS[0]
+            else group_means(rows, block, prepared)
+        )
         delta[block] = checked_sum(delta[block], means, "accumulated means")
         gathered = means[grouping.blocks[block].codes]
         rows = checked_difference(rows, gathered, "projected rows")
@@ -572,10 +609,16 @@ class FreshCheck:
 
 
 def fresh_check(
-    z: FloatArray, prepared: PreparedWeights, attempted: Attempted | None = None,
-    *, _inputs=None,
+    z: FloatArray,
+    prepared: PreparedWeights,
+    attempted: Attempted | None = None,
+    *,
+    _inputs: (
+        Callable[[FloatArray], Callable[[IndexArray, int, int], FloatArray] | None]
+        | None
+    ) = None,
 ) -> FreshCheck:
-    """All ``M_b(z)`` from the same ``z``, current weights and totals.
+    """All ``M_b(z)`` from the same ``z``, current weights and totals (contract C).
 
     Every block is evaluated through :func:`group_means`; a range failure in any of
     them raises ``FloatingPointError`` and no check exists for that candidate.
@@ -585,9 +628,12 @@ def fresh_check(
     """
     errors = np.zeros(z.shape[1])
     try:
-        if _inputs is not None and not (type(z) is np.ndarray and z.dtype == np.float64
-                and (attempted is None or type(attempted) is _INPUT_CLASSES[3])
-                and _input_original()):
+        if _inputs is not None and not (
+            type(z) is np.ndarray
+            and z.dtype == np.float64
+            and (attempted is None or type(attempted) is _INPUT_CLASSES[3])
+            and _input_original()
+        ):
             _inputs = None
     except MemoryError:
         _inputs = None
@@ -605,9 +651,11 @@ def fresh_check(
                     consume = _inputs(products)
                 except MemoryError:
                     consume = None  # Product already computed; never retry it.
-            sums = (group_sums(products, encoded.codes, encoded.n_levels)
-                    if consume is None else
-                    consume(encoded.codes, encoded.n_levels, block))
+            sums = (
+                group_sums(products, encoded.codes, encoded.n_levels)
+                if consume is None
+                else consume(encoded.codes, encoded.n_levels, block)
+            )
             means = checked_quotient(
                 sums, prepared.totals[block][:, None], "weighted mean"
             )
@@ -621,10 +669,11 @@ def fresh_check(
     return FreshCheck(errors, float(errors.max()))
 
 
-def _input_sum(a, codes, count):
+def _input_sum(a: FloatArray, codes: _reductions.IntArray, count: int) -> FloatArray:
     """Keep the existing one-column/replay or matrix kernel and checked context."""
-    kernel = (_column_sum_rows if a.ndim == 2 and a.shape[1] == 1
-              else _reductions._sum_rows)
+    kernel = (
+        _column_sum_rows if a.ndim == 2 and a.shape[1] == 1 else _reductions._sum_rows
+    )
     return _checked(lambda: kernel(a, codes, count), "group sum")
 
 
@@ -632,38 +681,86 @@ _INPUT_CLASSES = PreparedWeights, Grouping, Block, Attempted
 _INPUT_METHODS = tuple(
     (cls, name, vars(cls).get(name))
     for cls, names in (
-        (PreparedWeights, ("__getattribute__", "__getattr__", "n_rows", "n_blocks",
-                           "grouping", "weights", "totals")),
+        (
+            PreparedWeights,
+            (
+                "__getattribute__",
+                "__getattr__",
+                "n_rows",
+                "n_blocks",
+                "grouping",
+                "weights",
+                "totals",
+            ),
+        ),
         (Grouping, ("__getattribute__", "__getattr__", "blocks")),
         (Block, ("__getattribute__", "__getattr__", "n_levels", "codes", "counts")),
         (Attempted, ("__getattribute__", "__getattr__", "begin")),
-    ) for name in names
+    )
+    for name in names
 )
 _INPUT_CALLS = (
-    group_means, group_sums, _column_sum, _column_sum_rows, _checked,
-    checked_product, checked_quotient, _values, _integer, _codes, immutable_array,
-    _input_sum, np.multiply, group_sum, _reductions._prepared_reductions,
+    group_means,
+    group_sums,
+    _column_sum,
+    _column_sum_rows,
+    _checked,
+    checked_product,
+    checked_quotient,
+    _values,
+    _integer,
+    _codes,
+    immutable_array,
+    _input_sum,
+    np.multiply,
+    group_sum,
+    _reductions._prepared_reductions,
 )
 
 
-def _input_original():
+def _input_original() -> bool:
     """Constant-size native producer check; no foreign class/getter is consulted."""
     try:
-        if not (PreparedWeights is _INPUT_CLASSES[0]
-                and Grouping is _INPUT_CLASSES[1] and Block is _INPUT_CLASSES[2]
-                and Attempted is _INPUT_CLASSES[3]):
+        if not (
+            PreparedWeights is _INPUT_CLASSES[0]
+            and Grouping is _INPUT_CLASSES[1]
+            and Block is _INPUT_CLASSES[2]
+            and Attempted is _INPUT_CLASSES[3]
+        ):
             return False
-        return all(vars(cls).get(name) is original
-                   for cls, name, original in _INPUT_METHODS) and all(a is b for a, b in zip((
-            group_means, group_sums, _column_sum, _column_sum_rows, _checked,
-            checked_product, checked_quotient, _values, _integer, _codes, immutable_array,
-            _input_sum, np.multiply, group_sum, _reductions._prepared_reductions,
-        ), _INPUT_CALLS, strict=True))
+        return all(
+            vars(cls).get(name) is original for cls, name, original in _INPUT_METHODS
+        ) and all(
+            a is b
+            for a, b in zip(
+                (
+                    group_means,
+                    group_sums,
+                    _column_sum,
+                    _column_sum_rows,
+                    _checked,
+                    checked_product,
+                    checked_quotient,
+                    _values,
+                    _integer,
+                    _codes,
+                    immutable_array,
+                    _input_sum,
+                    np.multiply,
+                    group_sum,
+                    _reductions._prepared_reductions,
+                ),
+                _INPUT_CALLS,
+                strict=True,
+            )
+        )
     except MemoryError:
         return False
 
 
-def _input_reductions(prepared):
+def _input_reductions(
+    prepared: PreparedWeights,
+) -> InputReductions | None:
     """One absorption's code-only reducer store, no values or numerical verdicts.
 
     Only immutable native weight/group records qualify. No requirement callback
@@ -674,38 +771,61 @@ def _input_reductions(prepared):
         if type(prepared) is not _INPUT_CLASSES[0] or not _input_original():
             return None
         grouping, weights = prepared.grouping, prepared.weights
-        if (type(grouping) is not Grouping or type(grouping.blocks) is not tuple
-                or any(type(b) is not Block for b in grouping.blocks)
-                or type(weights) is not np.ndarray or weights.dtype != np.float64
-                or weights.dtype.metadata is not None or weights.ndim != 1
-                or weights.flags.writeable or not weights.flags.c_contiguous):
+        if (
+            type(grouping) is not Grouping
+            or type(grouping.blocks) is not tuple
+            or any(type(b) is not Block for b in grouping.blocks)
+            or type(weights) is not np.ndarray
+            or weights.dtype != np.float64
+            or weights.dtype.metadata is not None
+            or weights.ndim != 1
+            or weights.flags.writeable
+            or not weights.flags.c_contiguous
+        ):
             return None
-        def backed(a, dtype):
-            if (type(a) is not np.ndarray or a.dtype != dtype
-                    or a.dtype.metadata is not None or a.ndim != 1
-                    or a.flags.writeable or not a.flags.c_contiguous):
+
+        def backed(a: object, dtype: type[np.float64] | type[np.int64]) -> bool:
+            if (
+                type(a) is not np.ndarray
+                or a.dtype != dtype
+                or a.dtype.metadata is not None
+                or a.ndim != 1
+                or a.flags.writeable
+                or not a.flags.c_contiguous
+            ):
                 return False
-            owner = a.base
+            owner: object = a.base
             while type(owner) is np.ndarray:
-                if (owner.dtype != dtype or owner.dtype.metadata is not None
-                        or owner.flags.writeable or not owner.flags.c_contiguous
-                        or owner.nbytes != a.nbytes):
+                if (
+                    owner.dtype != dtype
+                    or owner.dtype.metadata is not None
+                    or owner.flags.writeable
+                    or not owner.flags.c_contiguous
+                    or owner.nbytes != a.nbytes
+                ):
                     return False
                 owner = owner.base
             return type(owner) is bytes and len(owner) == a.nbytes
 
-        if (not backed(weights, np.float64) or type(prepared.totals) is not tuple
-                or len(prepared.totals) != len(grouping.blocks)
-                or any(not backed(b.codes, np.int64)
-                       or not backed(b.counts, np.int64)
-                       or not backed(d, np.float64)
-                       for b, d in zip(grouping.blocks, prepared.totals, strict=True))):
+        if (
+            not backed(weights, np.float64)
+            or type(prepared.totals) is not tuple
+            or len(prepared.totals) != len(grouping.blocks)
+            or any(
+                not backed(b.codes, np.int64)
+                or not backed(b.counts, np.int64)
+                or not backed(d, np.float64)
+                for b, d in zip(grouping.blocks, prepared.totals, strict=True)
+            )
+        ):
             return None
         _, _, inputs = _reductions._prepared_reductions(
             sum_call=group_sums, sum_rows=_input_sum
         )
 
-        def channel(values):
+        def channel(
+            values: FloatArray,
+        ) -> Callable[[IndexArray, int, int], FloatArray] | None:
             try:
                 return inputs(values) if _input_original() else None
             except MemoryError:

@@ -55,7 +55,7 @@ class CapturedFit(BuilderRecord):
 
     @property
     def obs_weights(self) -> FloatArray | None:
-        """Owned positive multipliers, without new statistical semantics."""
+        """Owned positive D12 multipliers, without new statistical semantics."""
         return None if self._weights is None else self._weights.view()
 
     def equations(self, theta: ArrayLike, *, variance: Variance) -> IdentifiedState:

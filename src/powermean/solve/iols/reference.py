@@ -1,4 +1,4 @@
-"""NumPy reference kernel of the optional no-FE IOLS solver.
+"""NumPy reference kernel of the optional no-FE IOLS solver (file 02, Section 5.6).
 
 Re-exports the extracted direct fixed-tau no-FE IOLS reference implementation from
 :mod:`powermean.solve.iols.kernel`.

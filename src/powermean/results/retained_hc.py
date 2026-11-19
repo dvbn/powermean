@@ -1,20 +1,21 @@
-"""Internal named HC computation from retained records, with fresh binding checks.
+"""Private named HC computation from retained records, with fresh binding checks.
 
 The contract, request/result records and capability-only queries are documented in
-:mod:`powermean.results.retained_hc_records`. This module composes the kernels at the
-selected point; no fit, sample selection or formula replay occurs. The reporting order
-and column scale are bound before covariance computation. A selected root point of an
-absorbed joint fit outside ``tau in [1, 2]`` (point kind ``"root"``) keeps its actual
-signed observed curvature in the fresh rows (the expected-information hats of the full
-nuisance geometry with the actual observed bread); every other check stands, and every
-other point keeps the refusal of a negative curvature.
+:mod:`powermean.results.retained_hc_records`. This module composes the accepted
+kernels at the selected point; no fit, sample selection or formula replay occurs.
+The reporting order and column scale are bound before covariance computation.
+A selected root point of an absorbed joint fit outside ``tau in [1, 2]`` (point kind
+``"root"``) keeps its actual signed observed curvature in the fresh rows (decision
+D57: the expected-information hats of the full nuisance geometry with the actual
+observed bread); every other check stands, and every other point keeps the refusal
+of a negative curvature.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 
@@ -27,10 +28,14 @@ from powermean.data.inference_requests import (
 from powermean.data.request_values import OMITTED
 from powermean.errors import SpecificationError
 from powermean.fe.absorb_numeric import checked_difference, checked_product
+from powermean.fe.admission_records import WorkLog
+from powermean.inference.absorbed_block_hc import block_composition, block_preflight
 from powermean.inference.absorbed_details import typed_details
+from powermean.inference.absorbed_linear import linear_composition, linear_preflight
+from powermean.inference.cancelled import contracted_influence, reserve_inference
+from powermean.inference.cancelled_hc import cancelled_hc
 from powermean.inference.hc import (
     HCCovariance,
-    _absorbed_composition,
     joint_hc,
     linear_hc,
 )
@@ -48,7 +53,7 @@ from powermean.results.absorbed_retained import RetainedAbsorbedEnvelope
 from powermean.results.cancelled_retained import RetainedCancelledEnvelope
 from powermean.results.handoff import _same_basis, linear_problem_of, system_of
 from powermean.results.point import frequency_of
-from powermean.results.retained import RetainedFit
+from powermean.results.retained import CovarianceRecord, RetainedFit
 from powermean.results.retained_hc_records import (
     HCCapability,
     HCInferenceRequest,
@@ -56,19 +61,22 @@ from powermean.results.retained_hc_records import (
     Target,
     _envelope_capability,
     _fit_capability,
+    cancelled_capability,
     hc_capability,
 )
 from powermean.results.retained_inference import (
     InferenceRequest,
     RetainedInference,
+    absorbed_saturated,
     retained_inference,
 )
 from powermean.solve.absorbed_certificate_geometry import hessian
 from powermean.solve.absorbed_certificate_point import FreshRows
 from powermean.solve.certificate import outside_convex
+from powermean.systems.identified import IdentifiedState
 from powermean.systems.joint import JointEvaluation
 
-# The later release that owns HAC and Conley.
+# The later release of decision D78: the milestone that owns HAC and Conley.
 NOT_BOUND = "the retained records are not bound to one point, equation and sample"
 
 
@@ -111,7 +119,7 @@ def _same_order(found: OrderScale, given: OrderScale | None) -> bool:
 
 
 def _unsupported(request: HCInferenceRequest, case: str) -> SpecificationError:
-    """The refusal of a method that a retained case does not support."""
+    """The approved refusal of a method that a retained case does not support."""
     return SpecificationError(
         "specification.unsupported_inference", {"method": request.method, "case": case}
     )
@@ -145,6 +153,25 @@ def _reported(
         return errors, order.covariance(theta_covariance), None
     except FloatingPointError as exc:
         return errors, None, str(exc)
+
+
+def _request_errors(found: HCCovariance, errors: FloatArray) -> FloatArray:
+    """The standard errors of the request: missing where the request is undefined.
+
+    An undefined request (:attr:`HCCovariance.undefined`) holds a missing covariance;
+    the errors that the fit's coefficient gate read are not those of the request.
+    """
+    return np.full(errors.shape, np.nan) if found.undefined else errors
+
+
+def _reported_hc(
+    found: HCCovariance, order: OrderScale
+) -> tuple[FloatArray, FloatArray | None, str | None]:
+    """:func:`_reported` of the record; missing values for an undefined request."""
+    if found.undefined:
+        size = found.covariance.shape[0]
+        return np.full(size, np.nan), found.covariance, None
+    return _reported(found.covariance, order)
 
 
 # ------------------------------------------------------------------- no-FE fits
@@ -226,14 +253,15 @@ def _fit_hc(retained: RetainedFit, request: HCInferenceRequest) -> RetainedHC:
         and _same_basis(certificate.reported, sample.order_scale)
     )
     capability = _fit_capability(retained)
-    default = retained.default
+    # The dispatcher answers saturated requests without forming an HC engine.
+    default = cast("CovarianceRecord | None", retained.default)
     resolved = _resolved(request, None if default is None else default.convention)
     if capability.route == "linear":
         found = _linear_route(retained, request, resolved)
     else:
         found = _joint_route(retained, request, resolved)
     sample = retained.sample
-    errors, reported, error = _reported(found.covariance, sample.order_scale)
+    errors, reported, error = _reported_hc(found, sample.order_scale)
     return RetainedHC(
         request,
         capability,
@@ -245,7 +273,7 @@ def _fit_hc(retained: RetainedFit, request: HCInferenceRequest) -> RetainedHC:
         retained.theta,
         retained.names,
         found.applied.counts.count,
-        int(found.leverage.active.size),
+        int(found.influence.shape[0]),
         sample.count,
     )
 
@@ -297,12 +325,77 @@ def _same_sparse(found: object, given: object) -> bool:
     )
 
 
+def _linear_hc(
+    envelope: RetainedAbsorbedEnvelope,
+    request: HCInferenceRequest,
+    capability: HCCapability,
+) -> RetainedHC:
+    """A named HC request on fixed-effect log-OLS solved by absorption.
+
+    The retained influence rows of the within regression, and the leverage of the
+    dummy-variable regression formed afresh from the retained design, weights and
+    blocks (:mod:`powermean.inference.absorbed_linear`).  The block codes are read
+    from the sample's internal final view, as
+    :func:`powermean.results.retained_inference._blocks` reads them: the public
+    ``grouping`` would materialize every level label afresh.
+    """
+    sample, order, point = envelope.sample, envelope.order, envelope.selected_point
+    design, rows = sample.design, envelope.observed_influence
+    grouping = sample._final_grouping
+    if design is None or grouping is None or order is None or rows is None:
+        raise _unsupported(request, "an absorbed fit without its retained rows")
+    assert point is not None
+    inherited: str | ConventionValues | ResolvedConvention | None = None
+    if envelope.initial_scale is not None:
+        if envelope.initial_scale.details is not None:
+            inherited = typed_details(envelope.initial_scale.details).applied.convention
+        else:
+            inherited = envelope.initial_scale.request.convention
+    weights = sample.weight_values
+    preflight, coordinates = linear_preflight(
+        int(design.matrix.shape[1]),
+        tuple((block.name, block.codes) for block in grouping.blocks),
+        weights,
+        request.method,
+        _resolved(request, inherited),
+        frequency=sample.frequency,
+        memo=envelope._coordinates_memo(),
+    )
+    found = linear_composition(
+        design.matrix, weights, rows, preflight, coordinates, bread=request.bread
+    )
+    errors, reported, error = _reported_hc(found, order)
+    return RetainedHC(
+        request,
+        capability,
+        found,
+        found.covariance,
+        errors,
+        reported,
+        error,
+        point.theta,
+        tuple(sample.active_names),
+        found.applied.counts.count,
+        int(np.count_nonzero(weights > 0)),
+        sample.count,
+    )
+
+
 def _envelope_hc(
     envelope: RetainedAbsorbedEnvelope, request: HCInferenceRequest
 ) -> RetainedHC:
     """Answer a named HC request from a certified absorbed envelope."""
     point, certificate = envelope.selected_point, envelope.certificate
-    if point is None or certificate is None or not certificate.accepted:
+    # Fixed-effect log-OLS by absorption holds no certificate (ruling 52).
+    linear = (
+        point is not None
+        and certificate is None
+        and envelope.route == "linear"
+        and envelope.accepted
+    )
+    if point is None or (
+        not linear and (certificate is None or not certificate.accepted)
+    ):
         raise ValueError("no selected point was certified for this candidate")
     if envelope.empty:
         raise ValueError("the model has no slope parameters (K = 0)")
@@ -339,7 +432,7 @@ def _envelope_hc(
                 _envelope_capability(envelope),
                 hc_rec,
                 init.covariance.covariance,
-                init.standard_errors,
+                _request_errors(hc_rec, init.standard_errors),
                 init.reported_covariance,
                 init.covariance_error,
                 point.theta,
@@ -351,6 +444,9 @@ def _envelope_hc(
     envelope.require_influence(request.label)
     capability = _envelope_capability(envelope)
     sample, order = envelope.sample, envelope.order
+    if linear:
+        return _linear_hc(envelope, request, capability)
+    assert certificate is not None
     rows, geometry, design = certificate.rows, certificate.geometry, sample.design
     if rows is not None and rows._influence_discarded:
         # the rows of a discarded envelope stay marked whatever its flag says
@@ -399,16 +495,18 @@ def _envelope_hc(
             inherited = typed_details(envelope.initial_scale.details).applied.convention
         else:
             inherited = envelope.initial_scale.request.convention
-    found = _absorbed_composition(
-        matrix,
+    fresh = FreshRows(b, c, weights, sample.frequency)
+    convention = _resolved(request, inherited)
+    preflight = block_preflight(
+        int(matrix.shape[1]),
         basis,
-        FreshRows(b, c, weights, sample.frequency),
-        w,
+        weights,
         request.method,
-        convention=_resolved(request, inherited),
-        bread=request.bread,
+        convention,
+        frequency=sample.frequency,
     )
-    errors, reported, error = _reported(found.covariance, order)
+    found = block_composition(matrix, basis, fresh, w, preflight, bread=request.bread)
+    errors, reported, error = _reported_hc(found, order)
     return RetainedHC(
         request,
         capability,
@@ -420,8 +518,95 @@ def _envelope_hc(
         point.theta,
         tuple(sample.active_names),
         found.applied.counts.count,
-        int(found.leverage.active.size),
+        int(np.count_nonzero(weights > 0)),
         sample.count,
+    )
+
+
+# -------------------------------------------------------------- cancelled fits
+
+
+def cancelled_point_hc(
+    state: IdentifiedState,
+    rhs: FloatArray,
+    order: OrderScale,
+    request: HCInferenceRequest,
+    names: tuple[str, ...],
+    *,
+    convention: ResolvedConvention | None = None,
+    keep_influence: bool = True,
+    cancelled_index: int = 0,
+) -> RetainedHC:
+    """A named HC request at the accepted point of a cancelled fit.
+
+    ``rhs`` is the fit's own ``W = H^-T L'`` of the same point.  The row terms are
+    contracted on it, the covariance is :func:`powermean.inference.cancelled_hc.
+    cancelled_hc` (candidate A1; observed bread only), and it is mapped once to the
+    reported scale.  ``convention`` is the convention in force where the caller has
+    resolved it against the fit's; the request's own otherwise.
+    """
+    if request.bread != "observed":
+        raise _unsupported(
+            request, "a fit with a cancelled fixed effect (observed bread only)"
+        )
+    resolved = _resolved(request, None) if convention is None else convention
+    influence = contracted_influence(state, rhs, rows=True, work=WorkLog())
+    found = cancelled_hc(
+        state, influence, request.method, resolved, cancelled_index=cancelled_index
+    )
+    errors, reported, error = _reported_hc(found, order)
+    structure = state.design.structure
+    return RetainedHC(
+        request,
+        cancelled_capability(True, keep_influence),
+        found,
+        found.covariance,
+        errors,
+        reported,
+        error,
+        state.theta,
+        names,
+        found.applied.counts.count,
+        structure.n_rows,
+        structure.n_rows,
+    )
+
+
+def _cancelled_hc(
+    envelope: RetainedCancelledEnvelope, request: HCInferenceRequest
+) -> RetainedHC:
+    """Answer a named HC request from a certified cancelled envelope, without refit."""
+    if not envelope.accepted:
+        raise ValueError("no selected point was certified for this candidate")
+    if request.bread != "observed":
+        raise _unsupported(
+            request, "a fit with a cancelled fixed effect (observed bread only)"
+        )
+    initial = envelope._initial
+    resolved = _resolved(
+        request, None if initial is None else initial.applied.convention
+    )
+    held = envelope._hc
+    if (
+        held is not None
+        and held.request.method == request.method
+        and held.applied.convention.values == resolved.values
+    ):
+        # The record of the fit: the same method under the same convention values.
+        return replace(held, request=request)
+    envelope.require_influence(request.label)
+    state, rhs = envelope._state, envelope._rhs
+    if state is None or rhs is None:
+        raise ValueError("retained same-point cancelled inputs are unavailable")
+    reserve_inference(envelope.geometry, envelope._inference_bounds)
+    return cancelled_point_hc(
+        state,
+        rhs.view(),
+        envelope._order,
+        request,
+        envelope.slope_names,
+        convention=resolved,
+        cancelled_index=envelope.cancelled_index,
     )
 
 
@@ -453,18 +638,16 @@ def retained_hc(target: Target, request: HCInferenceRequest) -> RetainedHC:
         equation and sample; a design that is not of full column rank.
     SpecificationError
         ``specification.influence_discarded``, ``specification.unsupported_inference``
-        before any computation; ``specification.no_residual_dof``,
-        ``specification.conflicting`` and ``specification.unit_leverage`` from the
-        kernels' preflight, before any evaluation or factorization.
+        before any computation; ``specification.no_residual_dof`` and
+        ``specification.conflicting`` from the kernels' preflight, before any
+        evaluation or factorization.
     FloatingPointError
         A multiplier or intermediate that is not representable (no floor).
     """
     if type(request) is not HCInferenceRequest:
         raise TypeError("request must be an HCInferenceRequest")
     if type(target) is RetainedCancelledEnvelope:
-        raise _unsupported(
-            request, "cancelled group equations; HC extension remains open"
-        )
+        return _cancelled_hc(target, request)
     if type(target) is RetainedFit:
         return _fit_hc(target, request)
     if type(target) is RetainedAbsorbedEnvelope:
@@ -473,7 +656,7 @@ def retained_hc(target: Target, request: HCInferenceRequest) -> RetainedHC:
 
 
 def deferred_refusal(request: HacRequest | ConleyRequest) -> SpecificationError:
-    """The explicit later-release refusal of a reserved HAC or Conley request."""
+    """The explicit later-release refusal of a reserved HAC or Conley request (D78)."""
     if type(request) is HacRequest:
         feature = "HAC covariance (deferred to a later release)"
     elif type(request) is ConleyRequest:
@@ -543,7 +726,7 @@ def _conley_mapping(vcov: Mapping[Any, Any]) -> SpecificationError:
 
 
 def deferred_vcov(vcov: object, cluster: object = None) -> None:
-    """Refuse a reserved HAC or Conley covariance request, before anything else.
+    """Refuse a reserved HAC or Conley covariance request, before anything else (D78).
 
     A typed :class:`~powermean.data.inference_requests.HacRequest` or
     :class:`~powermean.data.inference_requests.ConleyRequest` given as ``vcov`` or
@@ -572,7 +755,7 @@ def retained_request(
 
     A named HC request goes to :func:`retained_hc`; a robust or cluster request to the
     unchanged :func:`~powermean.results.retained_inference.retained_inference`; a
-    reserved HAC or Conley request is refused before the target is read.
+    reserved HAC or Conley request is refused (D78) before the target is read.
     """
     if isinstance(request, HacRequest | ConleyRequest):
         raise deferred_refusal(request)
@@ -592,8 +775,14 @@ def retained_request(
     )
 
 
-def initial_hc_from_envelope(envelope: RetainedAbsorbedEnvelope) -> RetainedHC:
-    """Build ``RetainedHC`` directly from ``envelope.initial_scale``."""
+def initial_hc_from_envelope(envelope: RetainedAbsorbedEnvelope) -> RetainedHC | None:
+    """Build ``RetainedHC`` directly from ``envelope.initial_scale``.
+
+    ``None`` for a saturated fit, whose certificate formed no scale: its covariance
+    is missing (:mod:`powermean.results.saturated`), formed by its result.
+    """
+    if absorbed_saturated(envelope):
+        return None
     init = envelope.initial_scale
     point = envelope.selected_point
     if (
@@ -625,7 +814,7 @@ def initial_hc_from_envelope(envelope: RetainedAbsorbedEnvelope) -> RetainedHC:
         _envelope_capability(envelope),
         det.hc,
         init.covariance.covariance,
-        init.standard_errors,
+        _request_errors(det.hc, init.standard_errors),
         init.reported_covariance,
         init.covariance_error,
         point.theta,
@@ -640,6 +829,7 @@ __all__ = [
     "HCCapability",
     "HCInferenceRequest",
     "RetainedHC",
+    "cancelled_point_hc",
     "deferred_refusal",
     "deferred_vcov",
     "hc_capability",

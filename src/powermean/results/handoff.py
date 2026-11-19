@@ -1,8 +1,10 @@
 """The internal handoff from a fit to its result, validated against the retained inputs.
 
-The handoff binds the records of a fit to the same coefficient point, equation, sample
-and coordinates; this does not waive the covariance-dependent coefficient gate when a
-candidate is initially certified.  The public ``fit`` composes the stages
+``design/04_inference_and_effects.md``, Section 2.3 ("binds the following information
+to the same coefficient point, equation, sample and coordinates"; "this does not waive
+the covariance-dependent coefficient gate when initially certifying a candidate");
+``design/02_computation.md``, Sections 1 (rule 3) and 7; ``DESIGN.md``, Section 5.1;
+decisions D41, D45, D49 and D55.  The public ``fit`` of task M0.22 composes the stages
 and hands their records to :func:`bind`, which forms the :class:`~powermean.results.
 retained.RetainedFit` of a result.  Nothing is solved, certified afresh, reselected or
 trained here, and no record of a stage is modified or replaced.
@@ -15,9 +17,10 @@ settings; and the authentic certificate of the point, as the :class:`~powermean.
 status.Conclusion` of a solve or as a bare :class:`~powermean.solve.certificate.
 Certificate` of a supplied point, or on the linear route the candidate of the
 least-squares solve, with the fresh :class:`~powermean.solve.linear_status.
-LinearConclusion` of its point, or on the power route the
+LinearConclusion` of its point since task M0.22, or on the power route the
 :class:`~powermean.solve.no_point.StartFailure` of an automatic start that had no
-finite value.  A certificate carries a candidate and an evaluation, not the
+finite value or the measured no-point refusal of the IOLS normalization.
+A certificate carries a candidate and an evaluation, not the
 system, the estimator or the inference that supplied its standard errors; the
 fingerprint of a sample omits the order and the variance; and the labels of a prepared
 frame are taken by position for any sample with as many input rows.  Equal coefficient
@@ -48,13 +51,13 @@ bytes, equal counts or an equal fingerprint therefore authenticate nothing, and
   told apart by that reported scale, which every accepted certificate carries;
 - the certificate's uncertainty is the requested inference's: the standard errors
   that its coefficient gate compared the Newton correction with are those that the
-  inference requested at the fit forms at this evaluation, by the provider
+  inference requested at the fit forms at this evaluation, by the accepted provider
   arithmetic on the retained influence record (the robust covariance, or the one of
   the requested classification, the ``"stata"`` factors and the map of the order
-  scale, dense or direct), or, for a named HC method, by
+  scale, dense or direct), or, for a named HC method, by the accepted
   :func:`~powermean.inference.hc.joint_hc` of the retained system at the
   certificate's evaluation or :func:`~powermean.inference.hc.linear_hc` of the
-  captured solve, under the convention in force at the fit, or,
+  captured solve, under the convention in force at the fit (rules B1, B12(a)), or,
   for a typed cluster request, by the convention engine at the influence record of
   that evaluation (:mod:`powermean.results.cluster_covariance`: the final reported
   matrix's standard errors of an adjusted signed request), bit
@@ -66,10 +69,10 @@ bytes, equal counts or an equal fingerprint therefore authenticate nothing, and
   certification alone;
 - a conclusion is its certificate's: the candidate's retained coefficients are the
   certificate's bytes, the native reason is that of the retained attempt, the status
-  is the one that the status rules compose, and the solver ran with the resolved
+  is the one that the accepted rules compose, and the solver ran with the resolved
   settings; a direct certificate of a supplied point is never paired with the trace
   of a solve that moved elsewhere; a start requested on the reported scale, where one
-  is handed over, is the solver's start through the forward map;
+  is handed over, is the solver's start through the accepted forward map;
 - on the linear route, the candidate solved the retained problem: its dimension,
   units and weights are the sample's, and its residuals are ``(l - o) - X beta`` of
   the retained response, offset and scaled design, bit for bit; a linear conclusion
@@ -80,12 +83,13 @@ bytes, equal counts or an equal fingerprint therefore authenticate nothing, and
   standard errors the requested inference's at the fresh evaluation, and the status
   is the one that :func:`~powermean.solve.linear_status.linear_status` composes; a
   candidate without a point carries no certificate and the status of its own reason;
-  a captured linear solve, where one is handed over, holds the retained
+  a captured linear solve (task M1.22), where one is handed over, holds the retained
   equation as the solve received it and the very candidate handed over, bit for bit,
   and is retained with the influence for the named HC covariances of the linear path;
 - a start failure is this sample's: the mean whose logarithm had no finite value is
   the plain mean of the transformed outcome over the rows of positive weight, its
   logarithm is not finite, and the intercept is a column of ones of the design;
+  an IOLS scale refusal reproduces the centered-SD floor on the retained slopes;
 - a joint root conclusion outside ``[1, 2]`` (:mod:`powermean.solve.joint_root`) is
   that route's: the estimator's power variance lies outside ``[1, 2]``; the settings
   record every root-Newton option, and the solve ran with them; the native reason is
@@ -102,46 +106,54 @@ bytes, equal counts or an equal fingerprint therefore authenticate nothing, and
   the equation's own: required for a convex variance, waived outside ``[1, 2]``.
 
 The status of a solve is the conclusion's.  For a supplied point without a solve the
-status rules give a status from the gates alone where they do (``verified``,
+accepted rules give a status from the gates alone where they do (``verified``,
 ``verified_secondary``, ``nonfinite``, ``singular_system``); a finite, regular point
-that fails the score, the index or the coefficient gate has no status without the native
-reason of its solve, and the handoff refuses it rather than invent one.  Native solver
-success is not certification: only the certificate's level makes a point certified.
-Failed candidates keep their last state and their diagnostics; their inference is
-withheld by the result.  A bare linear candidate handed over without its conclusion
-keeps no certificate and no status, and the result reports its point without inference.
+that fails the score, the index or the coefficient gate has no status without the
+native reason of its solve, and the handoff refuses it rather than invent one (file
+02, Section 7).  Native solver success is not certification: only the certificate's
+level makes a point certified.  Failed candidates keep their last state and their
+diagnostics; their inference is withheld by the result.  A bare linear candidate
+handed over without its conclusion keeps no certificate and no status, as at task
+M0.21, and the result reports its point without inference.
 
-What is retained is owned (:mod:`powermean.results.owned`): the sample, the certificate,
-the candidate of the solve and the linear candidate are re-formed, before the checks,
-with arrays of their own, so that a later edit of a record the caller kept, of the shape
-of an array say, reaches nothing retained; the values, types and diagnostics are those
-of the records handed over.  The influence record and the default covariance are formed
-once, after the checks, from the certificate's evaluation (the joint one, or the fresh
-linear one; or the bare linear candidate with its design), by the primitives
-(:mod:`powermean.results.point`); with ``keep_influence=False`` the influence record is
-discarded after the default covariance was formed, and a later request that needs it is
-refused by the result, which never rebuilds it from the certificate.
+What is retained is owned (:mod:`powermean.results.owned`): the sample, the
+certificate, the candidate of the solve and the linear candidate are re-formed, before
+the checks, with arrays of their own, so that a later edit of a record the caller
+kept, of the shape of an array say, reaches nothing retained; the values, types and
+diagnostics are those of the records handed over.  The influence record and the
+default covariance are formed once, after the checks, from the certificate's
+evaluation (the joint one, or the fresh linear one; or the bare linear candidate with
+its design), by the accepted primitives (:mod:`powermean.results.point`); with
+``keep_influence=False`` the influence record is discarded after the default
+covariance was formed, and a later request that needs it is refused by the result,
+which never rebuilds it from the certificate (file 04, Section 1).
 """
 
 from __future__ import annotations
 
+import functools
 import math
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, replace
 
 import numpy as np
 
 from powermean._prepare.compose import PreparedFrame
 from powermean.data.computation import Computation
 from powermean.data.retained import OrderSample
+from powermean.data.sample_fe_state import RowLedger
 from powermean.data.specs import Estimator, Inference
 from powermean.fe.admission_records import WorkLog
 from powermean.formula.frame import Design
 from powermean.inference.convention import reported_covariance
 from powermean.inference.hc import LinearSolve, linear_request, solve_request
 from powermean.inference.provider import direct_standard_errors
+from powermean.model.matrix import MomentJacobianRankError
+from powermean.model.order import IndexArray
 from powermean.model.order_scale import OrderScale
-from powermean.model.variance import FloatArray, PowerVariance
+from powermean.model.variance import FloatArray, NB2Variance, PowerVariance
 from powermean.results.binding import check_sample, refuse
+from powermean.results.ordinary_support import gamma_problem, replay_separation
 from powermean.results.owned import (
     owned_array,
     owned_candidate,
@@ -160,7 +172,17 @@ from powermean.results.point import (
     linear_point,
     power_point,
 )
-from powermean.results.retained import AnyCandidate, AnyCertificate, RetainedFit
+from powermean.results.retained import (
+    AnyCandidate,
+    AnyCertificate,
+    FitStatus,
+    RetainedFit,
+)
+from powermean.results.retained_gamma import RetainedGammaResult, snapshot_gamma_result
+from powermean.results.retained_support import (
+    RetainedSupportResult,
+    snapshot_support_result,
+)
 from powermean.solve.assessment import certificate_controls
 from powermean.solve.cancelled_records import (
     ROOT_DOMAINS,
@@ -169,11 +191,14 @@ from powermean.solve.cancelled_records import (
 )
 from powermean.solve.certificate import Certificate, certify, outside_convex
 from powermean.solve.iols.adapter import (
+    _extract_nofe_slope_design,
+    _ppml_kernel_response,
     apply_transformed_normalization,
     build_transformed_normalization_state,
 )
-from powermean.solve.iols.candidate import IolsCandidate
+from powermean.solve.iols.candidate import IolsCandidate, validate_iols_system
 from powermean.solve.iols.kernel import DIRECT_NOFE_FIXED_TAU_CONTROL_KEYS
+from powermean.solve.iols.normalization import IolsScaleFailure, IolsScaleFloorError
 from powermean.solve.iols.options import (
     IolsOptions,
     effective_backend_request,
@@ -189,6 +214,7 @@ from powermean.solve.joint_root import (
 from powermean.solve.joint_root_records import (
     JointRootCandidate,
     JointRootStage,
+    RootConditionEstimate,
     StageSummary,
 )
 from powermean.solve.linear import LinearCandidate
@@ -201,6 +227,8 @@ from powermean.solve.options import SolverOptions, resolve_options
 from powermean.solve.reported import ReportedScale
 from powermean.solve.starts import automatic_start
 from powermean.solve.status import Conclusion, Status, compose_status
+from powermean.solve.support import SupportResult
+from powermean.solve.support_gamma import GammaResult
 from powermean.systems.joint import JointEvaluation, JointSystem
 
 # The arrays of an evaluation that the fresh evaluation must reproduce exactly.
@@ -258,15 +286,15 @@ class Handoff:
     linear_conclusion : LinearConclusion, optional
         The fresh conclusion of the linear candidate, on the linear route; without
         it the candidate is bare and uncertified.
-    failure : StartFailure, optional
-        The failure of the automatic start, on the power route, in place of a
-        conclusion or a certificate: no candidate exists.
+    failure : StartFailure or IolsScaleFailure, optional
+        A failed automatic start or an IOLS slope-scale refusal before any
+        iteration; there is no candidate or certificate.
     requested_start : array, optional
         The start that the caller gave on the reported scale, where one was given.
     offset_design : Design, optional
         The fitted design of an offset or exposure expression, for its replay.
     linear_solve : LinearSolve, optional
-        On the linear route, the owned equation captured before the
+        On the linear route (task M1.22), the owned equation captured before the
         solve and the candidate that this one solve returned
         (:func:`linear_solve_of`); ``linear`` is then its candidate.  Retained, with
         the influence, for the named HC covariances of the linear path; never formed
@@ -283,10 +311,12 @@ class Handoff:
     linear: LinearCandidate | None = None
     keep_influence: bool = True
     linear_conclusion: LinearConclusion | None = None
-    failure: StartFailure | None = None
+    failure: StartFailure | IolsScaleFailure | None = None
     requested_start: FloatArray | None = None
     offset_design: Design | None = None
     linear_solve: LinearSolve | None = None
+    support: tuple[SupportResult, ...] = ()
+    recession: GammaResult | None = None
 
 
 # ----------------------------------------------------------------- the refusals
@@ -316,13 +346,22 @@ def _check_types(handoff: Handoff) -> None:
         (handoff.certificate, Certificate, "certificate"),
         (handoff.linear, LinearCandidate, "linear"),
         (handoff.linear_conclusion, LinearConclusion, "linear_conclusion"),
-        (handoff.failure, StartFailure, "failure"),
         (handoff.offset_design, Design, "offset_design"),
         (handoff.linear_solve, LinearSolve, "linear_solve"),
+        (handoff.recession, GammaResult, "recession"),
     )
     for value, expected, name in optional:
         if value is not None and type(value) is not expected:
             raise TypeError(f"{name} must be a {expected.__name__}")
+    if handoff.failure is not None and type(handoff.failure) not in (
+        StartFailure,
+        IolsScaleFailure,
+    ):
+        raise TypeError("failure must be a StartFailure or IolsScaleFailure")
+    if type(handoff.support) is not tuple or any(
+        type(step) is not SupportResult for step in handoff.support
+    ):
+        raise TypeError("support must be a tuple of SupportResult records")
     _check_routes(handoff)
 
 
@@ -332,13 +371,17 @@ def _check_routes(handoff: Handoff) -> None:
         (handoff.conclusion is not None)
         + (handoff.certificate is not None)
         + (handoff.failure is not None)
+        + (handoff.recession is not None)
     )
+    support_only = bool(handoff.support) and not power
     linear = handoff.linear is not None or handoff.linear_conclusion is not None
     if handoff.estimator.route == "power" and (
-        power != 1 or linear or handoff.linear_solve is not None
+        (power != 1 and not support_only) or linear or handoff.linear_solve is not None
     ):
         raise _refuse("the power route takes one conclusion or one certificate")
-    if handoff.estimator.route == "linear" and (power or handoff.linear is None):
+    if handoff.estimator.route == "linear" and (
+        power or handoff.support or handoff.linear is None
+    ):
         raise _refuse("the linear route takes the candidate of the linear path")
 
 
@@ -372,15 +415,15 @@ def linear_problem_of(sample: OrderSample) -> LinearProblem:
 
 
 def linear_solve_of(sample: OrderSample) -> LinearSolve:
-    """The least-squares solve of the retained problem, captured with it.
+    """The accepted least-squares solve of the retained problem, captured with it.
 
     The log response, the scaled design, the raw offset and the raw weights that the
-    dispatch of the linear solve hands to :func:`powermean.solve.linear.solve`, with the
-    stated kind of the weights, are captured as the owned
+    dispatch of the linear solve hands to :func:`powermean.solve.linear.solve`, with
+    the stated kind of the weights, are captured as the owned
     :class:`~powermean.inference.hc.LinearRequest` BEFORE the one solve, which
-    :func:`~powermean.inference.hc.solve_request` runs on them.  The dispatch calls this
-    once, in place of the bare solve, and hands over the pair and its candidate; nothing
-    calls it after a fit.
+    :func:`~powermean.inference.hc.solve_request` runs on them (task M1.22).  The
+    dispatch calls this once, in place of the bare solve, and hands over the pair and
+    its candidate; nothing calls it after a fit.
     """
     return solve_request(
         linear_request(
@@ -402,22 +445,38 @@ def _same_array(found: object, given: object) -> bool:
     return bool(
         found.shape == given.shape
         and found.dtype == given.dtype
-        and found.tobytes() == given.tobytes()
+        and _same_bytes(found, given)
     )
 
 
+def _same_bytes(found: np.ndarray, given: np.ndarray) -> bool:
+    """``found.tobytes() == given.tobytes()`` for arrays of one shape and dtype.
+
+    For a numeric or Boolean dtype of 1, 2, 4 or 8 bytes the elements are compared
+    as unsigned integers of their width, in place: equal integers are equal bytes,
+    element by element in the same order.  Any other dtype compares the bytes.
+    """
+    kind = found.dtype
+    if kind.kind in "biuf" and kind.itemsize in (1, 2, 4, 8):
+        unsigned = np.dtype(f"u{kind.itemsize}")
+        return bool(np.array_equal(found.view(unsigned), given.view(unsigned)))
+    return found.tobytes() == given.tobytes()
+
+
 def _check_linear_solve(
-    sample: OrderSample, linear: LinearCandidate, solved: LinearSolve
+    sample: OrderSample,
+    linear: LinearCandidate,
+    solved: LinearSolve,
+    problem: LinearProblem,
 ) -> None:
     """The captured solve is the retained equation's, and its candidate the one given.
 
     The captured equation holds the retained log response, scaled design, raw offset
-    and raw weights (as the linear equation of the sample normalizes them) and the
-    kind of the weights; its candidate has the reason, dimension, units, weights,
-    factorization, coefficients and residuals of the candidate handed over, bit for
-    bit.  Nothing is solved here.
+    and raw weights (as the linear equation of the sample, ``problem``, normalizes
+    them) and the kind of the weights; its candidate has the reason, dimension, units,
+    weights, factorization, coefficients and residuals of the candidate handed over,
+    bit for bit.  Nothing is solved here.
     """
-    problem = linear_problem_of(sample)
     request = solved.request
     if request.frequency != frequency_of(sample) or not all(
         _same_array(getattr(request, name), getattr(problem, name))
@@ -574,7 +633,10 @@ def _check_certificate(
             reported=bool(candidate.stages),
         )
         _check_fresh_certificate(
-            certificate, fresh_certificate, "another equation, sample or point"
+            certificate,
+            fresh_certificate,
+            "another equation, sample or point",
+            candidate._condition_estimates.get("target"),
         )
         return
     given = certificate.evaluation
@@ -659,11 +721,19 @@ def _check_iols_candidate(handoff: Handoff, candidate: IolsCandidate) -> None:
     ]
     slopes = candidate.unscaled_design[:, slope_columns]
     normalization = build_transformed_normalization_state(slopes, mode="scale")
+    kernel_y = candidate.outcome
+    if "kernel_response_unit_exponent" in adapter.diagnostics:
+        kernel_y, exponent = _ppml_kernel_response(kernel_y, candidate.tau, control)
+        if (
+            not exponent
+            or adapter.diagnostics["kernel_response_unit_exponent"] != exponent
+        ):
+            raise _refuse("the IOLS response unit differs from its retained problem")
     if (
         normalization.scale is None
         or adapter.normalization.scale is None
         or not np.array_equal(normalization.scale, adapter.normalization.scale)
-        or not np.array_equal(direct._input_endog, candidate.outcome)
+        or not np.array_equal(direct._input_endog, kernel_y)
         or not np.array_equal(
             direct._input_slopes, apply_transformed_normalization(slopes, normalization)
         )
@@ -710,14 +780,23 @@ def _same_number(found: float, given: float) -> bool:
     return found == given or (math.isnan(found) and math.isnan(given))
 
 
-def _same_summary(found: StageSummary, given: StageSummary) -> bool:
-    """The actual certificate quantities/gates, not merely a claimed level."""
+def _replayed_summary(
+    fresh: Certificate, given: StageSummary, estimate: RootConditionEstimate | None
+) -> bool:
+    """All fields must reproduce. An owned LAPACK estimate binds to its exact input."""
+    found = summary_of(fresh)
+    same_rcond = (
+        _same_number(fresh.rcond, given.rcond)
+        if estimate is None
+        else estimate.matches(given.rcond, fresh)
+    )
     return (
         found.level == given.level
         and found.strict == given.strict
         and found.secondary == given.secondary
         and found.positive_definite == given.positive_definite
         and found.conditioned == given.conditioned
+        and same_rcond
         and found.score_metric == given.score_metric
         and dict(found.errors) == dict(given.errors)
         and all(
@@ -725,7 +804,6 @@ def _same_summary(found: StageSummary, given: StageSummary) -> bool:
             for a, b in (
                 (found.scaled_score, given.scaled_score),
                 (found.index_correction, given.index_correction),
-                (found.rcond, given.rcond),
             )
         )
     )
@@ -759,7 +837,10 @@ def _fresh_root_certificate(
 
 
 def _check_fresh_certificate(
-    given: Certificate, fresh: Certificate, context: str
+    given: Certificate,
+    fresh: Certificate,
+    context: str,
+    estimate: RootConditionEstimate | None,
 ) -> None:
     """Bind evaluation, numerical gates and the full reported coefficient check."""
     evaluation = given.evaluation
@@ -771,7 +852,7 @@ def _check_fresh_certificate(
         raise _refuse(f"the certificate was formed on {context}")
     same = (
         given.require_positive_definite == fresh.require_positive_definite
-        and _same_summary(summary_of(fresh), summary_of(given))
+        and _replayed_summary(fresh, summary_of(given), estimate)
         and _same_array(fresh.correction, given.correction)
         and (fresh.reported is None) == (given.reported is None)
         and (fresh.coefficients is None) == (given.coefficients is None)
@@ -803,7 +884,10 @@ def _check_fresh_certificate(
 
 
 def _check_convex_certificate(
-    handoff: Handoff, convex: JointSystem, certificate: Certificate
+    handoff: Handoff,
+    convex: JointSystem,
+    certificate: Certificate,
+    estimate: RootConditionEstimate | None,
 ) -> None:
     """The initializer's certificate is the convex equation's of THIS sample.
 
@@ -815,7 +899,7 @@ def _check_convex_certificate(
     if not certificate.require_positive_definite:
         raise _refuse("the initializer's certificate waives the convex curvature gate")
     fresh = _fresh_root_certificate(handoff, convex, certificate, None)
-    _check_fresh_certificate(certificate, fresh, "another equation or sample")
+    _check_fresh_certificate(certificate, fresh, "another equation or sample", estimate)
 
 
 def _check_convex_initializer(
@@ -851,7 +935,9 @@ def _check_convex_initializer(
         or opening.mean != newton.start.mean
     ):
         raise _refuse("the initializer did not use this sample's automatic start")
-    _check_convex_certificate(handoff, convex, certificate)
+    _check_convex_certificate(
+        handoff, convex, certificate, candidate._condition_estimates.get("initializer")
+    )
     if candidate.stages and not certificate.accepted:
         raise _refuse("an uncertified automatic initializer cannot open root stages")
 
@@ -996,9 +1082,9 @@ def _check_continuation(
             candidate.merit_cholesky,
             point=retained.point,
         )
-        if not _same_summary(summary_of(fresh), stage.summary) or (
-            compose_status(fresh, retained.native) != stage.status
-        ):
+        if not _replayed_summary(
+            fresh, stage.summary, candidate._condition_estimates.get(stage.summary)
+        ) or (compose_status(fresh, retained.native) != stage.status):
             raise _refuse("a continuation stage's certificate/status is not fresh")
         if not fresh.accepted and index + 1 < len(stages):
             raise _refuse("continuation proceeds only from a certified point")
@@ -1030,7 +1116,10 @@ def _check_root_stages(
         raise _refuse("the root certificate is not the target stage's retained point")
     if candidate.reason != retained.native:
         raise _refuse("the root reason is not the target stage's retained reason")
-    if not _same_summary(stages[target].summary, summary_of(certificate)):
+    summary = stages[target].summary
+    if not _replayed_summary(
+        certificate, summary, candidate._condition_estimates.get(summary)
+    ):
         raise _refuse("the target stage summary is not the conclusion's certificate")
 
 
@@ -1119,6 +1208,41 @@ def _requested_start(handoff: Handoff, sample: OrderSample) -> FloatArray | None
     return owned_array(start)
 
 
+def _check_iols_scale_failure(
+    handoff: Handoff, sample: OrderSample, failure: IolsScaleFailure
+) -> IolsScaleFailure:
+    """Reconstruct and bind the scale refusal on the retained raw slope units."""
+    columns = handoff.prepared.columns
+    names = sample.data.column_names
+    if (
+        handoff.computation.solver != "iols"
+        or handoff.requested_start is not None
+        or handoff.prepared.effects is not None
+        or columns.weights is not None
+        or sample.data.weights is not None
+        or columns.offset is not None
+        or columns.exposure is not None
+        or "Intercept" not in names
+    ):
+        raise _refuse("the IOLS scale refusal does not belong to this request")
+    _resolve_iols_computation(handoff.computation)
+    intercept, _ = validate_iols_system(
+        system_of(handoff.estimator, sample),
+        intercept=names.index("Intercept"),
+        omega=sample.omega,
+    )
+    _, slopes, _, _ = _extract_nofe_slope_design(
+        sample.problem.response, sample.data.design, intercept
+    )
+    try:
+        build_transformed_normalization_state(slopes)
+    except IolsScaleFloorError as error:
+        observed = error.failure.with_slope_name(names)
+        if observed == failure:
+            return observed
+    raise _refuse("the retained slope scales do not reproduce the IOLS refusal")
+
+
 def _check_failure(sample: OrderSample, failure: StartFailure) -> None:
     """The start failure is this sample's: its mean, its logarithm, its intercept."""
     weights = sample.data.weight_values
@@ -1185,15 +1309,20 @@ def supplied_status(certificate: Certificate) -> Status | None:
 
 
 def _check_linear(sample: OrderSample, linear: LinearCandidate) -> None:
-    """The candidate solved the retained problem, and its residuals are its own."""
+    """The candidate solved the retained problem, and its residuals are its own.
+
+    Where every row has a positive weight, the rows of positive weight are read in
+    place of a selected copy (:func:`_active_rows`).
+    """
     if linear.dimension != sample.data.nparams:
         raise _refuse("the linear candidate has another number of coefficients")
     if linear.units.nobs != sample.count:
         raise _refuse("the linear candidate solved another number of rows")
     weights = sample.data.weight_values
     active = np.flatnonzero(weights > 0)
+    every = active.size == weights.size
     if not np.array_equal(linear.units.identifiers, active) or not np.array_equal(
-        linear.weights, weights[active]
+        linear.weights, _active_rows(weights, active, every)
     ):
         raise _refuse(
             "the units or weights of the linear candidate are not the sample's"
@@ -1202,17 +1331,29 @@ def _check_linear(sample: OrderSample, linear: LinearCandidate) -> None:
         if linear.residuals is not None:
             raise _refuse("residuals without coefficients on the linear candidate")
         return
+    response = _active_rows(sample.problem.response, active, every)
+    offset = _active_rows(sample.problem.offset, active, every)
+    design = _active_rows(sample.design.matrix, active, every)
     with np.errstate(over="ignore", under="ignore", invalid="ignore"):
-        target: FloatArray = (
-            sample.problem.response[active] - sample.problem.offset[active]
-        )
-        residuals: FloatArray = (
-            target - sample.design.matrix[active] @ linear.coefficients
-        )
+        target: FloatArray = response - offset
+        residuals: FloatArray = target - design @ linear.coefficients
     if linear.residuals is None or not np.array_equal(residuals, linear.residuals):
         raise _refuse(
             "the residuals of the linear candidate are not those of the point"
         )
+
+
+def _active_rows(values: FloatArray, active: IndexArray, every: bool) -> FloatArray:
+    """``values[active]``, or ``values`` itself when ``every`` row is active.
+
+    ``active`` holds the increasing positions of the rows of positive weight; with
+    every row, they are ``0, ..., n - 1``.  Only a C-contiguous array is read as it
+    is: its rows, values and layout are then those of the selected copy.
+    """
+    if every and values.flags.c_contiguous:
+        return values
+    taken: FloatArray = values[active]
+    return taken
 
 
 def _check_linear_certificate(
@@ -1220,15 +1361,19 @@ def _check_linear_certificate(
     sample: OrderSample,
     linear: LinearCandidate,
     certificate: LinearCertificate,
+    equation: Callable[[], LinearProblem],
 ) -> None:
-    """The linear certificate is this equation's, at the candidate's point and basis."""
+    """The linear certificate is this equation's, at the candidate's point and basis.
+
+    ``equation`` returns the linear equation of ``sample`` (:func:`linear_problem_of`).
+    """
     if (
         linear.coefficients is None
         or certificate.gamma.tobytes() != linear.coefficients.tobytes()
     ):
         raise _refuse("the linear certificate is not that of the candidate's point")
     _check_controls(handoff, certificate)
-    problem = linear_problem_of(sample)
+    problem = equation()
     given = certificate.evaluation
     try:
         fresh = problem.evaluate(certificate.gamma)
@@ -1252,8 +1397,12 @@ def _check_linear_conclusion(
     sample: OrderSample,
     linear: LinearCandidate,
     conclusion: LinearConclusion,
+    equation: Callable[[], LinearProblem],
 ) -> LinearCertificate | None:
-    """The linear conclusion is its candidate's and its certificate's, owned."""
+    """The linear conclusion is its candidate's and its certificate's, owned.
+
+    ``equation`` returns the linear equation of ``sample`` (:func:`linear_problem_of`).
+    """
     candidate = conclusion.candidate
     same = (
         candidate.reason == linear.reason
@@ -1276,7 +1425,7 @@ def _check_linear_conclusion(
     owned: LinearCertificate | None = None
     if certificate is not None:
         owned = owned_linear_certificate(certificate)
-        _check_linear_certificate(handoff, sample, linear, owned)
+        _check_linear_certificate(handoff, sample, linear, owned, equation)
     if conclusion.status != linear_status(linear.reason, owned):
         raise _refuse("the status is not the one composed by the accepted rules")
     return owned
@@ -1290,7 +1439,7 @@ class _Power:
     candidate: AnyCandidate | None
     reason: NativeReason | None
     status: Status
-    failure: StartFailure | None
+    failure: StartFailure | IolsScaleFailure | None
 
 
 def _power_records(handoff: Handoff, sample: OrderSample) -> _Power | None:
@@ -1306,8 +1455,12 @@ def _power_records(handoff: Handoff, sample: OrderSample) -> _Power | None:
             None,
         )
     if handoff.failure is not None:
-        _check_failure(sample, handoff.failure)
-        return _Power(None, None, None, handoff.failure.status, handoff.failure)
+        failure = handoff.failure
+        if isinstance(failure, IolsScaleFailure):
+            failure = _check_iols_scale_failure(handoff, sample, failure)
+        else:
+            _check_failure(sample, failure)
+        return _Power(None, None, None, failure.status, failure)
     if handoff.certificate is None:
         return None
     certificate = owned_certificate(handoff.certificate)
@@ -1328,8 +1481,8 @@ class _Bound:
     candidate: AnyCandidate | None
     linear: LinearCandidate | None
     reason: NativeReason | None
-    status: Status | None
-    failure: StartFailure | None
+    status: FitStatus | None
+    failure: StartFailure | IolsScaleFailure | None
     point: Point
 
 
@@ -1341,7 +1494,15 @@ def _bind_power(handoff: Handoff, sample: OrderSample, power: _Power) -> _Bound:
     else:
         _check_certificate(handoff, sample, certificate)
         system = system_of(handoff.estimator, sample)
-        point = power_point(sample, handoff.inference, certificate, system)
+        try:
+            point = power_point(sample, handoff.inference, certificate, system)
+        except MomentJacobianRankError:
+            if certificate.accepted:
+                raise
+            # A rejected endpoint still carries its estimate and certificate.
+            # Neither an observed influence map nor the requested HC bread
+            # is required to present that diagnostic result.
+            point = Point(certificate.gamma, None, None, None)
         _check_reported_scale(certificate, point)
     return _Bound(
         certificate,
@@ -1355,17 +1516,24 @@ def _bind_power(handoff: Handoff, sample: OrderSample, power: _Power) -> _Bound:
 
 
 def _bind_linear(handoff: Handoff, sample: OrderSample) -> _Bound:
-    """The point of the linear route, bare or with its fresh conclusion."""
+    """The point of the linear route, bare or with its fresh conclusion.
+
+    The linear equation of the sample is formed once, where a check first needs it,
+    and serves every later check: it is a function of the owned sample alone.
+    """
     assert handoff.linear is not None  # the route check above requires it
     linear = owned_linear(handoff.linear)
     _check_linear(sample, linear)
+    equation = functools.cache(lambda: linear_problem_of(sample))
     if handoff.linear_solve is not None:
-        _check_linear_solve(sample, linear, handoff.linear_solve)
+        _check_linear_solve(sample, linear, handoff.linear_solve, equation())
     conclusion = handoff.linear_conclusion
     if conclusion is None:
         point = linear_point(sample, handoff.inference, linear)
         return _Bound(None, None, linear, None, None, None, point)
-    certificate = _check_linear_conclusion(handoff, sample, linear, conclusion)
+    certificate = _check_linear_conclusion(
+        handoff, sample, linear, conclusion, equation
+    )
     if certificate is None:
         point = Point(None, None, None, None)
     else:
@@ -1374,6 +1542,65 @@ def _bind_linear(handoff: Handoff, sample: OrderSample) -> _Bound:
         )
         _check_reported_scale(certificate, point)
     return _Bound(certificate, None, linear, None, conclusion.status, None, point)
+
+
+def _ordinary_refusal(
+    handoff: Handoff, sample: OrderSample
+) -> tuple[
+    FitStatus | None,
+    RetainedSupportResult | RetainedGammaResult | None,
+    RowLedger | None,
+]:
+    """Bind sample diagnostics before a fit is allowed to use the admitted rows."""
+    variance = handoff.estimator.variance
+    if handoff.recession is not None:
+        if (
+            handoff.support
+            or sample.separation is not None
+            or not isinstance(variance, PowerVariance)
+        ):
+            raise _refuse("recession needs the original Gamma sample")
+        result = replace(handoff.recession)
+        problem = gamma_problem(sample, variance)
+        result.problem.require_same(problem)
+        if result.status == "no_recession":
+            raise _refuse("a passing recession check is not a refusal")
+        status: FitStatus = (
+            "no_finite_root" if result.witness is not None else "recession_unresolved"
+        )
+        return status, snapshot_gamma_result(result), None
+    if not handoff.support:
+        if sample.separation is not None:
+            raise _refuse("separated rows need checked support evidence")
+        return None, None, None
+    if not isinstance(variance, PowerVariance | NB2Variance):
+        raise _refuse("separation needs a characterized variance")
+    prepared = handoff.prepared
+    initial = prepared.for_order(sample.omega, positive_only=sample.positive_only)
+    replay = replay_separation(initial, prepared.base, variance, handoff.support)
+    if not np.array_equal(replay.sample.codes, sample.codes):
+        raise _refuse("the witnessed rows do not match the sample")
+    ledger, supplied = replay.sample.separation, sample.separation
+    if (ledger is None) != (supplied is None):
+        raise _refuse(
+            "the separated row accounting is not bound to the original sample"
+        )
+    expected_counts = None if ledger is None else ledger.replicas
+    supplied_counts = None if supplied is None else supplied.replicas
+    if (expected_counts is None) != (supplied_counts is None) or (
+        expected_counts is not None
+        and supplied_counts is not None
+        and not np.array_equal(expected_counts, supplied_counts)
+    ):
+        raise _refuse(
+            "the separated frequency counts are not bound to the original rows"
+        )
+    if replay.exhausted is None and not replay.unresolved:
+        return None, None, None
+    status = (
+        "not_identified" if replay.exhausted is not None else "separation_unresolved"
+    )
+    return status, snapshot_support_result(handoff.support[-1]), replay.exhausted
 
 
 def bind(handoff: Handoff) -> RetainedFit:
@@ -1407,9 +1634,18 @@ def bind(handoff: Handoff) -> RetainedFit:
     frame = prepared.frame
     check_sample(handoff.estimator, prepared, sample, frame)
     power = _power_records(handoff, sample)
-    if power is not None:
+    refusal, sample_failure, exhausted = _ordinary_refusal(handoff, sample)
+    if refusal is not None:
+        if power is not None:
+            raise _refuse("a refused sample cannot carry a candidate")
+        bound = _Bound(
+            None, None, None, None, refusal, None, Point(None, None, None, None)
+        )
+    elif power is not None:
         bound = _bind_power(handoff, sample, power)
     else:
+        if handoff.linear is None:
+            raise _refuse("an admitted sample needs an ordinary solve")
         bound = _bind_linear(handoff, sample)
     point = bound.point
     return RetainedFit(
@@ -1435,4 +1671,6 @@ def bind(handoff: Handoff) -> RetainedFit:
         requested_start=_requested_start(handoff, sample),
         offset_design=_check_offset_design(handoff, sample),
         linear_solve=handoff.linear_solve if handoff.keep_influence else None,
+        sample_failure=sample_failure,
+        exhausted=exhausted,
     )

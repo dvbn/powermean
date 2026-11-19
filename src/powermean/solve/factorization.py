@@ -1,10 +1,12 @@
-"""Factorizations of the certificate: an equilibrated LU and a Cholesky factor.
+"""Factorizations of the certificate: S4's equilibrated LU and a Cholesky factor.
 
-The certificate of
+``design/02_computation.md``, Section 7; decisions D47 and D51.  The certificate of
 :mod:`powermean.solve.certificate` factorizes the observed bread ``C = -dS/dgamma'`` of
 :mod:`powermean.systems.joint` in two ways, one for each of its uses.
 
-Equilibrated LU.  With the scale ``s``, ``s_k`` the square root of the
+Equilibrated LU, ported from S4.  ``factorize``, ``Factor`` and ``SingularJacobian`` of
+``estimators/newton.py`` of ``wz_fe_sim`` (source S4 of ``design/06_reuse_map.md``),
+whose ``H = -DS`` is the bread.  With the scale ``s``, ``s_k`` the square root of the
 largest of the absolute entries of row ``k`` and of column ``k``, the diagonal
 congruence
 
@@ -21,8 +23,14 @@ pivot, an estimate that fails, or ``rcond <= rcond_min`` raise
 :class:`SingularJacobianError`, which keeps the estimate when one was formed (NaN
 otherwise) and, for a factor that exists but fails the threshold, that factor, for
 diagnosis only.  Nothing is ridged, floored, symmetrized or replaced by a generalized
-inverse.  ``SingularJacobianError`` derives from ``Exception``, and
-``Factor`` is a frozen record.
+inverse.  The arithmetic, the checks and their order are those of S4; the changes are
+the typed interface and the names: lowercase local names (``matrix`` for ``H``,
+``absolute`` for ``A``, ``scale`` for ``s``, ``scaled`` for ``Hs``, ``rhs`` for ``b``),
+``SingularJacobianError`` for the exception by the linter's rule on the names of
+exceptions (its base class remains ``Exception``), and a frozen record for ``Factor``.
+S4's ``Factor.solve_t`` and ``Factor.inverse`` are not taken: the certificate uses
+neither.  ``tools/verify_ports.py``, Section 8, compares ``factorize`` and
+``Factor.solve`` with S4 bit for bit on identical matrices, failures included.
 
 Cholesky factor, package code.  The curvature gate and the scaled score of the
 certificate use ``C_sym = (C + C')/2``; the observed bread of the system is symmetric up
@@ -35,17 +43,18 @@ the lower factor ``L``, ``L L' = C_sym``, of ``scipy.linalg.cholesky``, which ra
 ``numpy.linalg.LinAlgError`` where LAPACK's ``potrf`` meets a leading minor that is not
 positive: ``C_sym`` is then not positive definite in floating point.  Positive
 definiteness is decided by that factorization and by no threshold on eigenvalues:
-attempting the Cholesky factorization is the usual numerical test, whereas an
-eigenvalue test (below ``k eps`` times the largest, or not positive) would add a
-tolerance that the options do not have.  How well conditioned the matrix
-is, is the separate test of ``rcond`` above (``rcond_min``).
+attempting the Cholesky factorization is the usual numerical test, and the one that
+the merit metric of S4 and the audit of S3 apply to a symmetrized curvature, whereas
+the eigenvalue tests of S3 (below ``k eps`` times the largest) and S7 (not positive)
+would add a tolerance that the options do not have.  How well conditioned the matrix
+is, is the separate test of ``rcond`` above (``rcond_min``, D47).
 :func:`forward_solve` returns ``L^-1 v`` by forward substitution
 (``scipy.linalg.solve_triangular``), whose Euclidean norm is ``||C_sym^(-1/2) v||``.
 
 SciPy publishes no type information, so this module reaches the functions above with
 :func:`importlib.import_module` and gives the modules the typed interfaces of the calls
 made here, as ``powermean._vendor._scipy`` does for the carried files, which this
-module may not import.  Nothing
+module may not import (rule 4 of ``design/11_engineering.md``, Section 3.1).  Nothing
 is wrapped or copied: every operation is SciPy's.
 """
 
@@ -65,7 +74,7 @@ PivotArray = NDArray[np.int32]
 
 
 class LuFactor(Protocol):
-    """``scipy.linalg.lu_factor`` as called here."""
+    """``scipy.linalg.lu_factor`` as S4 calls it."""
 
     def __call__(
         self, a: FloatArray, /, *, check_finite: bool
@@ -75,7 +84,7 @@ class LuFactor(Protocol):
 
 
 class LuSolve(Protocol):
-    """``scipy.linalg.lu_solve`` as called here."""
+    """``scipy.linalg.lu_solve`` as S4 calls it."""
 
     def __call__(
         self, lu_and_piv: tuple[FloatArray, PivotArray], b: FloatArray, /
@@ -115,7 +124,7 @@ class Linalg(Protocol):
 
 
 class Dgecon(Protocol):
-    """``scipy.linalg.lapack.dgecon`` as called here."""
+    """``scipy.linalg.lapack.dgecon`` as S4 calls it."""
 
     def __call__(
         self, a: FloatArray, anorm: float, /, *, norm: str
@@ -134,11 +143,11 @@ linalg = cast("Linalg", importlib.import_module("scipy.linalg"))
 lapack = cast("Lapack", importlib.import_module("scipy.linalg.lapack"))
 
 
-# ------------------------------------------------------------- equilibrated LU
+# ------------------------------------------------------------- equilibrated LU (S4)
 
 
 class SingularJacobianError(Exception):
-    """Exact zero pivot or ``rcond <= rcond_min``.
+    """Exact zero pivot or ``rcond <= rcond_min`` (S4 ``SingularJacobian``).
 
     ``rcond`` is the estimate when one was computed (NaN otherwise), so that a failed
     factorization keeps it; ``factor`` is the LU of a matrix that is ill-conditioned
@@ -155,7 +164,7 @@ class SingularJacobianError(Exception):
 
 @dataclass(frozen=True, eq=False)
 class Factor:
-    """LU of the equilibrated matrix: ``C = Ds Cs Ds`` and ``Cs = P L U``.
+    """LU of the equilibrated matrix: ``C = Ds Cs Ds`` and ``Cs = P L U`` (S4).
 
     ``lu`` is the pair that ``scipy.linalg.lu_factor`` returns for ``Cs``, ``ds`` the
     scale ``s`` and ``rcond`` LAPACK's estimate of the reciprocal condition number of
@@ -174,7 +183,7 @@ class Factor:
 
 
 def factorize(matrix: FloatArray, rcond_min: float) -> Factor:
-    """Equilibrated dense LU with a LAPACK 1-norm reciprocal condition estimate.
+    """Equilibrated dense LU with a LAPACK 1-norm reciprocal condition estimate (S4).
 
     Equilibration ``Cs = C / (s s')``, ``s_k = sqrt(max(rowmax_k, colmax_k))`` of
     ``|C|``, is a diagonal congruence, so it keeps the sign structure and does not
@@ -262,7 +271,8 @@ def symmetric_cholesky(matrix: FloatArray) -> FloatArray:
     halves = 0.5 * matrix + 0.5 * matrix.T
     symmetric = np.where(np.isinf(total), halves, 0.5 * total)
     lower: FloatArray = linalg.cholesky(symmetric, lower=True, check_finite=False)
-    return lower
+    # Some LAPACK backends leave workspace entries in the unused upper triangle.
+    return np.tril(lower)
 
 
 def forward_solve(lower: FloatArray, rhs: FloatArray) -> FloatArray:

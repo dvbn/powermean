@@ -1,5 +1,6 @@
 """The influence record of a candidate: its map, contributions, weights and count.
 
+``design/04_inference_and_effects.md``, Sections 1, 2.2 and 3; decisions D41 and D51.
 A candidate ``gamma_hat`` of a sum moment ``S(gamma) = sum_i s_i(gamma)`` has the
 first-order representation
 
@@ -33,15 +34,16 @@ Two sources.
   reassessment of the candidate, which would also need the original response and
   offset: a covariance is never a certificate.
 
-Counts.  ``N`` is the number of observations of the ``"stata"`` factors: for
-frequency weights the total of the counts of the rows of positive
+Counts.  ``N`` is the number of observations of the ``"stata"`` factors (file 04,
+Section 3): for frequency weights the total of the counts of the rows of positive
 weight, summed in integer arithmetic; otherwise the number of those rows.  It is never
 ``units.nobs``, which counts rows of zero weight, and for frequency weights never the
-number of stored rows.  Frequency weights are exact counts, as the integer frequency
-weights of Stata: each must be an integer-valued double of at most ``2^53``, and so
-must their total; a fractional or larger value raises ``ValueError``, and nothing is
-rounded.  The caller states the kind of the weights, which is never inferred from
-their values.
+number of stored rows.  Frequency weights are exact counts, as the frequency weights
+of the dense reference of task M0.6 (``powermean.testing.reference``, after the expreg
+weights) and the integer frequency weights of Stata: each must be an integer-valued
+double of at most ``2^53``, and so must their total; a fractional or larger value
+raises ``ValueError``, and nothing is rounded.  The caller states the kind of the
+weights, which is never inferred from their values.
 
 Rows of zero weight enter no arithmetic, alignment or count: the evaluation and the
 candidate hold only the rows of positive weight, and the design is read on those rows

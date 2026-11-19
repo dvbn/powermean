@@ -1,7 +1,8 @@
 """From an evaluated model frame to the sample construction, by position.
 
-This module covers steps 1 ("parse the formula; evaluate transformations; apply
-``subset``") and 2 of the sample construction.  :func:`prepare_frame` takes a
+``design/02_computation.md``, Section 2, step 1 ("parse the formula; evaluate
+transformations; apply ``subset``") and step 2; ``design/11_engineering.md``, Section
+3.1; decisions D41, D51 and D55.  :func:`prepare_frame` takes a
 :class:`~powermean.formula.frame.ModelFrame`, which Formulaic evaluated on every row of
 the data, and the data themselves, and forms the arrays and masks of
 :func:`powermean.data.sample.build_sample`:
@@ -42,7 +43,9 @@ from powermean._prepare.dependence import (
     prepare_dependence,
 )
 from powermean._prepare.effects import (
-    _native_effects, _native_effects_original, read_effects,
+    _native_effects,
+    _native_effects_original,
+    read_effects,
 )
 from powermean._prepare.inputs import (
     Columns,
@@ -65,6 +68,7 @@ from powermean._prepare.owned import (
     _owned_table,
 )
 from powermean.data.accounting import MissingAccount, frozen_codes
+from powermean.data.raw import AlignedColumns, _OwnedMapping
 from powermean.data.retained import OrderRows, OrderSample, _derive_order_parts
 from powermean.data.sample import SampleBase, build_sample
 from powermean.data.sample_fe import EffectColumns
@@ -134,10 +138,10 @@ class PreparedFrame:
     subset_missing : int
         The number of rows whose subset condition was missing, excluded by the subset.
     effects : EffectColumns, optional
-        The owned raw labels of the fixed-effect terms; ``None`` without a
-        fixed-effect part.
+        The owned raw labels of the fixed-effect terms (task M1.10); ``None`` without
+        a fixed-effect part.
     dependence : DependenceProvenance, optional
-        Fit-used and retained-only column provenance.
+        Fit-used and retained-only column provenance (task M1.15).
 
     Attributes
     ----------
@@ -232,6 +236,60 @@ class PreparedFrame:
         return _owned_index(self._labels.take(sample.positions))
 
 
+def _materialize_retained(prepared: PreparedFrame) -> None:
+    """Complete a fresh deferred producer before its first fallback owner.
+
+    Only prepare_problem's private direct-fit composition requests this, after
+    the intended consumer declines and before snapshots or baselines exist.
+    Original-row projections, not final FE codes, supply the existing eager
+    records. The authoritative sample and its fit-used masks remain untouched.
+    """
+    dependence = prepared.dependence
+    if dependence is None:
+        return
+    columns = dict(dependence._columns)
+    deferred = {
+        name: column
+        for name, column in columns.items()
+        if "_retained_sources" in vars(column)
+    }
+    if not deferred:
+        return
+    column: object
+    for name, column in deferred.items():
+        columns[name] = ColumnProvenance(
+            name=column.name,
+            roles=column.roles,
+            used_in_fit=column.used_in_fit,
+            source_dtype=column.source_dtype,
+            pandas_kind=column.pandas_kind,
+            missing_mask=column._missing_mask,
+            values=column._column_record.values,
+        )
+    inputs = prepared.base.inputs
+    existing = inputs.metadata.columns
+    raw_names = (
+        () if prepared.columns.cluster is None else (prepared.columns.cluster,)
+    ) + prepared.columns.metadata
+    # _inputs inserts raw metadata first; prepare_dependence then adds roles in
+    # provenance order. Reconstruct that stable union, including overlapping
+    # raw/provenance names, rather than appending deferred names at the end.
+    metadata = {name: existing[name] for name in raw_names}
+    for name, column in columns.items():
+        if name not in metadata:
+            found = existing.get(name)
+            metadata[name] = column._column_record if found is None else found
+    for name, column in existing.items():
+        metadata.setdefault(name, column)
+    aligned = AlignedColumns(metadata, prepared.base.nobs)
+    owned_columns = _OwnedMapping(columns)
+    # Both representations are complete before either is installed. Mutating
+    # these unexposed producer headers also completes PreparedProblem.frame;
+    # the first fallback owner captures this same graph immediately afterwards.
+    object.__setattr__(dependence, "_columns", owned_columns)
+    object.__setattr__(inputs, "metadata", aligned)
+
+
 def prepare_frame(
     frame: ModelFrame,
     data: pd.DataFrame,
@@ -270,7 +328,10 @@ def prepare_frame(
 
 
 def _prepare_frame(
-    frame: ModelFrame, data: pd.DataFrame, *, columns: Columns | None = None,
+    frame: ModelFrame,
+    data: pd.DataFrame,
+    *,
+    columns: Columns | None = None,
     subset: pd.Series[Any] | ArrayLike | None = None,
     dependence: UsedDependence | None = None,
     _retained: Mapping[str, tuple[str, ...]] | None = None,
@@ -293,7 +354,8 @@ def _prepare_frame(
         # Both components of an interaction mark step 2, before any grouping.
         native = (
             _native_effects(data, frame.parts.fixed_effects, provenance)
-            if _retained is not None and _native_retained_original() else None
+            if _retained is not None and _native_retained_original()
+            else None
         )
         effects, missing["effects"] = (
             read_effects(data, frame.parts.fixed_effects) if native is None else native
@@ -310,6 +372,7 @@ def _prepare_frame(
         dependence=provenance,
     )
 
+
 _RETAIN_DEPENDENCE = prepare_dependence
 _RETAIN_NUMERIC_DEPENDENCE = _prepare_dependence
 _RETAIN_EFFECTS = read_effects
@@ -317,21 +380,32 @@ _RETAIN_NATIVE_EFFECTS = _native_effects
 _RETAIN_EFFECT_GUARD = _native_effects_original
 _RETAIN_QUALIFY = _retained_original
 _RETAIN_PREPARED = PreparedFrame
-_RETAIN_FRAME_METHODS = tuple((name, vars(PreparedFrame).get(name)) for name in (
-    "__init__", "__getattribute__", "__getattr__", "for_order", "_order_parts",
-))
+_RETAIN_FRAME_METHODS = tuple(
+    (name, vars(PreparedFrame).get(name))
+    for name in (
+        "__init__",
+        "__getattribute__",
+        "__getattr__",
+        "for_order",
+        "_order_parts",
+    )
+)
 
 
 def _native_retained_original() -> bool:
     """Qualify the existing normal producer, not an alternate preparation engine."""
-    return (prepare_dependence is _RETAIN_DEPENDENCE
-            and _prepare_dependence is _RETAIN_NUMERIC_DEPENDENCE
-            and read_effects is _RETAIN_EFFECTS
-            and _native_effects is _RETAIN_NATIVE_EFFECTS
-            and _native_effects_original is _RETAIN_EFFECT_GUARD
-            and _native_effects_original()
-            and _retained_original is _RETAIN_QUALIFY
-            and PreparedFrame is _RETAIN_PREPARED
-            and all(vars(PreparedFrame).get(name) is original
-                    for name, original in _RETAIN_FRAME_METHODS)
-            and _retained_original())
+    return (
+        prepare_dependence is _RETAIN_DEPENDENCE
+        and _prepare_dependence is _RETAIN_NUMERIC_DEPENDENCE
+        and read_effects is _RETAIN_EFFECTS
+        and _native_effects is _RETAIN_NATIVE_EFFECTS
+        and _native_effects_original is _RETAIN_EFFECT_GUARD
+        and _native_effects_original()
+        and _retained_original is _RETAIN_QUALIFY
+        and PreparedFrame is _RETAIN_PREPARED
+        and all(
+            vars(PreparedFrame).get(name) is original
+            for name, original in _RETAIN_FRAME_METHODS
+        )
+        and _retained_original()
+    )
