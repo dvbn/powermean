@@ -6,8 +6,7 @@ Estimate multiple high-dimensional fixed-effect blocks jointly, or cancel a sele
 
 [Install Powermean](docs/install.md) · [User guide](docs/README.md) · [Function index](docs/reference/api.md)
 
-The examples below use Powermean 0.1.1 or later. Install it from PyPI when
-available, or use the [source or wheel instructions](docs/install.md).
+The examples below use Powermean 0.1.1 or later. Install it from PyPI.
 
 ```bash
 python -m pip install "powermean>=0.1.1"
@@ -23,9 +22,7 @@ fit = pm.fit("y ~ x", data, omega=1, tau=1)
 
 Read the coefficient on `x` and its interval in `fit.tidy()`. Keep `omega=1` and set `tau=1.5` or `tau=2` (Gamma PML) to change the working variance for the same mean. A runnable example shows how to report the fitted percentage change. [One conditional mean, three working variances](docs/methods/model.md#fit-one-conditional-mean-three-ways)
 
-**Gravity.** How does bilateral trade differ when a pair has an agreement? Fit trade in levels with pair, exporter-year and importer-year effects and report the proportional difference with a pair-clustered interval. [Gravity walkthrough](docs/get-started.md)
-
-**Two-way exponential regression.** Set `estimator="gmm1"` or `"gmm2"` in `pm.fit` to difference out two fixed-effect blocks on a complete panel or directed dyad array. [Method and examples](docs/methods/jochmans.md)
+**Gravity.** How does bilateral trade differ when a pair has an agreement? Fit trade in levels and choose fixed effects and inference suited to your panel. [Gravity walkthrough](docs/get-started.md)
 
 **Nonlinear difference-in-differences.** How do expected visits change after policy adoption? Use `pm.fit` for common or staggered adoption under multiplicative parallel trends, then read the effects by cohort and date with unit-clustered intervals. [DiD walkthrough](docs/examples/nonlinear-did.md)
 
@@ -37,15 +34,14 @@ Use `pm.etable` to place several fitted models side by side. The result also sup
 
 Use `fit.predict()` for fitted means, `fit.predict(type="residual")` for
 response residuals, and `fit.predict(type="fixed_effects")` to extract fixed
-effects. Cancelled and two-way GMM fits recover fixed effects after estimating
-the slopes. For a fixed-effect counterfactual, replace the covariates on the
+effects. For a fixed-effect counterfactual, replace the covariates on the
 retained rows. [Worked prediction example](docs/reference/results.md#prediction-and-retention)
 
 ## Documentation and citation
 
 - [User guide](docs/README.md) · [Function index](docs/reference/api.md) · [Troubleshooting](docs/help/troubleshooting.md)
 - [Offline guide](docs/guide.html) · [Quarto source](docs/guide.qmd). Download the HTML and open it in a browser.
-- Cite Benatia et al. (2026), Jochmans (2017) for GMM1 or GMM2, and Weidner and Zylkin (2021) for either WZ adjustment. Record the exact package build with your analysis. [Papers and section map](docs/references.md)
+- Cite Benatia et al. (2026) and record the exact package build with your analysis. Find citations for individual methods in the [papers and section map](docs/references.md).
 
 ## License
 
