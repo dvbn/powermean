@@ -4,7 +4,7 @@
 
 Estimate multiple high-dimensional fixed-effect blocks jointly, or cancel a selected block while retaining the others. Powermean provides bias corrections that address the incidental-parameters problem in short panels and three-way gravity models. The same formula interface takes you from a simple conditional-mean regression to three-way gravity and nonlinear difference-in-differences.
 
-[Install Powermean](docs/install.md) · [User guide](docs/README.md) · [Function index](docs/reference/api.md)
+[Install Powermean](docs/install.md) · [User guide](docs/README.md) · [Function index](docs/reference/api.md) · [Powermean for R](https://github.com/dvbn/powermean-R)
 
 The examples below use Powermean 0.1.1 or later. Install it from PyPI.
 
