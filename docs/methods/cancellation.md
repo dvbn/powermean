@@ -112,7 +112,9 @@ see the sample and cluster count used for your fit.
 Read the slope, interval and `result.sample` in the usual way.
 `cancelled_gamma.fixef()` gives estimated year effects and in-sample
 recovered firm scales on the log power-mean scale, with status labels and
-without standard errors. For a cancelled fit, prediction is unavailable. [Recovered effects](../reference/results.md#recovered-cancelled-effects)
+without standard errors. `predict()` combines those scales with the retained
+effects, offsets and slope index on the fitted rows.
+[Recovered effects](../reference/results.md#recovered-cancelled-effects)
 
 In gravity the exporter-year and importer-year blocks can grow even after
 cancelling pairs. Their estimation can still shift the slope distribution.
@@ -120,5 +122,5 @@ cancelling pairs. Their estimation can still shift the slope distribution.
 short-group correction.
 
 <!-- guide-navigation:start -->
-[Previous: Fixed effects](fixed-effects.md) · [Guide index](../README.md) · [Next: Numerical methods](numerical-methods.md)
+[Previous: Fixed effects](fixed-effects.md) · [Guide index](../README.md) · [Next: Difference out two blocks](jochmans.md)
 <!-- guide-navigation:end -->

@@ -41,12 +41,14 @@ Download the [standalone HTML guide](guide.html) for offline reading. The [Quart
 - [Choose a mean and working variance](methods/model.md), including PPML, Gamma PML, log OLS and NB2.
 - [Estimate fixed effects](methods/fixed-effects.md) and check what identifies the slope.
 - [Cancel one fixed-effect block](methods/cancellation.md) and compare the resulting estimating equations.
+- [Difference out two fixed-effect blocks](methods/jochmans.md) in a complete rectangle or directed array.
 - [Choose a solver](methods/numerical-methods.md) and interpret its certificate.
 
 ## Read and report results
 
 - [Check and compare estimation samples](examples/compare-samples.md), then describe their outcomes.
 - [Explore and export a fit](examples/reuse-a-fit.md), including predictions, coefficient tests, contrasts and tables.
+- [Predict and extract fixed effects](reference/results.md#prediction-and-retention), then replace covariates on the fitted rows for a counterfactual.
 - [Interpret proportional changes](methods/proportional-effects.md) on the fitted and population scales.
 
 ## Panel designs and inference

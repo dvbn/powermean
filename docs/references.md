@@ -16,6 +16,17 @@ from that same revision. [Paper](https://arxiv.org/abs/2203.11820v4) ·
 | [Bias from retained effects](methods/bias-correction.md) | §5.2, Theorem 2 and Appendix C.2. Equation (5.7) is the empirical group correction. |
 | [Delete-group and higher-order covariance](methods/covariance-refinements.md#delete-group-and-higher-order-covariance) | Supplemental Appendix S3.4.2, Proposition S12, and S3.4.3, Proposition S13. |
 
+## Two-way exponential regression
+
+- Jochmans, Koen (2017). *Two-Way Models for Gravity*. The Review of
+  Economics and Statistics. See section II, Theorem 2 and its supplemental
+  proof for the difference equation and cell-projection inference.
+- Jochmans, Koen and Vincenzo Verardi (2020). *Fitting exponential regression
+  models with two-way fixed effects*. The Stata Journal. Section 2 and the
+  computational appendix describe the GMM1 and GMM2 moments and the array
+  computations used by `twexp` and `twgravity`.
+  [Powermean implementation](methods/jochmans.md)
+
 ## The separate three-way PPML correction
 
 Weidner, Martin and Thomas Zylkin (2021). *Bias and consistency in three-way

@@ -56,9 +56,11 @@ remains.
 
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from fractions import Fraction
 from typing import Literal, NamedTuple, Protocol
 
 import numpy as np
@@ -254,7 +256,11 @@ class ProfiledCandidate:
         if attempt.final is None or record is None:
             return None
         asked = record.request
+        if asked.alarm.zero_rows is None or record.status != "false_alarm":
+            return None
         if asked.alarm.where == "accepted" and asked.point.point is attempt.point:
+            return asked.alarm
+        if self.retained == 1 and self.attempts[0].alarm is asked.alarm:
             return asked.alarm
         return None
 
@@ -407,6 +413,8 @@ def _attempt(
     origin: PointProfile | ConditionalPoint | None,
     max_iter: int,
     all_effects_opening: bool = False,
+    strict_stop: Callable[[PointProfile | ConditionalPoint], bool] | None = None,
+    certify_opening: bool = False,
 ) -> ProfiledAttempt:
     """One attempt from ``theta`` and the effects of ``origin`` (cold without one)."""
     index = 1 if origin is not None or all_effects_opening else 0
@@ -416,6 +424,8 @@ def _attempt(
         reduced = ReducedEvaluator(
             context, newton.point, space, attempt=index, warm=warm
         )
+        reduced.strict_stop = strict_stop
+        reduced.certify_opening = certify_opening
         iteration = run_index_attempt(
             newton.provider,
             newton.point,
@@ -428,6 +438,8 @@ def _attempt(
         )
         return _finished(reduced, iteration, origin)
     evaluator = _evaluator(context, index, warm)
+    evaluator.strict_stop = strict_stop
+    evaluator.certify_opening = certify_opening
     iteration = run_profiled_attempt(
         newton.provider,
         newton.point,
@@ -577,11 +589,11 @@ def _admitted_zero_rows(record: TriggerRecord, policy: _ZeroRowPolish) -> bool:
     asked, outcome = record.request, record.outcome
     alarm = asked.alarm
     return (
-        alarm.where == "accepted"
-        and alarm.converged
-        and alarm.zero_rows is not None
+        alarm.zero_rows is not None
         and alarm.chord is None
-        and asked.support == support.TIGHTER
+        and (
+            asked.support == support.TIGHTER or asked.recession == support_gamma.TIGHTER
+        )
         and record.status == "false_alarm"
         and not record.admission
         and not record.removed.size
@@ -608,6 +620,8 @@ def _polished_attempt(
         or iteration is None
         or iteration.stop != "indication"
         or alarm.iteration != iteration.iterations
+        or alarm.where != "accepted"
+        or not alarm.converged
         or not _admitted_zero_rows(record, policy)
     ):
         return attempt
@@ -636,7 +650,98 @@ def _polished_attempt(
     return replace(attempt, reason=reason, final=final, alarm=final_alarm)
 
 
-def solve(
+def _two_point_gamma_start(problem: ProfiledProblem) -> FloatArray | None:
+    """Propose the common profiled slope of two-point positive support cells."""
+    if problem.n_slopes != 1 or problem.n_rows > 1024:
+        return None
+    cells: dict[tuple[int, ...], list[int]] = {}
+    for i, key in enumerate(
+        zip(*(b.codes for b in problem.grouping.blocks), strict=True)
+    ):
+        cells.setdefault(key, []).append(i)
+    x, z, a, offset = problem.design[:, 0], problem.z, problem.weights, problem.offset
+    candidate = None
+    try:
+        for rows in cells.values():
+            active = [i for i in rows if z[i] > 0.0]
+            support = np.unique(x[active])
+            if support.size != 2:
+                return None
+            lo, hi = map(float, support)
+            low, high = Fraction(lo), Fraction(hi)
+            weights = [Fraction(float(a[i])) for i in rows]
+            values = [Fraction(float(x[i])) for i in rows]
+            above = sum(w * (v - low) for w, v in zip(weights, values, strict=True))
+            below = sum(w * (high - v) for w, v in zip(weights, values, strict=True))
+            if above <= 0 or below <= 0:
+                return None
+            log_mass = np.log(a[active]) + np.log(z[active]) - offset[active]
+            left = float(np.logaddexp.reduce(log_mass[x[active] == lo]))
+            right = float(np.logaddexp.reduce(log_mass[x[active] == hi]))
+            slope = math.fsum(
+                (right, -left, math.log(float(below)), -math.log(float(above)))
+            ) / (hi - lo)
+            if not math.isfinite(slope) or (
+                candidate is not None and candidate != slope
+            ):
+                return None
+            candidate = slope
+    except (OverflowError, FloatingPointError, ValueError):
+        return None
+    return None if candidate is None else np.array([candidate])
+
+
+def _resume_zero_row_alarm(
+    context: _Context,
+    newton: _Newton,
+    outcome: _Attempts,
+    record: TriggerRecord,
+    policy: _ZeroRowPolish,
+) -> _Attempts:
+    """Continue within the original budgets after a same-sample support check."""
+    first = outcome.attempts[0]
+    left = context.options.max_iter - first.iterations
+    if (
+        len(outcome.attempts) != 1
+        or first.final is not None
+        or first.point is None
+        or context.options.retry == 0
+        or left <= 0
+        or context.budget.used >= context.budget.limit
+        or not _admitted_zero_rows(record, policy)
+    ):
+        return outcome
+    controls = controls_of(context.options)
+
+    def strict_stop(point: PointProfile | ConditionalPoint) -> bool:
+        return policy.strict(
+            FullPoint(context.sample, context.variance, point), controls
+        )
+
+    resolved = record.reason == support_gamma.CELL_BALANCE
+    proposed = _two_point_gamma_start(context.problem) if resolved else None
+    second = _attempt(
+        context,
+        newton,
+        first.point.theta if proposed is None else proposed,
+        origin=first.point,
+        max_iter=left,
+        strict_stop=strict_stop,
+        certify_opening=proposed is not None,
+    )
+    accepted = (
+        second.reason == "native_stop"
+        and second.final is not None
+        and strict_stop(stopped_point(second))
+    )
+    # An exact balance proves finite support even when floating-point
+    # conditioning prevents certification. Keep the numerical stop in that case.
+    return outcome._replace(
+        attempts=(first, second), retained=int(accepted or resolved)
+    )
+
+
+def solve(  # noqa: PLR0913
     sample: FESample,
     variance: Family,
     options: SolverOptions,
@@ -646,6 +751,7 @@ def solve(
     admit: Admission,
     assess: FullAssessor | None = None,
     start: Start | None = None,
+    zero_row_polish: _ZeroRowPolish | None = None,
 ) -> ProfiledCandidate:
     """Solve the profiled joint problem of ``sample``: a candidate and its trace.
 
@@ -688,7 +794,15 @@ def solve(
     """
     _check(sample, options, absorbed, trigger, admit, assess=assess)
     call = _ProfiledCall(
-        sample, variance, options, absorbed, trigger, admit, assess, start
+        sample,
+        variance,
+        options,
+        absorbed,
+        trigger,
+        admit,
+        assess,
+        start,
+        zero_row_polish,
     )
     return _run_profiled(call, _problem(sample, variance))
 
@@ -742,6 +856,7 @@ def _run_profiled(call: _ProfiledCall, problem: ProfiledProblem) -> ProfiledCand
     found = (sample, variance, problem, options, absorbed, WorkLog(), budget)
     context = _Context(*found)
     assessments = None if assess is None else _Assessments(assess, context)
+    newton = None
     if provider is None:
         outcome = _Attempts((_profile_only(context),), 0, None, False)
     else:
@@ -770,6 +885,10 @@ def _run_profiled(call: _ProfiledCall, problem: ProfiledProblem) -> ProfiledCand
         if policy is not None and outcome.retained == len(outcome.attempts) - 1:
             polished = _polished_attempt(context, last, record, policy)
             outcome = outcome._replace(attempts=(*outcome.attempts[:-1], polished))
+            if newton is not None and polished is last:
+                outcome = _resume_zero_row_alarm(
+                    context, newton, outcome, record, policy
+                )
     timing = Timing(0.0, 0.0)
     if assessments is not None:
         timing = Timing(assessments.wall, assessments.cpu)

@@ -11,8 +11,9 @@ install Matplotlib in the same Python environment.
 | Example | Script | What to read |
 | --- | --- | --- |
 | Gravity with zeros | [`examples/first_fit.py`](../../examples/first_fit.py) | [Three-way PPML](../get-started.md) and [WZ adjustments](../methods/bias-correction.md) |
-| Firm sales over four years | [`examples/short_panel.py`](../../examples/short_panel.py) | [Joint and firm-cancelled Gamma equations](../methods/cancellation.md) |
+| Firm sales over four years | [`examples/short_panel.py`](../../examples/short_panel.py) | [Firm-cancelled Gamma and counterfactual prediction](../methods/cancellation.md) |
 | Nonlinear panel DiD | [`examples/nonlinear_did.py`](../../examples/nonlinear_did.py) | [Common and cohort-period effects](nonlinear-did.md) |
+| Two-way exponential regression | [`examples/jochmans.py`](../../examples/jochmans.py) | [Rectangular and directed Jochmans fits, with recovered predictions](../methods/jochmans.md) |
 | No-FE PPML with IOLS | [`docs/examples/iols_first_fit.py`](iols_first_fit.py) | [Check the IOLS installation](../iols_installation.md) |
 
 The [sample comparison](compare-samples.md) uses two fits of the same frame

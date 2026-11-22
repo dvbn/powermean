@@ -49,20 +49,19 @@ from powermean.interface.fe_result_backends import (
 from powermean.interface.retained_result import RetainedAbsorbedResult
 from powermean.model.order_scale import OrderScale
 from powermean.model.variance import FloatArray
-from powermean.results import citations, naming
+from powermean.results import citations, naming, prediction
 from powermean.results.absorbed_geometry_records import _OperationalBasisSnapshot
 from powermean.results.absorbed_groupings import RetainedGroupingSnapshot
 from powermean.results.absorbed_owned import RetainedCertificateSnapshot
 from powermean.results.absorbed_retained import RetainedAbsorbedEnvelope
 from powermean.results.fe_helpers import (
-    PredictionOptions,
     detached_record,
     normal_quantile,
-    prediction_kind,
 )
 from powermean.results.fe_sample import FESampleView
 from powermean.results.indefinite import indefinite, note
 from powermean.results.owned import owned_array
+from powermean.results.prediction import Prediction, PredictionOptions, prediction_kind
 from powermean.results.provenance import (
     IMPLEMENTATION,
     Provenance,
@@ -682,48 +681,49 @@ class AbsorbedResultBackend:
         self,
         data: pd.DataFrame | None = None,
         **options: Unpack[PredictionOptions],
-    ) -> pd.Series[float]:
-        """Return the predict from the actual retained state, detached outward."""
+    ) -> Prediction:
+        """Predict at the original joint estimating point."""
         kind = prediction_kind(options)
+        prediction.prediction_data(data, kind)
         if (
             not self.certified
             or self.retained_result is None
             or self.retained_result.selected_point is None
         ):
             raise self._withheld()
-        if data is not None:
-            raise SpecificationError(
-                "specification.invalid_value",
-                {
-                    "argument": "data",
-                    "value": "out-of-sample data",
-                    "valid": "None (in-sample absorbed fitted values)",
-                },
-            )
+        if kind == "fixed_effects":
+            return self.fixef()
         q = self.retained_result.selected_point.q
         omega = self.estimator.mean.omega
-        with np.errstate(over="ignore", under="ignore", invalid="ignore"):
-            index = (
-                np.array(q, dtype=np.float64, copy=True) / omega
-                if omega != 0.0
-                else np.array(q, dtype=np.float64, copy=True)
+        sample, labels = self.order_sample, self._sample_view.labels
+        rows = (
+            prediction.retained_rows(sample.positions, self._sample_view.positions)
+            if data is not None or kind == "residual"
+            else slice(None)
+        )
+        if data is not None:
+            grouping = self.retained_result.sample.grouping
+            assert grouping is not None
+            prediction.check_fitted_groups(
+                data,
+                labels,
+                ((names, block.levels, block.codes) for names, block in zip(
+                    self.parts.fixed_effects, grouping.blocks, strict=True
+                )),
             )
-            fitted = np.exp(index)
-        if not np.isfinite(index).all():
-            raise FloatingPointError(
-                "a prediction index is not representable in float64"
+            beta = pd.Series(self.retained_result.coef(), index=self._names())
+            q = prediction.counterfactual_index(
+                prediction.replayed_matrix(self.design, data), self.design.columns, beta,
+                sample.data.design[rows], sample.data.column_names, q=q, omega=omega,
             )
-        if not np.isfinite(fitted).all():
-            raise FloatingPointError(
-                "a fitted power mean is not representable in float64"
+        if kind == "residual":
+            series = prediction.residual_series(
+                q, sample.problem.response[rows], labels, omega
             )
-        if np.any(fitted == 0.0):
-            raise FloatingPointError(
-                "a fitted power mean is not representable in float64: it rounds to zero"
+        else:
+            series = prediction.fitted_series(
+                q, labels, omega, counterfactual=data is not None
             )
-        series = pd.Series(fitted, index=self._sample_view.labels, name=kind)
-        series.attrs["label"] = naming.prediction_label(omega)
-        series.attrs["omega"] = omega
         if self._bias is not None:
             series.attrs["evaluation_point"] = "original uncorrected estimating root"
             series.attrs["nuisance_correction"] = "not_supplied"

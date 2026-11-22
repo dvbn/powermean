@@ -70,7 +70,7 @@ from powermean.results.retained_inference import (
     absorbed_saturated,
     retained_inference,
 )
-from powermean.solve.absorbed_certificate_geometry import hessian
+from powermean.solve.absorbed_certificate_geometry import centered_gamma_design, hessian
 from powermean.solve.absorbed_certificate_point import FreshRows
 from powermean.solve.certificate import outside_convex
 from powermean.systems.identified import IdentifiedState
@@ -107,6 +107,21 @@ def _bound(condition: bool) -> None:
     """Refuse records that are not bound to one another (``ValueError``)."""
     if not condition:
         raise ValueError(NOT_BOUND)
+
+
+def _bound_design(
+    stored: FloatArray,
+    original: FloatArray,
+    curvature: FloatArray,
+    variance: PowerVariance | NB2Variance | None,
+    omega: float,
+) -> FloatArray:
+    """Bind the original design or its certified Gamma change of coordinates."""
+    if _same(stored, original):
+        return original
+    centered = centered_gamma_design(original, curvature, variance, omega)
+    _bound(centered is not None and _same(stored, centered[0]))
+    return stored
 
 
 def _same_order(found: OrderScale, given: OrderScale | None) -> bool:
@@ -464,13 +479,15 @@ def _envelope_hc(
         and point.sample.omega == sample.omega
         and certificate.point.sample.omega == sample.omega
     )
-    matrix, weights, response = design.matrix, sample.weight_values, rows.response
+    weights, response = sample.weight_values, rows.response
+    matrix = _bound_design(
+        geometry.design, design.matrix, rows.curvature, rows.variance, sample.omega
+    )
     q = rows.q
     _bound(
         _same(certificate.point.theta, point.theta)
         and _same(certificate.point.q, point.q)
         and _same(q, point.q)
-        and _same(geometry.design, matrix)
         and _same(rows.weights, weights)
         and _same(response, sample.problem.response)
         and rows.frequency == sample.frequency

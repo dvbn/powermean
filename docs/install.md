@@ -1,18 +1,20 @@
 # Install Powermean
 
-Use Python 3.12 or later. Install Powermean from PyPI in your analysis environment.
+Use Python 3.12 or later. The examples in this guide require Powermean 0.1.1 or
+later.
 
 ## Install in your analysis environment
 
-Choose a separate environment and run:
+Choose a separate environment. Once 0.1.1 is available on PyPI, run:
 
 ```bash
-python -m pip install powermean
+python -m pip install "powermean>=0.1.1"
 python -c "from importlib.metadata import version; print(version('powermean'))"
 ```
 
-A local wheel or source archive also installs with `python -m pip install`
-followed by the filename. A wheel name gives its Python version and platform.
+A local wheel or source archive installs with `python -m pip install`
+followed by the filename. From a source checkout, run `python -m pip install .`.
+A wheel name gives its Python version and platform.
 [IOLS installation](iols_installation.md) explains the compiled and NumPy-only wheels.
 
 The release workflow builds separate wheels for CPython 3.12, 3.13 and 3.14

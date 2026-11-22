@@ -80,13 +80,13 @@ estimation error in the joint score. [Benatia et al. (2026), §5.1 and Supplemen
 ## Choose what you need from the fit
 
 Use joint estimation when the joint equation is the one justified for your
-design or when you need joint in-sample predictions. Use cancellation when
-the within-group equation and short-group argument fit your design.
+design. Use cancellation when the within-group equation and short-group
+argument fit your design.
 `fixef()` in a cancelled fit can recover a scale from each group's observed
 outcomes and the fitted slopes and retained effects. A short group's recovery
-can remain noisy as more groups enter the sample. Cancelled results offer
-slopes, uncertainty and in-sample scale recovery. Joint results supply
-in-sample predictions.
+can remain noisy as more groups enter the sample. Both fits supply in-sample
+predictions and accept replacement covariates on the retained rows.
+[Prediction and counterfactuals](../reference/results.md#prediction-and-retention)
 
 [Cancellation in a short firm panel](cancellation.md) shows where switching
 estimators changes the result. [Advanced FE options](../reference/experimental-fixed-effects.md)

@@ -253,6 +253,7 @@ class Formulaic(Protocol):
 class FormulaicErrors(Protocol):
     """The module ``formulaic.errors``."""
 
+    FormulaicError: type[Exception]
     FormulaSyntaxError: type[Exception]
 
 

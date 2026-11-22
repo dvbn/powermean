@@ -27,6 +27,7 @@ def firm_data():
 
 
 def main():
+    """Compare the two Gamma fits and predict from the cancelled one."""
     data = firm_data()
     common = {"omega": 1, "tau": 2, "cluster": "firm"}
     joint = pm.fit(FORMULA, data, **common)
@@ -39,6 +40,22 @@ def main():
         uncertainty="ci", stats=("nobs", "zeros"), stars=False, digits=4,
     ))
     print(corrected.summary())
+
+    rows = data.iloc[cancelled.sample.positions]
+    fitted = cancelled.predict()
+    effects = cancelled.predict(type="fixed_effects")
+    residuals = cancelled.predict(type="residual")
+    higher_price_rows = rows.assign(price_index=rows["price_index"] + 0.10)
+    higher_price = cancelled.predict(higher_price_rows)
+    print("\nFirm-cancelled Gamma predictions")
+    print(pd.DataFrame({
+        "Sales": rows["sales"],
+        "Fitted sales": fitted,
+        "Sales at higher price": higher_price,
+        "Residual": residuals,
+    }).head().round(3).to_string(index=False))
+    print("\nRecovered firm effects on the log scale")
+    print(effects["firm"].head().round(3))
 
 
 if __name__ == "__main__":

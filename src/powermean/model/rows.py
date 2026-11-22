@@ -305,6 +305,29 @@ def _poisson_log_rows(log_z: FloatArray, q: FloatArray) -> RowEvaluation:
     return _row_evaluation(score, mean, mean, q)
 
 
+def poisson_exposure_rows(
+    z: FloatArray, q: FloatArray, linear: FloatArray, exposure: FloatArray
+) -> RowEvaluation:
+    """Evaluate Poisson rows using the raw exposure for small index changes."""
+    close = np.abs(linear) <= 0.5
+    score, mean = np.empty_like(z), np.empty_like(z)
+    if not close.all():
+        far = ~close
+        with np.errstate(divide="ignore"):
+            rows = _poisson_log_rows(np.log(z[far]), q[far])
+        score[far], mean[far] = rows.score, rows.observed_curvature
+    with np.errstate(over="ignore", invalid="ignore"):
+        change = exposure[close] * np.expm1(linear[close])
+        score[close] = (z[close] - exposure[close]) - change
+        mean[close] = exposure[close] + change
+    return _row_evaluation(
+        _finite_result(score, "Poisson exposure score"),
+        _finite_result(mean, "Poisson exposure mean"),
+        mean,
+        q,
+    )
+
+
 LogTerms = tuple[FloatArray, FloatArray, FloatArray, FloatArray]
 
 

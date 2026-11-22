@@ -391,12 +391,21 @@ def system_of(estimator: Estimator, sample: OrderSample) -> JointSystem:
     The transformed response and offset, the scaled design, the working variance of
     the estimator and the raw weights, as the dispatch of the solve forms them.
     """
+    variance = estimator.variance
+    exposure = (
+        sample.data.exposure
+        if estimator.mean.omega == 1.0
+        and isinstance(variance, PowerVariance)
+        and variance.tau == 1.0
+        else None
+    )
     return JointSystem(
         sample.problem.response,
         sample.design.matrix,
-        variance=estimator.variance,
+        variance=variance,
         offset=sample.problem.offset,
         weights=sample.data.weight_values,
+        exposure=exposure,
     )
 
 

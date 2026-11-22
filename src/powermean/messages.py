@@ -290,6 +290,26 @@ REGISTRY: Mapping[str, Message] = _catalog(
             "Treatment {name!r} has {count} distinct value(s) on the usable rows; a "
             "comparison of arms needs at least two.",
         ),
+        (
+            "sample.jochmans",
+            "Jochmans requires a complete observed array ({detail}).",
+        ),
+        (
+            "identification.jochmans_no_products",
+            "No admissible rectangle contains a positive outcome product.",
+        ),
+        (
+            "identification.jochmans_jacobian",
+            "The Jochmans moment Jacobian lacks resolved full rank at the trial point.",
+        ),
+        (
+            "convergence.jochmans",
+            "The Jochmans fit could not return a usable local solution: {status}.",
+        ),
+        (
+            "convergence.prediction_recovery",
+            "Fixed effects could not be recovered for prediction ({status}): {reason}.",
+        ),
         # IdentificationError: dispatched by the collinearity resolution of M1.
         (
             "identification.rank_deficient",

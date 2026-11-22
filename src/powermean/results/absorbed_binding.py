@@ -50,6 +50,7 @@ from powermean.solve.absorbed_certificate import (
     FEPointCertificate,
     failed_gates,
 )
+from powermean.solve.absorbed_certificate_geometry import centered_gamma_design
 from powermean.solve.absorbed_certificate_history import (
     CandidateHistory,
     index_history,
@@ -405,6 +406,16 @@ def _check_certificate(
         d_mat = history.sample.design
         z_mat = np.zeros((history.sample.count, 0), dtype=np.float64)
         exp_design: FloatArray = z_mat if d_mat is None else d_mat.matrix
+        if geom.slope_center:
+            centered = centered_gamma_design(
+                exp_design,
+                geom.rows.curvature,
+                cert.point.variance,
+                history.sample.omega,
+            )
+            if centered is None or centered[1] != geom.slope_center:
+                raise ValueError(UNBOUND)
+            exp_design = centered[0]
         links_ok = (geom.point, geom.rows, geom.basis) == (
             cert.point,
             cert.rows,

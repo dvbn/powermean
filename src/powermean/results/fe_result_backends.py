@@ -11,8 +11,8 @@ from powermean.effects.targets import ReportingContext
 from powermean.errors import ConvergenceError
 from powermean.formula.frame import Design
 from powermean.results.absorbed_owned import RetainedCertificateSnapshot
-from powermean.results.fe_helpers import PredictionOptions
 from powermean.results.fe_sample import FESampleView
+from powermean.results.prediction import Prediction, PredictionOptions
 from powermean.results.provenance import Provenance
 from powermean.solve.cancelled_records import CancelledCertificate
 
@@ -96,6 +96,6 @@ class FEBackend(Protocol):
 
     def predict(
         self, data: pd.DataFrame | None = None, **options: Unpack[PredictionOptions]
-    ) -> pd.Series[float]:
+    ) -> Prediction:
         """Return a defined prediction or explicit capability refusal."""
         ...

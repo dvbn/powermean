@@ -201,10 +201,13 @@ can break this agreement. Wooldridge's Proposition 3.1 establishes a
 different equivalence, between pooled canonical-link QMLE and the imputation
 procedure under its conditions. Its Poisson argument does not carry over
 to a Gamma score with a log link. The cancelled Gamma column differs because
-the four-period histories yield different weights. For the cancelled fits,
-Powermean supplies inference for the coefficients and their proportional
-contrasts. Their `predict()` method and a dedicated DiD aggregation routine
-are unavailable.
+the four-period histories yield different weights. Both cancelled fits can
+recover unit effects with `fixef()` and return fitted expected visits with
+`predict()`. To switch off the policy, set the cohort-period treatment
+indicators to zero on the retained rows and pass those rows to `predict()`.
+This holds the recovered effects fixed. The DiD aggregation and inference
+example below builds its own table from a pooled PPML fit.
+[Prediction and counterfactuals](../reference/results.md#prediction-and-retention)
 
 ## Plot the cohort-by-period effects
 

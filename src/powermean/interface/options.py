@@ -132,7 +132,7 @@ import numbers
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
-from typing import Any, Literal, TypedDict, cast
+from typing import Any, Literal, Required, TypedDict, cast
 
 import numpy as np
 import pandas as pd
@@ -401,6 +401,16 @@ class FitOptions(PrepareOptions, PreparedFitOptions, total=False):
     The union of :class:`PrepareOptions` and :class:`PreparedFitOptions`: ``fit``
     prepares the sample once and fits it, so it takes every keyword of both.
     """
+
+
+class DifferenceGMMOptions(TypedDict, total=False):
+    """Keywords of the exogenous two-way difference estimators in ``fit``."""
+
+    estimator: Required[Literal["gmm1", "gmm2"]]
+    fe_layout: Literal["rectangular", "directed"]
+    vcov: Literal["paper", "stata"]
+    start: ArrayLike | None
+    max_iter: int
 
 
 # The milestone that each later feature arrives at (DESIGN.md, Section 13; D41).

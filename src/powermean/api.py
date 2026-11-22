@@ -30,8 +30,10 @@ one outcome domain fixed at the preparation; ``ppml``, ``gpml`` and ``logols`` f
 contradictory explicit value; ``solver_defaults`` returns the canonical typed record
 of the options of the certificate and of the convex Newton solver.  ``NB2`` is the
 NB2 working variance ``V(m) = m + kappa m^2`` with any ``kappa >= 0``, and
-``SolverOptions`` the record that ``solver_defaults`` returns.  The result is a
-:class:`~powermean.results.result.Result`.
+``SolverOptions`` the record that ``solver_defaults`` returns. The ordinary fit
+returns a :class:`~powermean.results.result.Result`. Selecting
+``estimator="gmm1"`` or ``"gmm2"`` fits the two-way difference equation and
+returns a :class:`~powermean.results.jochmans.JochmansResult`.
 
 Fixed effects: the formula and prepared-fit routes default to `absorbed="profiled"`.
 Choose `"index"` explicitly in `solver_options` to use that organization. Joint
@@ -53,7 +55,7 @@ from __future__ import annotations
 
 import warnings
 from collections.abc import Mapping
-from typing import Unpack
+from typing import Unpack, cast, overload
 
 import pandas as pd
 
@@ -61,11 +63,13 @@ from powermean import messages
 from powermean.errors import CoverageWarning, SpecificationError
 from powermean.formula.grammar import collapsed_powers, parse_formula
 from powermean.interface.dispatch import fit_prepared
+from powermean.interface.jochmans import fit_difference_gmm
 from powermean.interface.options import (
     DEFAULT_SOLVER,
     FIT_KEYWORDS,
     PREPARE_KEYWORDS,
     PREPARED_FIT_KEYWORDS,
+    DifferenceGMMOptions,
     FitOptions,
     PreparedFitOptions,
     PrepareOptions,
@@ -79,6 +83,7 @@ from powermean.interface.options import (
 )
 from powermean.interface.preparation import PreparedProblem, prepare_problem
 from powermean.model.variance import NB2Variance
+from powermean.results.jochmans import JochmansResult
 from powermean.results.result import Result
 from powermean.solve.iols.options import IolsOptions
 from powermean.solve.options import SolverOptions
@@ -338,7 +343,17 @@ def _fit(
     return fit_prepared(problem, specification, stacklevel=stacklevel)
 
 
-def fit(formula: str, data: pd.DataFrame, **options: Unpack[FitOptions]) -> Result:
+@overload
+def fit(formula: str, data: pd.DataFrame, **options: Unpack[FitOptions]) -> Result: ...
+
+
+@overload
+def fit(
+    formula: str, data: pd.DataFrame, **options: Unpack[DifferenceGMMOptions]
+) -> JochmansResult: ...
+
+
+def fit(formula: str, data: pd.DataFrame, **options: object) -> Result | JochmansResult:
     """Power-mean regression, with or without fixed effects.
 
     Parameters
@@ -363,12 +378,24 @@ def fit(formula: str, data: pd.DataFrame, **options: Unpack[FitOptions]) -> Resu
         effects. Other options include ``solver``, ``solver_options``, ``tol``,
         ``start``, ``on_failure`` and ``keep_influence``.
 
+        Set ``estimator="gmm1"`` or ``"gmm2"`` for the Jochmans exogenous
+        two-way exponential regression. Use an intercept-free formula with
+        two fixed-effect identifiers, such as ``"patents ~ 0 + log_rd | firm + year"``.
+        The default ``fe_layout="rectangular"`` requires one row per cell of a
+        complete crossing (Stata's ``twexp``). Set ``fe_layout="directed"`` for
+        all ordered non-self links among at least four agents
+        (Stata's ``twgravity``). Observed zeros are retained. These estimators
+        accept ``vcov="paper"`` (default) or ``"stata"``, ``start`` in coefficient
+        order (default zero), and ``max_iter`` (default 100).
+
     Returns
     -------
-    Result
-        The result: ``coef``, ``se``, ``vcov``, ``confint``,
+    Result or JochmansResult
+        An ordinary fit supplies ``coef``, ``se``, ``vcov``, ``confint``,
         ``tidy``, ``summary``, ``predict`` and ``influence``, and the attributes
         ``certificate``, ``sample``, ``estimator`` and ``provenance``.
+        A two-way difference fit reports slopes and full cell-projection
+        inference with its retained sample and local root certificate.
 
     Raises
     ------
@@ -378,11 +405,19 @@ def fit(formula: str, data: pd.DataFrame, **options: Unpack[FitOptions]) -> Resu
     SampleError
         A finite negative outcome among complete rows, zeros at ``omega <= 0``
         without ``positive_only=True``, or no usable observation, including an
-        empty frame. Non-finite outcomes are excluded as missing.
+        empty frame. A two-way difference fit also refuses incomplete arrays,
+        including missing or non-finite model values.
+    IdentificationError
+        A two-way difference fit has insufficient identifying contrasts,
+        outcome products or resolved Jacobian rank.
     ConvergenceError
         No certified solution, with ``on_failure="raise"``: the last state and the
         certificate, where one was formed, are attached.
     """
+    if "estimator" in options:
+        return fit_difference_gmm(
+            formula, data, **cast("DifferenceGMMOptions", options)
+        )
     return _fit(formula, data, options, {}, _CALLER_DEPTH)
 
 

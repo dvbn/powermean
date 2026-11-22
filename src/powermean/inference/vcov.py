@@ -52,6 +52,7 @@ arrays the source's records could not perform.
 
 from __future__ import annotations
 
+import math
 import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -168,10 +169,19 @@ def _result(
     cov = symmetric_part(cov)
     eigenvalues = np.linalg.eigvalsh(cov)
     scale = float(np.max(np.abs(eigenvalues)))
+    spectrum = eigenvalues
+    if not math.isfinite(scale):
+        # The spectrum can overflow even when every covariance entry is
+        # finite. Compare eigenvalues in a common binary scale for diagnostics
+        # and keep the original-unit spectrum, including its small values.
+        _, exponent = math.frexp(float(np.max(np.abs(cov))))
+        with np.errstate(under="ignore"):
+            spectrum = np.linalg.eigvalsh(np.ldexp(cov, -exponent))
+        scale = float(np.max(np.abs(spectrum)))
     tolerance = np.finfo(float).eps * cov.shape[0] * scale
-    rank = int(np.count_nonzero(np.abs(eigenvalues) > tolerance))
+    rank = int(np.count_nonzero(np.abs(spectrum) > tolerance))
     diagnostics: list[str] = []
-    if np.min(eigenvalues) < -tolerance:
+    if np.min(spectrum) < -tolerance:
         diagnostics.append("indefinite_covariance")
     if rank < cov.shape[0]:
         diagnostics.append("singular_covariance")

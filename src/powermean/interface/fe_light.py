@@ -142,11 +142,10 @@ from powermean.interface.sample_records import SampleRequest
 from powermean.model.order_scale import OrderScale
 from powermean.results import citations, naming
 from powermean.results.fe_helpers import (
-    PredictionOptions,
     normal_quantile,
-    prediction_kind,
 )
 from powermean.results.fe_sample import FESampleView
+from powermean.results.prediction import Prediction, PredictionOptions, prediction_kind
 from powermean.results.provenance import (
     IMPLEMENTATION,
     Provenance,
@@ -1356,11 +1355,11 @@ class LightLogBackend:
 
     def predict(
         self, data: pd.DataFrame | None = None, **options: Unpack[PredictionOptions]
-    ) -> pd.Series[float]:
+    ) -> Prediction:
         """Return the fitted power mean on the retained rows."""
-        if data is not None:
-            return self._exact().predict(data, **options)
         kind = prediction_kind(options)
+        if data is not None or kind != "power_mean":
+            return self._exact().predict(data, **options)
         index = self._core.fitted_index
         if not (
             float(index.min()) > _NORMAL_LOG_MIN + _PREDICTION_MARGIN

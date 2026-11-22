@@ -17,7 +17,7 @@ from powermean.data.inference_requests import (
     HCRequest,
 )
 from powermean.effects.targets import ReportingContext, ReportingPoint
-from powermean.errors import ConvergenceError, SpecificationError
+from powermean.errors import ConvergenceError
 from powermean.inference.convention import ClusterCodes
 from powermean.inference.wz_binding import WZSource
 from powermean.interface.fe_joint_result import exact_count_domain
@@ -33,16 +33,15 @@ from powermean.interface.fe_result_backends import (
     default_announcement,
     saturated_fe,
 )
-from powermean.results import citations, naming
-from powermean.results.cancelled_recovery import cancelled_effect
+from powermean.results import citations, naming, prediction
+from powermean.results.cancelled_recovery import cancelled_effect, cancelled_index
 from powermean.results.fe_helpers import (
-    PredictionOptions,
     normal_quantile,
-    prediction_kind,
 )
 from powermean.results.fe_sample import FESampleView
 from powermean.results.indefinite import indefinite, note
 from powermean.results.owned import owned_array
+from powermean.results.prediction import Prediction, PredictionOptions, prediction_kind
 from powermean.results.provenance import (
     IMPLEMENTATION,
     Provenance,
@@ -66,7 +65,7 @@ from powermean.results.summary import (
     WIDTH,
     _table,
 )
-from powermean.results.wz_bias import WZBias, nuisance_policy
+from powermean.results.wz_bias import WZBias
 from powermean.results.wz_inference import cancelled_wz
 from powermean.solve.cancelled_records import CancelledCertificate
 
@@ -459,26 +458,56 @@ class CancelledResultBackend:
         self,
         data: pd.DataFrame | None = None,
         **options: Unpack[PredictionOptions],
-    ) -> pd.Series[float]:
-        """Return the predict from the actual retained state, detached outward."""
-        prediction_kind(options)
-        if data is not None and not isinstance(data, pd.DataFrame):
-            raise TypeError("data must be a pandas DataFrame")
+    ) -> Prediction:
+        """Predict from one stored point and its ex-post cancelled scale."""
+        kind = prediction_kind(options)
+        prediction.prediction_data(data, kind)
         if not self.certified:
             raise self._withheld()
-        if isinstance(self._bias, WZBias):
-            raise nuisance_policy("predict")
-        raise SpecificationError(
-            "specification.invalid_value",
-            {
-                "argument": "predict",
-                "value": "power_mean",
-                "valid": (
-                    "a model supporting prediction "
-                    "(prediction after cancellation remains unavailable)"
-                ),
-            },
+        if kind == "fixed_effects":
+            return self.fixef()
+        sample, labels = self.order_sample, self._sample_view.labels
+        matrix = None
+        if data is not None:
+            prediction.check_fitted_groups(
+                data,
+                labels,
+                ((names, block.levels, block.codes) for names, block in zip(
+                    self.parts.fixed_effects, self.grouping.blocks, strict=True
+                )),
+            )
+            matrix = prediction.replayed_matrix(self.design, data)
+        q, zero = cancelled_index(sample, self.envelope, self._bias)
+        boundary = bool(zero.any())
+        rows = prediction.retained_rows(sample.positions, self._sample_view.positions)
+        if matrix is not None:
+            beta = self.coef()
+            if isinstance(self._bias, WZBias):
+                beta = pd.Series(self.envelope.coef(), index=beta.index)
+            q = prediction.counterfactual_index(
+                matrix, self.design.columns, beta, sample.data.design[rows],
+                sample.data.column_names, q=q, omega=sample.omega, zero=zero if boundary else None,
+            )
+        if kind == "residual":
+            series = prediction.residual_series(
+                q, sample.problem.response[rows], labels, sample.omega, boundary=boundary
+            )
+        else:
+            series = prediction.fitted_series(
+                q, labels, sample.omega, boundary=boundary, counterfactual=data is not None
+            )
+        series.attrs.update(
+            fe_recovery="cancelled_group_scale",
+            zero_boundary_rows=tuple(np.flatnonzero(zero).tolist()),
+            evaluation_point=(
+                "original uncorrected estimating root"
+                if self._bias is None or isinstance(self._bias, WZBias)
+                else "BBP reporting point postestimation"
+            ),
         )
+        if isinstance(self._bias, WZBias):
+            series.attrs["nuisance_correction"] = "not_supplied"
+        return series
 
     def summary(self, level: float = 0.95) -> str:
         """Render actual sample, formulation, coverage and retained inference."""

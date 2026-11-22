@@ -31,8 +31,8 @@ from powermean.fe.cancel import to_sorted
 from powermean.model.variance import FloatArray, PowerVariance
 from powermean.solve.cancelled_operator import CancelledOperator, CancelledProblem
 from powermean.solve.point_loss import Budget, Call
-from powermean.systems._cancel_rows import row_components
-from powermean.systems.cancelled import assembled_jacobian
+from powermean.systems._cancel_rows import RowComponents, row_components
+from powermean.systems.cancelled import assembled_jacobian, gamma_score
 
 
 class CancelledCall(TypedDict):
@@ -132,7 +132,7 @@ class CancelledLinearLoss:
         self._raw_kind = "loss_gradient"
         return coef, 0.0, raw
 
-    def _rows(self, call: CancelledCall) -> FloatArray:
+    def _rows(self, call: CancelledCall) -> RowComponents:
         """Evaluate t through the accepted cancellation kernel, offset exactly once."""
         operator = self.problem.operator
         if call["X"] is not operator or call["sample_weight"] is not None:
@@ -157,13 +157,20 @@ class CancelledLinearLoss:
             raise ValueError("raw prediction must have one value per input row")
         with np.errstate(over="raise", invalid="raise"):
             q = finite_product(raw + self.problem.centered_offset)
-        rows = row_components(self.problem.z, q, np.zeros_like(q), PowerVariance(2))
-        return rows.t
+        return row_components(self.problem.z, q, np.zeros_like(q), PowerVariance(2))
+
+    def _gradient(self, rows: RowComponents, sorted_t: FloatArray) -> FloatArray:
+        operator = self.problem.operator
+        design = operator.design
+        log_t = to_sorted(design.structure, rows.log_t)
+        return finite_product(
+            -operator.pullback(gamma_score(design, log_t, sorted_t)) / sorted_t.size
+        )
 
     def loss(self, **call: Unpack[CancelledCall]) -> np.float64:
         """sum(t)/n, with the setup raw reservation consumed exactly once."""
         self._admit("loss")
-        rows = self._rows(call)
+        rows = self._rows(call).t
         with np.errstate(over="raise", invalid="raise"):
             value = np.float64(np.sum(rows) / rows.size)
         if not np.isfinite(value):
@@ -177,8 +184,10 @@ class CancelledLinearLoss:
         self._admit("loss_gradient")
         rows = self._rows(call)
         with np.errstate(over="raise", invalid="raise"):
-            value = np.float64(np.sum(rows) / rows.size)
-            gradient = finite_product(-self.problem.operator.rmatvec(rows) / rows.size)
+            value = np.float64(np.sum(rows.t) / rows.t.size)
+            gradient = self._gradient(
+                rows, to_sorted(self.problem.operator.design.structure, rows.t)
+            )
         if not np.isfinite(value):
             raise FloatingPointError("cancelled criterion is not representable")
         return value, gradient
@@ -202,18 +211,19 @@ class CancelledLinearLoss:
             raise ValueError("provider buffers must not alias inputs or each other")
         rows = self._rows(call)
         with np.errstate(over="raise", invalid="raise"):
-            gradient = finite_product(-operator.rmatvec(rows) / rows.size)
+            sorted_t = to_sorted(operator.design.structure, rows.t)
+            gradient = self._gradient(rows, sorted_t)
             assembled = assembled_jacobian(
                 operator.design,
-                to_sorted(operator.design.structure, rows),
+                sorted_t,
                 None,
                 operator.expansion,
                 operator.selected,
             )
             if assembled is None:
-                _column_hessian(operator, rows, hess)
+                _column_hessian(operator, rows.t, hess)
             else:
-                hess[:] = finite_product(assembled / rows.size)
+                hess[:] = finite_product(assembled / rows.t.size)
         # Leave the last accepted gradient intact if any Hessian product failed.
         grad[:] = gradient
         return grad, hess, False

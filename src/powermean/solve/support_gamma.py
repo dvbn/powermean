@@ -84,6 +84,7 @@ keeps the two programs, their controls, exact multiplier signs and raw checks un
 from __future__ import annotations
 
 from dataclasses import dataclass
+from fractions import Fraction
 from typing import Literal
 
 import numpy as np
@@ -145,6 +146,7 @@ Status = Literal[
 STAGES: tuple[Stage, Stage] = ("negative", "zero_sum")
 # The reason of the all-positive structural certificate (D79): no program was run.
 ALL_POSITIVE = "all_positive"
+CELL_BALANCE = "exact_cell_balance"
 # The refusal of a record that reads as that domain but does not admit freshly (D79.1).
 ADMISSION = "the all-positive sample must admit freshly as the record it is now"
 # Its detail when the freshly admitted record's own values are not the domain (D79.3).
@@ -156,6 +158,7 @@ STATUS: dict[str, Status] = {
     "no_positive_rows": "no_recession",
     "empty_parameters": "no_recession",
     ALL_POSITIVE: "no_recession",
+    CELL_BALANCE: "no_recession",
 }
 BASELINE = LPControls(
     tolerance=1e-12, threshold=1e-8, feasibility=1e-8, max_iterations=1000
@@ -208,6 +211,11 @@ def _reason(problem: GammaProblem, solves: tuple[Solve, ...]) -> str:
     if last.witness is None or last.dual is None:
         return "lp_failure"
     kind = last.witness.kind
+    if (
+        (kind is None and not last.dual.passed)
+        or (kind is not None and (last.witness.positive_min or 0.0) < 0.0)
+    ) and _exact_cell_balance(problem):
+        return CELL_BALANCE
     if kind is not None:
         return kind
     if last.dual.passed:
@@ -219,6 +227,38 @@ def _reason(problem: GammaProblem, solves: tuple[Solve, ...]) -> str:
         return check.failure
     failures = (*last.witness.failure, *last.dual.failure)
     return "range" if "range" in failures else "unresolved"
+
+
+def _exact_cell_balance(problem: GammaProblem) -> bool:
+    """Prove positive support balance in each fixed-effect cell for one slope."""
+    if problem.n_slopes != 1 or problem.grouping is None:
+        return False
+    cells: dict[tuple[int, ...], list[int]] = {}
+    for row, cell in enumerate(
+        zip(*(b.codes for b in problem.grouping.blocks), strict=True)
+    ):
+        cells.setdefault(cell, []).append(row)
+    x, weights = problem.design[:, 0], problem.weights.values
+    positive = problem.z > 0
+    for indices in cells.values():
+        support = [row for row in indices if positive[row]]
+        if len(support) == len(indices):
+            continue
+        if not support:
+            return False
+        # Positive multipliers can match both the cell's weight and its x total
+        # precisely when its mean lies in the relative interior of this interval.
+        low = Fraction(float(min(x[row] for row in support)))
+        high = Fraction(float(max(x[row] for row in support)))
+        mass = sum(Fraction(float(weights[row])) for row in indices)
+        total = sum(
+            Fraction(float(weights[row])) * Fraction(float(x[row])) for row in indices
+        )
+        if not (
+            total == low * mass if low == high else low * mass < total < high * mass
+        ):
+            return False
+    return True
 
 
 @dataclass(frozen=True, eq=False)
@@ -326,7 +366,11 @@ class GammaResult:
     def witness(self) -> GammaWitness | None:
         """The fresh valid strict witness, when the invocation found one."""
         last = self.solves[-1].witness if self.solves else None
-        return last if last is not None and last.valid else None
+        return (
+            last
+            if last is not None and last.valid and self.reason != CELL_BALANCE
+            else None
+        )
 
     @property
     def attempts(self) -> int:

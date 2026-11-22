@@ -8,7 +8,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "powermean"
-version = "0.1.0"
+version = "0.1.1"
 description = "Power-mean regression: logs, zeros, fixed effects and proportional effects"
 authors = [{ name = "David Benatia" }]
 license = "BSD-3-Clause"  # the package only, by the author's statement (decision D2)
@@ -68,8 +68,15 @@ text = '''
 
 Estimate multiple high-dimensional fixed-effect blocks jointly, or cancel a selected block while retaining the others. Powermean provides bias corrections that address the incidental-parameters problem in short panels and three-way gravity models. The same formula interface takes you from a simple conditional-mean regression to three-way gravity and nonlinear difference-in-differences.
 
+Use `estimator="gmm1"` or `"gmm2"` to difference out two fixed-effect blocks
+on complete panels or directed dyad arrays. Use `fit.predict()` for fitted
+means, `fit.predict(type="residual")` for residuals, and
+`fit.predict(type="fixed_effects")` for fixed effects. Cancelled and two-way
+GMM fits recover their missing effects after estimation. Fixed-effect fits
+support replacement covariates on the retained rows.
+
 ```bash
-python -m pip install powermean
+python -m pip install "powermean>=0.1.1"
 ```
 
 Use Python 3.12 or later. The release provides native wheels for CPython 3.12–3.14
@@ -77,6 +84,7 @@ on Linux, macOS, and Windows for x86-64 and ARM64.
 
 [User guide](https://github.com/dvbn/powermean/blob/main/docs/README.md) · [Function index](https://github.com/dvbn/powermean/blob/main/docs/reference/api.md)
 · [Gravity walkthrough](https://github.com/dvbn/powermean/blob/main/docs/get-started.md) · [Nonlinear DiD](https://github.com/dvbn/powermean/blob/main/docs/examples/nonlinear-did.md)
+· [Two-way GMM](https://github.com/dvbn/powermean/blob/main/docs/methods/jochmans.md) · [Prediction](https://github.com/dvbn/powermean/blob/main/docs/reference/results.md#prediction-and-retention)
 '''
 
 [project.urls]

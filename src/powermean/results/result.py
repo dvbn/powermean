@@ -76,7 +76,7 @@ import math
 import statistics
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any, Literal, TypedDict, Unpack
+from typing import TYPE_CHECKING, Any, Literal, Unpack, overload
 
 import numpy as np
 import pandas as pd
@@ -113,6 +113,7 @@ from powermean.results.owned import (
     owned_candidate,
     owned_linear,
 )
+from powermean.results.prediction import Prediction, PredictionOptions, prediction_kind
 from powermean.results.provenance import Provenance, provenance
 from powermean.results.restriction_reporting import (
     CombinationResult,
@@ -134,69 +135,8 @@ if TYPE_CHECKING:
 
 InfluenceUnit = Literal["sampling", "row"]
 INFLUENCE_UNITS: tuple[InfluenceUnit, ...] = ("sampling", "row")
-PredictionKind = Literal["power_mean"]
-PREDICTION_KINDS: tuple[PredictionKind, ...] = ("power_mean",)
-DEFAULT_PREDICTION: PredictionKind = "power_mean"
-# The keywords of ``predict``: the one key of ``PredictionOptions``.
-PREDICTION_KEYWORDS: tuple[str, ...] = ("type",)
 INFERENCE_STATUS: tuple[str, ...] = ("ok", "degenerate", "missing")
 LINEAR_FEATURE = "the certificate of the linear path, which {need} needs"
-
-
-class PredictionOptions(TypedDict, total=False):
-    """The keyword options of :meth:`Result.predict`.
-
-    ``type`` is the kind of prediction, ``"power_mean"`` by default: the fitted
-    conditional power mean of the order of the fit, the only kind available.  No other
-    key exists; :func:`prediction_kind` refuses one at run time, as the type checker
-    refuses it at the call.
-    """
-
-    type: PredictionKind
-
-
-def prediction_kind(options: Mapping[str, object]) -> PredictionKind:
-    """The kind of prediction that the keywords of ``predict`` name.
-
-    Parameters
-    ----------
-    options : mapping
-        The keywords given, as the collector received them.
-
-    Returns
-    -------
-    str
-        ``"power_mean"``, the default and the only kind.
-
-    Raises
-    ------
-    SpecificationError
-        A keyword other than ``type`` (``specification.unknown_option``, with the
-        valid keyword), or a ``type`` that is not available
-        (``specification.invalid_value``, with the valid kinds).
-    """
-    for key in options:
-        if key not in PREDICTION_KEYWORDS:
-            raise SpecificationError(
-                "specification.unknown_option",
-                {
-                    "kind": "keyword of predict",
-                    "key": key,
-                    "valid": messages.format_keys(PREDICTION_KEYWORDS),
-                },
-            )
-    kind = options.get("type", DEFAULT_PREDICTION)
-    for valid in PREDICTION_KINDS:
-        if kind == valid:
-            return valid
-    raise SpecificationError(
-        "specification.invalid_value",
-        {
-            "argument": "type",
-            "value": kind,
-            "valid": messages.format_keys(PREDICTION_KINDS),
-        },
-    )
 
 
 def normal_quantile(level: float) -> float:
@@ -904,13 +844,27 @@ class Result:
 
     # ------------------------------------------------------------- prediction
 
+    @overload
+    def predict(
+        self, data: pd.DataFrame | None = None, *,
+        type: Literal["power_mean", "residual"] = "power_mean",
+    ) -> pd.Series[float]: ...
+
+    @overload
+    def predict(
+        self, data: pd.DataFrame | None = None, *, type: Literal["fixed_effects"],
+    ) -> dict[str, pd.Series[float]]: ...
+
     def predict(
         self, data: pd.DataFrame | None = None, **options: Unpack[PredictionOptions]
-    ) -> pd.Series[float]:
-        """The fitted conditional power mean ``exp(X beta + o)``."""
+    ) -> Prediction:
+        """Fitted power means, fixed-effect levels, or response residuals."""
         if self._fe is not None:
             return self._fe.predict(data, **options)
         kind = prediction_kind(options)
+        prediction.prediction_data(data, kind)
+        if kind == "fixed_effects":
+            return self.fixef()
         retained = self._retained
         if retained.estimator.route == "linear" and retained.status is None:
             raise self._linear_refusal("a prediction")
@@ -918,6 +872,14 @@ class Result:
             raise self._withheld()
         beta = self._beta()
         sample = retained.sample
+        if kind == "residual":
+            omega = retained.estimator.mean.omega
+            with np.errstate(over="raise", invalid="raise"):
+                index = prediction.slope_index(sample.data.design, beta) + sample.data.offset
+                q = index if omega == 0 else index * omega
+            return prediction.residual_series(
+                q, sample.problem.response, self._sample.labels, omega
+            )
         if data is None:
             fitted = prediction.power_mean(sample.data.design, beta, sample.data.offset)
             index: pd.Index[Any] = self._sample.labels

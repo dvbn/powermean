@@ -75,12 +75,14 @@ class NumericAssessmentHandoff:
         /,
     ) -> bool:
         """Keep the independent point certificate for the final audit's handoff."""
-        return self._assess(whole, controls).level == "strict"
+        return self._assess(whole, controls, keep_only_strict=True).level == "strict"
 
     def _assess(
         self,
         whole: WholePoint[PointProfile | ConditionalPoint] | WholePoint[IndexPoint],
         controls: CertificateControls,
+        *,
+        keep_only_strict: bool = False,
     ) -> FEPointCertificate:
         """Certify and keep this point's exact record for possible final selection."""
         if (
@@ -101,9 +103,9 @@ class NumericAssessmentHandoff:
             basis=self.basis,
         )
         self._assessed += 1
-        self._kept.append(
-            (whole.point, found, None if handoff is None else handoff.take())
-        )
+        information = None if handoff is None else handoff.take()
+        if not keep_only_strict or found.level == "strict":
+            self._kept.append((whole.point, found, information))
         return found
 
     def audit(

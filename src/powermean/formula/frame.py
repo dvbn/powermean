@@ -297,6 +297,18 @@ def replay_prediction_design(design: Design, data: pd.DataFrame) -> Design:
     return _replay_fitted_design(design, data, argument="data")
 
 
+def prediction_template(
+    matrix: pd.DataFrame, spec: Spec, variables: tuple[str, ...]
+) -> Design:
+    """Keep just the fitted formula and column schema for future predictions."""
+    empty = pd.DataFrame(columns=matrix.columns.copy())
+    mask = validity.frozen(np.empty(0, dtype=bool))
+    return Design(
+        empty, spec, (), variables, empty.index, mask, mask, FORMULAIC_VERSION,
+        materialization.owned_spec(spec),
+    )
+
+
 def _replay_fitted_design(
     design: Design, data: pd.DataFrame, *, argument: Literal["configurations", "data"]
 ) -> Design:
@@ -330,7 +342,7 @@ def _design(
     terms = tuple(
         (str(term), columns[place]) for term, place in spec.term_slices.items()
     )
-    variables = _columns_read(spec, working.columns)
+    variables = names.columns_read(spec, working.columns)
     referenced = validity.columns_invalid(working, variables)
     with np.errstate(divide="ignore", invalid="ignore"):
         kept = materialization.materialize_spec(spec, working, na_action="drop")
@@ -346,16 +358,3 @@ def _design(
         formulaic_version=FORMULAIC_VERSION,
         _contrast_spec=materialization.owned_spec(spec),
     )
-
-
-def _columns_read(spec: Spec, columns: pd.Index[Any]) -> tuple[str, ...]:
-    """The data columns that the factors of ``spec`` read, sorted (module docstring)."""
-    read: set[str] = set()
-    literal_q = "Q" not in columns
-    for term in spec.term_slices:
-        for factor in term.factors:
-            if factor.eval_method.value == "lookup":
-                read.add(factor.expr)
-            elif factor.eval_method.value == "python":
-                read |= names.python_names(factor.expr, literal_q=literal_q)
-    return tuple(sorted(name for name in read if name in columns))

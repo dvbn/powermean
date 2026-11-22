@@ -6,8 +6,11 @@ Estimate multiple high-dimensional fixed-effect blocks jointly, or cancel a sele
 
 [Install Powermean](docs/install.md) · [User guide](docs/README.md) · [Function index](docs/reference/api.md)
 
+The examples below use Powermean 0.1.1 or later. Install it from PyPI when
+available, or use the [source or wheel instructions](docs/install.md).
+
 ```bash
-python -m pip install powermean
+python -m pip install "powermean>=0.1.1"
 ```
 
 **Conditional mean.** Suppose `x` is strictly exogenous and `E[y | x] = exp(a + b*x)`. With a data frame named `data` containing `y` and `x`, fit the arithmetic conditional mean by Poisson pseudo-maximum likelihood (PPML).
@@ -22,6 +25,8 @@ Read the coefficient on `x` and its interval in `fit.tidy()`. Keep `omega=1` and
 
 **Gravity.** How does bilateral trade differ when a pair has an agreement? Fit trade in levels with pair, exporter-year and importer-year effects and report the proportional difference with a pair-clustered interval. [Gravity walkthrough](docs/get-started.md)
 
+**Two-way exponential regression.** Set `estimator="gmm1"` or `"gmm2"` in `pm.fit` to difference out two fixed-effect blocks on a complete panel or directed dyad array. [Method and examples](docs/methods/jochmans.md)
+
 **Nonlinear difference-in-differences.** How do expected visits change after policy adoption? Use `pm.fit` for common or staggered adoption under multiplicative parallel trends, then read the effects by cohort and date with unit-clustered intervals. [DiD walkthrough](docs/examples/nonlinear-did.md)
 
 ## Work with the results
@@ -29,6 +34,12 @@ Read the coefficient on `x` and its interval in `fit.tidy()`. Keep `omega=1` and
 Before comparing coefficients, check which rows each model used. Each result records their input positions and the reasons for exclusions. [Compare estimation samples](docs/examples/compare-samples.md)
 
 Use `pm.etable` to place several fitted models side by side. The result also supplies tests, proportional effects and alternative covariance estimates. [Reuse and export a fit](docs/examples/reuse-a-fit.md) · [Tables and formats](docs/reference/tables.md)
+
+Use `fit.predict()` for fitted means, `fit.predict(type="residual")` for
+response residuals, and `fit.predict(type="fixed_effects")` to extract fixed
+effects. Cancelled and two-way GMM fits recover fixed effects after estimating
+the slopes. For a fixed-effect counterfactual, replace the covariates on the
+retained rows. [Worked prediction example](docs/reference/results.md#prediction-and-retention)
 
 ## Documentation and citation
 

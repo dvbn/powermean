@@ -17,6 +17,8 @@ calls compute a selected root. Unless you supply `start`, the procedure
 starts from a certified fit of the nearest convex family member on the same
 sample. The available root need not be unique, and some combinations have
 narrower existence results. Cancellation uses its own starting rules.
+If continuation runs, earlier certified stages supply starting values. The
+reported result and its certification always use the requested `tau`.
 [Power-variance range](../reference/options.md#full-family-scope-and-the-current-entry-restriction)
 
 ## What the convergence assessment checks
@@ -51,5 +53,5 @@ The result records the implementation. To inspect or request one, see
 [IOLS installation](../iols_installation.md) and [IOLS controls](../reference/iols_options.md).
 
 <!-- guide-navigation:start -->
-[Previous: Cancel one block](cancellation.md) · [Guide index](../README.md) · [Next: Compare samples](../examples/compare-samples.md)
+[Previous: Difference out two blocks](jochmans.md) · [Guide index](../README.md) · [Next: Compare samples](../examples/compare-samples.md)
 <!-- guide-navigation:end -->

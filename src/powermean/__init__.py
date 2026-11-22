@@ -1,9 +1,10 @@
 """powermean: power-mean regression for outcomes with zeros.
 
 The public interface is the list ``__all__`` below: the functions ``fit``, ``ppml``,
-``gpml``, ``logols``, ``prepare``, ``solver_defaults`` and the convention factory
-``ssc``, the working variance ``NB2``, the typed record ``SolverOptions`` that
-``solver_defaults`` returns, and the exceptions and warnings, which a caller catches
+``gpml``, ``logols``, ``prepare``, ``solver_defaults`` and the
+convention factory ``ssc``, the working variance ``NB2``, the typed record
+``SolverOptions`` that ``solver_defaults`` returns, and the exceptions and warnings,
+which a caller catches
 or filters by these names. The table functions ``etable``,
 ``summary_statistics``, ``balance_table``, ``balance_regression`` and
 ``outcome_table`` share the same lazy public interface.

@@ -540,6 +540,9 @@ def _joint_audit(
                         admit=admitted_outcome,
                         assess=profiled_assessor,
                         start=profiled,
+                        zero_row_polish=newton_profiled._ZeroRowPolish(
+                            _same_polish_sample, assessor.strictly_assess
+                        ),
                     )
                 else:
                     numeric_assessor = cast("NumericAssessmentHandoff", assessor)

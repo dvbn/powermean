@@ -160,6 +160,8 @@ def index_text(value: object) -> str:
 def _estimator(record: Mapping[str, object]) -> tuple[str, float]:
     """The short name of the estimator and its mean order."""
     omega = float(cast("float", cast("Mapping[str, object]", record["mean"])["omega"]))
+    if record.get("method") in ("Jochmans GMM1", "Jochmans GMM2"):
+        return str(record["method"]), omega
     variance = cast("Mapping[str, object]", record["variance"])
     if omega == 0:
         return "log OLS", omega
@@ -174,6 +176,10 @@ def _estimator(record: Mapping[str, object]) -> tuple[str, float]:
 def _effects(record: Mapping[str, object]) -> dict[str, str]:
     """``{term: "Estimated" | "Cancelled"}`` for the fixed-effect terms of a result."""
     formulation = cast("Mapping[str, object]", record["fixed_effects"])
+    if "differenced" in formulation:
+        return dict.fromkeys(
+            cast("Sequence[str]", formulation["differenced"]), "Differenced"
+        )
     blocks = cast("Sequence[str]", formulation.get("blocks", ()))
     cancelled = formulation.get("cancelled")
     return {b: "Cancelled" if b == cancelled else "Estimated" for b in blocks}

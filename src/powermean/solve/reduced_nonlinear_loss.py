@@ -18,7 +18,7 @@ from powermean.fe.absorb_numeric import checked_product
 from powermean.fe.profile import ProfileState
 from powermean.fe.profile_arithmetic import _cached_rows
 from powermean.fe.reductions import immutable_array
-from powermean.model.variance import FloatArray
+from powermean.model.variance import FloatArray, PowerVariance
 from powermean.solve.absorbed_direction import (
     Direction,
     IndexContext,
@@ -89,6 +89,17 @@ class ReducedEvaluator(ProfiledEvaluator):
         )
         self.space = space
         self._arithmetic_mean = context.sample.omega == 1.0
+        variance, tol = context.variance, context.options.tol
+        # On a warm retry the slope may be stationary while the conditional
+        # FE scores are still too large for the independent certificate.
+        self._refine_tol: float | None = None
+        if (
+            warm is not None
+            and type(variance) is PowerVariance
+            and 1.0 < variance.tau < 2.0
+            and tol < self.controls.profile_tol
+        ):
+            self._refine_tol = tol
         self.context = IndexContext(
             context.problem,
             context.absorbed,
@@ -145,9 +156,9 @@ class ReducedEvaluator(ProfiledEvaluator):
         solver.raw_prediction = opening.index
 
     @override
-    def started(self, loss: float) -> None:
+    def started(self, loss: float) -> bool:
         """Preserve initial ZC precedence before packing new working coordinates."""
-        super().started(loss)
+        certified = super().started(loss)
         opening = self._opened()
         values = (
             opening.coordinates
@@ -155,6 +166,7 @@ class ReducedEvaluator(ProfiledEvaluator):
             else self.space.coordinates(opening.theta, opening.state)
         )
         self.view = SearchView(values, values, np.float64(loss))
+        return certified
 
     def row_direction(self, rows: OriginRows) -> None:
         """One full-current RHS; fresh original-level linear residual and tangent."""
@@ -217,7 +229,11 @@ class ReducedEvaluator(ProfiledEvaluator):
         site = (self.attempt, self.steps, role, *limits)
         try:
             solved = self.space.solve(
-                values, tolerance=limits[0], max_sweeps=limits[1], warm=self.warm
+                values,
+                tolerance=limits[0],
+                max_sweeps=limits[1],
+                warm=self.warm,
+                refine_tol=self._refine_tol,
             )
         except FloatingPointError as error:
             self.log.profiles.append(

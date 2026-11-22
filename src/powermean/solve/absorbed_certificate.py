@@ -71,6 +71,7 @@ from powermean.solve.absorbed_certificate_geometry import (
     FEGeometry,
     assembled,
     assembly_step,
+    centered_gamma_geometry,
     fresh_geometry,
     support_step,
 )
@@ -174,6 +175,7 @@ class FEPointCertificate:
     strict: tuple[FEGate, ...] = ()
     secondary: tuple[FEGate, ...] = ()
     merit: MeritFactor | None = None
+    _mixed_retry_scale: FEScaleResult | None = None
 
     @property
     def scale(self) -> FEScaleResult | None:
@@ -344,6 +346,8 @@ def _geometry(
     basis: CertificateBasis,
     steps: list[WorkStep],
     reuse: FinalFactor | None = None,
+    *,
+    compensated: bool = False,
 ) -> FEGeometry | str:
     """The observed geometry on the fixed ``J``, or the text of its range refusal.
 
@@ -352,15 +356,23 @@ def _geometry(
     support = positive_support(basis, rows.curvature > 0)
     steps.append(support_step(support))
     try:
-        assembly = (
-            assembled(point, rows, basis) if reuse is None else reuse.assembly(rows)
-        )
+        if compensated:
+            assembly = assembled(point, rows, basis, compensated=True)
+            steps.append(
+                WorkStep("compensated mixed Hessian sums", "completed", "", None)
+            )
+        else:
+            assembly = (
+                assembled(point, rows, basis) if reuse is None else reuse.assembly(rows)
+            )
     except FloatingPointError as error:
         steps.append(_refused("assembly", error))
         return str(error)
     steps.append(assembly_step(assembly))
     try:
-        geometry = fresh_geometry(point, rows, basis, support, assembly)
+        geometry = fresh_geometry(
+            point, rows, basis, support, assembly, compensated_mixed=compensated
+        )
     except FloatingPointError as error:
         steps.append(_refused("equilibration", error))
         return str(error)
@@ -393,6 +405,15 @@ def _measured(
     ordinary = None if reuse is None else (reuse.record, reuse.factor)
     measures = sparse_measures(geometry, controls.rcond_min, merit, ordinary=ordinary)
     steps.extend(measures.steps())
+    if not measures.conditioned and merit is None:
+        centered = centered_gamma_geometry(geometry)
+        if centered is not None:
+            retry = sparse_measures(centered, controls.rcond_min)
+            steps.append(WorkStep("Gamma slope centering", "completed", "", None))
+            steps.extend(centered.steps())
+            steps.extend(retry.steps())
+            if retry.conditioned and retry.positive_definite:
+                geometry, measures = centered, retry
     for gate in ("curvature", "conditioning"):
         if gate in measures.errors:
             errors[gate] = measures.errors[gate]
@@ -432,6 +453,76 @@ def _coefficients(
     reported = result.evidence.reported
     corrections = reported.corrections(correction[:k])
     return result, coefficient_check(corrections, reported.standard_errors, coef_tol)
+
+
+def _with_gate_results(certificate: FEPointCertificate) -> FEPointCertificate:
+    """Record the two existing gate decisions on the supplied evidence."""
+    return replace(
+        certificate,
+        strict=failed_gates(certificate, certificate.controls.tol),
+        secondary=failed_gates(certificate, certificate.controls.tol_secondary),
+    )
+
+
+def _retry_mixed_sums(
+    certificate: FEPointCertificate, provider: FEScaleProvider
+) -> FEPointCertificate:
+    """Recheck an isolated zero-SE slope refusal with compensated mixed sums."""
+    original = certificate.geometry
+    assert original is not None
+    controls = certificate.controls
+    steps = list(certificate.work)
+    try:
+        geometry = _geometry(
+            original.point, original.rows, original.basis, steps, compensated=True
+        )
+        if isinstance(geometry, str):
+            return replace(certificate, work=tuple(steps))
+        measures = sparse_measures(geometry, controls.rcond_min, certificate.merit)
+        steps.extend(measures.steps())
+        mapped = measures.slope_map
+        if mapped is None or not np.isfinite(mapped).all():
+            return replace(certificate, work=tuple(steps))
+        scaled, check = _coefficients(geometry, measures, provider, controls.coef_tol)
+    except (FloatingPointError, OverflowError) as error:
+        steps.append(_refused("compensated mixed retry", error))
+        return replace(certificate, work=tuple(steps))
+    refined = _with_gate_results(
+        replace(
+            certificate,
+            geometry=geometry,
+            measures=measures,
+            _scale=scaled,
+            coefficients=check,
+            work=tuple(steps),
+            _mixed_retry_scale=certificate._scale,
+        )
+    )
+    if refined.accepted:
+        return refined
+    steps.append(WorkStep("compensated mixed retry", "failed", "gate refusal", None))
+    return replace(certificate, work=tuple(steps))
+
+
+def mixed_retry_eligible(certificate: FEPointCertificate) -> bool:
+    """Whether only the coefficient gate failed, with zero SE on failed slopes."""
+    coefficients = certificate.coefficients
+    return (
+        certificate.point.selected_root
+        and certificate.secondary == ("coefficient",)
+        and coefficients is not None
+        and bool(np.all(coefficients.passed | (coefficients.standard_errors == 0)))
+    )
+
+
+def _check_with_mixed_retry(
+    certificate: FEPointCertificate, provider: FEScaleProvider
+) -> FEPointCertificate:
+    """Retry only an isolated coefficient refusal at a signed degenerate point."""
+    checked = _with_gate_results(certificate)
+    if mixed_retry_eligible(checked):
+        return _retry_mixed_sums(checked, provider)
+    return checked
 
 
 def _merit_of(point: AdmittedPoint, merit: object) -> MeritFactor | None:
@@ -618,11 +709,7 @@ def _certify(
     found = FEPointCertificate(
         *parts, scaled, check, MappingProxyType(errors), tuple(steps), merit=fixed
     )
-    return replace(
-        found,
-        strict=failed_gates(found, controls.tol),
-        secondary=failed_gates(found, controls.tol_secondary),
-    )
+    return _check_with_mixed_retry(found, scale)
 
 
 def assessment(certificate: FEPointCertificate) -> Assessment:
