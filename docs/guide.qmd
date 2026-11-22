@@ -950,6 +950,12 @@ fully padded row or column contributes zero to both rectangular outcome
 products. In the directed calculation the diagonal is masked in both
 factors, so only rectangles made from observed links contribute.
 
+The implementation contracts matrix products and sums without listing
+rectangles. In float64 it places a conservative bound of 150 on the
+absolute centered fitted index and on the log range of positive outcomes
+after common normalization. Ill-resolved cancellation, failed root
+checks and unusable covariance can lead to refusal. [Function index](#api--pmfit)
+
 ### Predict trade after fitting {#jochmans--predict-trade-after-fitting}
 
 `fit.predict()` recovers origin and destination effects by PPML with
@@ -972,12 +978,6 @@ The second prediction uses the same slopes and recovered effects.
 See the [runnable GMM example](../examples/jochmans.py) for synthetic data
 and [prediction and counterfactuals](#results--prediction-and-retention)
 for the retained-row requirements.
-
-The implementation contracts matrix products and sums without listing
-rectangles. In float64 it places a conservative bound of 150 on the
-absolute centered fitted index and on the log range of positive outcomes
-after common normalization. Ill-resolved cancellation, failed root
-checks and unusable covariance can lead to refusal. [Function index](#api--pmfit)
 
 ## Choose a solver and read its assessment {#numerical-methods}
 
@@ -2837,7 +2837,7 @@ regime. [Methods and papers](#references)
 | --- | --- |
 | Fit without fixed effects | `pm.fit` with finite mean orders, power working variance or supported NB2, plus log OLS at order zero. Positive orders allow zeros. Nonpositive orders require positive outcomes. |
 | Estimate fixed effects jointly | One or more blocks after `\|` in the formula. Predict in sample or replace covariates on retained rows. Supplied observation weights are unavailable. |
-| Cancel one block | Select a named block at nonzero mean order, with every other block retained. Recover the cancelled scales with `fixef()` or use them for prediction. |
+| Cancel one block | Select a named block at nonzero mean order, with every other block retained. The working variance and equation have method-specific requirements. Recover the cancelled scales with `fixef()` or use them for prediction. [Cancellation](#cancellation) |
 | Difference out two blocks | `pm.fit` with `estimator="gmm1"` or `"gmm2"` on complete rectangles or complete directed non-self links. Cell-projection covariance and prediction with recovered effects. [Method](#jochmans) |
 | Choose a numerical procedure | Newton is the default for nonlinear fits. IOLS handles supported no-FE models with positive order and power `tau` in `[1, 2]`. Order zero uses a linear calculation. |
 | Reuse prepared rows | `pm.prepare` captures the design and available cluster information. Supported fits can change mean, working variance or covariance within the prepared domain. |

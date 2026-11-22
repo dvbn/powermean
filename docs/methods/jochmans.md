@@ -128,6 +128,12 @@ fully padded row or column contributes zero to both rectangular outcome
 products. In the directed calculation the diagonal is masked in both
 factors, so only rectangles made from observed links contribute.
 
+The implementation contracts matrix products and sums without listing
+rectangles. In float64 it places a conservative bound of 150 on the
+absolute centered fitted index and on the log range of positive outcomes
+after common normalization. Ill-resolved cancellation, failed root
+checks and unusable covariance can lead to refusal. [Function index](../reference/api.md#pmfit)
+
 ## Predict trade after fitting
 
 `fit.predict()` recovers origin and destination effects by PPML with
@@ -150,12 +156,6 @@ The second prediction uses the same slopes and recovered effects.
 See the [runnable GMM example](../../examples/jochmans.py) for synthetic data
 and [prediction and counterfactuals](../reference/results.md#prediction-and-retention)
 for the retained-row requirements.
-
-The implementation contracts matrix products and sums without listing
-rectangles. In float64 it places a conservative bound of 150 on the
-absolute centered fitted index and on the log range of positive outcomes
-after common normalization. Ill-resolved cancellation, failed root
-checks and unusable covariance can lead to refusal. [Function index](../reference/api.md#pmfit)
 
 <!-- guide-navigation:start -->
 [Previous: Cancel one block](cancellation.md) · [Guide index](../README.md) · [Next: Numerical methods](numerical-methods.md)
