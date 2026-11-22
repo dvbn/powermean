@@ -3,24 +3,9 @@
 from dataclasses import asdict, dataclass
 from typing import Literal
 
-from powermean.errors import SpecificationError
 from powermean.fe._cancel_storage import FloatStorage
 from powermean.inference.wz_coefficient import CoefficientBias
 from powermean.model.variance import FloatArray
-
-
-def nuisance_policy(consumer: str) -> SpecificationError:
-    """Refuse unavailable nuisance output without inventing corrected effects."""
-    return SpecificationError(
-        "specification.unsupported_inference",
-        {
-            "method": consumer,
-            "case": (
-                "WZ supplies only a slope correction; corrected nuisance "
-                "effects and predictions are not supplied"
-            ),
-        },
-    )
 
 
 @dataclass(frozen=True, slots=True)

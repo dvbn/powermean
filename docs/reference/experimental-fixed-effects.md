@@ -193,12 +193,13 @@ covariance evaluated there. `provenance.options["bias_correction"]` records
 the correction. If the root is not certified, the coefficients and the
 correction are withheld.
 
-After a WZ correction, `fixef()` and joint in-sample `predict()` remain
+After a WZ correction, `fixef()` and `predict()` are
 outputs of the original uncorrected root; corrected slopes are not combined
 with original effects. Their `attrs` record
 `evaluation_point="original uncorrected estimating root"` and
-`nuisance_correction="not_supplied"`. Cancelled `predict()` stays refused.
-After a short-group or cell correction, retained and recovered cancelled effects use the corrected reporting point.
+`nuisance_correction="not_supplied"`.
+After a short-group or cell correction, cancelled predictions and effects
+use the corrected reporting point.
 
 The WZ covariance adjustment is a separate request:
 `vcov={"cluster": pair, "adjustment": "wz"}`, where `pair` names the pair
@@ -230,9 +231,8 @@ equal one. HAC and Conley computation are deferred.
 Joint `fixef()` returns estimated normalized effects. Cancelled `fixef()`
 returns the retained blocks and, under the cancelled block's name, effects
 recovered in sample at the stored point; [results](results.md#recovered-cancelled-effects)
-describes their status labels. Cancelled `predict()` is refused, in sample
-and for new data. A failed fit retains its actual status and diagnostics,
-not a manufactured successful result.
+describes their status labels and how they are used in prediction.
+A failed fit retains its actual status and diagnostics.
 
 Preparation remains order neutral. Each fit still needs controls consistent
 with its requested order, family and formulation. See

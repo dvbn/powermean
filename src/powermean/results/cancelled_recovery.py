@@ -15,10 +15,11 @@ import numpy as np
 import pandas as pd
 from numpy.typing import NDArray
 
-from powermean.fe.cancel import CancelStructure, segment_sum, to_sorted
+from powermean.fe.cancel import CancelStructure, segment_sum, to_original, to_sorted
 from powermean.model.order_scale import OrderScale
 from powermean.model.variance import FloatArray
 from powermean.results.cancelled_bias import CancelledBias
+from powermean.results.prediction import retained_rows
 
 if TYPE_CHECKING:
     from powermean.data.retained import OrderSample
@@ -35,6 +36,7 @@ class RecoveredScale:
     effect: FloatArray
     scale: FloatArray
     log_scale: FloatArray
+    center: FloatArray
     status: tuple[str, ...]
     effect_status: tuple[str, ...]
 
@@ -104,7 +106,12 @@ def recover_scales(
     effect_status[lost_effect] = "underflow"
     effect[np.isinf(effect) | lost_effect] = np.nan
     return RecoveredScale(
-        effect, scale, log_a, tuple(status.tolist()), tuple(effect_status.tolist())
+        effect,
+        scale,
+        log_a,
+        mean_v,
+        tuple(status.tolist()),
+        tuple(effect_status.tolist()),
     )
 
 
@@ -174,11 +181,11 @@ def _working_point(
     return np.concatenate((slopes, working_effects))
 
 
-def cancelled_effect(
+def _recover(
     sample: OrderSample,
     envelope: RetainedCancelledEnvelope,
     bias: CancelledBias | WZBias | None,
-) -> pd.Series[float]:
+) -> tuple[FloatArray, RecoveredScale]:
     """Recover lazily from existing normal-API rows and one coherent point.
 
     Original and WZ views use the whole original point. BBP uses its stored
@@ -188,22 +195,50 @@ def cancelled_effect(
     """
     full = _working_point(envelope, bias)
     structure = envelope.geometry.structure
+    rows = retained_rows(sample.positions, structure.positions)
     at = envelope.geometry.n_slopes_full
     with np.errstate(over="raise", invalid="raise"):
         v = to_sorted(
-            structure, sample.problem.offset + sample.design.matrix @ full[:at]
+            structure,
+            sample.problem.offset[rows] + sample.design.matrix[rows] @ full[:at],
         )
         for codes, size in zip(
             structure.retained_sorted_codes, structure.block_sizes, strict=True
         ):
             v += full[at : at + size][codes]
             at += size
-    recovered = recover_scales(
-        to_sorted(structure, sample.problem.response), v, structure, sample.omega
+    return v, recover_scales(
+        to_sorted(structure, sample.problem.response[rows]), v, structure, sample.omega
     )
+
+
+def cancelled_index(
+    sample: OrderSample,
+    envelope: RetainedCancelledEnvelope,
+    bias: CancelledBias | WZBias | None,
+) -> tuple[FloatArray, NDArray[np.bool_]]:
+    """The transformed fitted index using the same recovery as fixef."""
+    v, recovered = _recover(sample, envelope, bias)
+    structure = envelope.geometry.structure
+    codes = structure.sorted_codes
+    zero = (np.asarray(recovered.status) == "zero")[codes]
+    with np.errstate(over="raise", invalid="raise"):
+        q = (v - recovered.center[codes]) + recovered.log_scale[codes]
+    if not np.isfinite(q[~zero]).all():
+        raise FloatingPointError("a recovered prediction index is not representable")
+    return to_original(structure, q), to_original(structure, zero)
+
+
+def cancelled_effect(
+    sample: OrderSample,
+    envelope: RetainedCancelledEnvelope,
+    bias: CancelledBias | WZBias | None,
+) -> pd.Series[float]:
+    """Expose the normalized effect and recovery status at the reporting point."""
+    _, recovered = _recover(sample, envelope, bias)
     out = recovery_series(
         recovered,
-        structure,
+        envelope.geometry.structure,
         envelope.cancelled_name,
         point=(
             "bbp_reporting_point"

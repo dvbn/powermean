@@ -70,6 +70,7 @@ of this module starts (:mod:`powermean.solve.profiled_linear_loss`).
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
@@ -346,6 +347,10 @@ class ProfiledEvaluator:
         self.previous: Bundle | None = None
         self.held: list[Bundle] = []
         self.alarm: Alarm | None = None
+        self.strict_stop: Callable[[PointProfile | ConditionalPoint], bool] | None = (
+            None
+        )
+        self.certify_opening = False
         self.slope_seed: AbsorptionState | None = None
         self.slope_pending: tuple[Bundle | None, AbsorptionState] | None = None
         self.slope_cold_origin: Bundle | None = None
@@ -605,11 +610,16 @@ class ProfiledEvaluator:
             raise ValueError("the start of the attempt is not profiled")
         return self.opening
 
-    def started(self, loss: float) -> None:
+    def started(self, loss: float) -> bool:
         """The start is evaluated with ``loss``: it is accepted; ZC is evaluated."""
         opening = self._opened()
         self.accepted = Bundle(opening, loss, None)
         _stop(self._alarm("initial", opening, chord=None, converged=False))
+        return (
+            self.certify_opening
+            and self.strict_stop is not None
+            and self.strict_stop(opening)
+        )
 
     def inspect(self) -> PointProfile | ConditionalPoint:
         """ZC at the profiled start of a solve without slopes; the start if no alarm."""
@@ -617,7 +627,7 @@ class ProfiledEvaluator:
         _stop(self._alarm("initial", opening, chord=None, converged=False))
         return opening
 
-    def stepped(self, converged: bool, gradient: FloatArray) -> None:
+    def stepped(self, converged: bool, gradient: FloatArray) -> bool:
         """A step was accepted and tested natively: indications, then the schedule.
 
         ``gradient`` is the engine's averaged gradient at the accepted point.
@@ -641,6 +651,11 @@ class ProfiledEvaluator:
             final=self.controls.absorb_tol_final,
         )
         self.score = score
+        return (
+            converged
+            and self.strict_stop is not None
+            and not self.strict_stop(accepted.point)
+        )
 
     def _alarm(
         self,
@@ -652,7 +667,7 @@ class ProfiledEvaluator:
     ) -> Alarm | None:
         """ZC at ``point`` and ``chord`` coalesced into one kept alarm, or ``None``."""
         zero = None
-        if where != "accepted" or converged:  # not at an iterate that is no root
+        if self.strict_stop is None and (where != "accepted" or converged):
             zero = zero_row_alarm(self.problem.z, point.index, self.positions)
         if zero is None and chord is None:
             return None

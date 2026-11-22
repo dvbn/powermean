@@ -50,7 +50,12 @@ from __future__ import annotations
 import ast
 import re
 import symtable
+from collections.abc import Container
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from powermean.formula.formulaic_api import Spec
 
 # A Python string, or a name within backticks, in the expression of a Python factor,
 # read as Formulaic's tokenizer reads them: a backslash keeps the next character from
@@ -339,3 +344,16 @@ def _bound(target: ast.expr) -> list[str]:
         for node in ast.walk(target)
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)
     ]
+
+
+def columns_read(spec: Spec, columns: Container[str]) -> tuple[str, ...]:
+    """The data columns that the factors of ``spec`` read, sorted."""
+    read: set[str] = set()
+    literal_q = "Q" not in columns
+    for term in spec.term_slices:
+        for factor in term.factors:
+            if factor.eval_method.value == "lookup":
+                read.add(factor.expr)
+            elif factor.eval_method.value == "python":
+                read |= python_names(factor.expr, literal_q=literal_q)
+    return tuple(sorted(name for name in read if name in columns))

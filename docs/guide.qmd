@@ -69,12 +69,14 @@ Download the [standalone HTML guide](#read-the-guide) for offline reading. The [
 - [Choose a mean and working variance](#model), including PPML, Gamma PML, log OLS and NB2.
 - [Estimate fixed effects](#fixed-effects) and check what identifies the slope.
 - [Cancel one fixed-effect block](#cancellation) and compare the resulting estimating equations.
+- [Difference out two fixed-effect blocks](#jochmans) in a complete rectangle or directed array.
 - [Choose a solver](#numerical-methods) and interpret its certificate.
 
 ## Read and report results {#read-the-guide--read-and-report-results .unlisted}
 
 - [Check and compare estimation samples](#compare-samples), then describe their outcomes.
 - [Explore and export a fit](#reuse-a-fit), including predictions, coefficient tests, contrasts and tables.
+- [Predict and extract fixed effects](#results--prediction-and-retention), then replace covariates on the fitted rows for a counterfactual.
 - [Interpret proportional changes](#proportional-changes) on the fitted and population scales.
 
 ## Panel designs and inference {#read-the-guide--panel-designs-and-inference .unlisted}
@@ -108,19 +110,21 @@ Download the [standalone HTML guide](#read-the-guide) for offline reading. The [
 
 ## Install Powermean {#install}
 
-Use Python 3.12 or later. Install Powermean from PyPI in your analysis environment.
+Use Python 3.12 or later. The examples in this guide require Powermean 0.1.1 or
+later.
 
 ### Install in your analysis environment {#install--install-in-your-analysis-environment}
 
-Choose a separate environment and run:
+Choose a separate environment. Once 0.1.1 is available on PyPI, run:
 
 ```bash
-python -m pip install powermean
+python -m pip install "powermean>=0.1.1"
 python -c "from importlib.metadata import version; print(version('powermean'))"
 ```
 
-A local wheel or source archive also installs with `python -m pip install`
-followed by the filename. A wheel name gives its Python version and platform.
+A local wheel or source archive installs with `python -m pip install`
+followed by the filename. From a source checkout, run `python -m pip install .`.
+A wheel name gives its Python version and platform.
 [IOLS installation](#iols-installation) explains the compiled and NumPy-only wheels.
 
 The release workflow builds separate wheels for CPython 3.12, 3.13 and 3.14
@@ -448,8 +452,9 @@ install Matplotlib in the same Python environment.
 | Example | Script | What to read |
 | --- | --- | --- |
 | Gravity with zeros | [`examples/first_fit.py`](../examples/first_fit.py) | [Three-way PPML](#first-fit) and [WZ adjustments](#bias-correction) |
-| Firm sales over four years | [`examples/short_panel.py`](../examples/short_panel.py) | [Joint and firm-cancelled Gamma equations](#cancellation) |
+| Firm sales over four years | [`examples/short_panel.py`](../examples/short_panel.py) | [Firm-cancelled Gamma and counterfactual prediction](#cancellation) |
 | Nonlinear panel DiD | [`examples/nonlinear_did.py`](../examples/nonlinear_did.py) | [Common and cohort-period effects](#nonlinear-did) |
+| Two-way exponential regression | [`examples/jochmans.py`](../examples/jochmans.py) | [Rectangular and directed Jochmans fits, with recovered predictions](#jochmans) |
 | No-FE PPML with IOLS | [`docs/examples/iols_first_fit.py`](examples/iols_first_fit.py) | [Check the IOLS installation](#iols-installation) |
 
 The [sample comparison](#compare-samples) uses two fits of the same frame
@@ -680,13 +685,13 @@ estimation error in the joint score. [Benatia et al. (2026), §5.1 and Supplemen
 ### Choose what you need from the fit {#fixed-effects--choose-what-you-need-from-the-fit}
 
 Use joint estimation when the joint equation is the one justified for your
-design or when you need joint in-sample predictions. Use cancellation when
-the within-group equation and short-group argument fit your design.
+design. Use cancellation when the within-group equation and short-group
+argument fit your design.
 `fixef()` in a cancelled fit can recover a scale from each group's observed
 outcomes and the fitted slopes and retained effects. A short group's recovery
-can remain noisy as more groups enter the sample. Cancelled results offer
-slopes, uncertainty and in-sample scale recovery. Joint results supply
-in-sample predictions.
+can remain noisy as more groups enter the sample. Both fits supply in-sample
+predictions and accept replacement covariates on the retained rows.
+[Prediction and counterfactuals](#results--prediction-and-retention)
 
 [Cancellation in a short firm panel](#cancellation) shows where switching
 estimators changes the result. [Advanced FE options](#experimental-fe)
@@ -806,12 +811,173 @@ see the sample and cluster count used for your fit.
 Read the slope, interval and `result.sample` in the usual way.
 `cancelled_gamma.fixef()` gives estimated year effects and in-sample
 recovered firm scales on the log power-mean scale, with status labels and
-without standard errors. For a cancelled fit, prediction is unavailable. [Recovered effects](#results--recovered-cancelled-effects)
+without standard errors. `predict()` combines those scales with the retained
+effects, offsets and slope index on the fitted rows.
+[Recovered effects](#results--recovered-cancelled-effects)
 
 In gravity the exporter-year and importer-year blocks can grow even after
 cancelling pairs. Their estimation can still shift the slope distribution.
 [Coefficient bias](#bias-correction) explains that case and the optional
 short-group correction.
+
+## Difference out two fixed-effect blocks {#jochmans}
+
+Set `estimator="gmm1"` or `"gmm2"` in `pm.fit` for an exogenous exponential mean
+with two fixed-effect blocks. Jochmans's differences remove both blocks from
+the estimating equation. The fitted result reports the slopes.
+[Papers](#references--two-way-exponential-regression)
+
+### Choose the observed array {#jochmans--choose-the-observed-array}
+
+Supply a data frame with one row per observed cell, finite regressors
+and a finite nonnegative outcome. Use `0 +` for an intercept-free
+Formulaic design and put exactly two identifier columns after `|`, in place of
+the two identifier options in the authors' Stata commands. `estimator=` selects
+the equation (`model()` in Stata). `start=` takes a one-dimensional vector in
+coefficient order (`initial()` in Stata).
+
+#### Rectangular panels {#jochmans--rectangular-panels}
+
+Use `fe_layout="rectangular"` (the default for GMM fits, corresponding to
+`twexp`) for a complete crossing with at least two levels on each axis. A panel needs one row
+per unit and period. The unit and period labels are separate, and the two
+dimensions can have different lengths.
+A two-by-two panel contains only one rectangle, so it cannot yield usable
+cell-projection standard errors. The fit refuses with `unusable_covariance`
+if it reaches a root on that layout.
+
+The `twexp` help illustrates the method with firms' patent counts and log R&D
+spending, originally stored in separate columns for each year. Reshape such
+data to long format before fitting. To follow the authors' example of using
+the GMM1 slopes to initialize GMM2, keep the formula and its column order fixed.
+
+```python
+import powermean as pm
+
+formula = "patents ~ 0 + log_rd | firm + year"
+gmm1 = pm.fit(formula, firm_year, estimator="gmm1")
+gmm2 = pm.fit(formula, firm_year, estimator="gmm2", start=gmm1.coef())
+print(pm.etable(gmm1, gmm2, uncertainty="ci"))
+```
+
+#### Directed dyads {#jochmans--directed-dyads}
+
+Use `fe_layout="directed"` (corresponding to `twgravity`) for a cross-section of
+ordered pairs of agents. Supply every ordered non-self link among at least
+four agents. Use the same labels for an agent in the origin and destination
+columns. The outcome and regressors may differ in opposite directions.
+
+The `twgravity` help fits trade flows in levels using bilateral variables
+such as log distance, a shared border and a shared language.
+
+```python
+fit = pm.fit(
+    "trade ~ 0 + log_distance + border + common_language | exporter + importer",
+    bilateral_trade, estimator="gmm2", fe_layout="directed",
+)
+print(fit.summary())
+```
+
+An observed zero stays in the sample. Missing pairs, duplicate pairs, missing
+or non-finite model values, and self-links in the directed layout raise
+`SampleError`. To restrict the fit as you would with Stata's `if` or `in`,
+filter the data frame first and pass a complete array on the selected levels.
+[Runnable examples for both layouts](../examples/jochmans.py)
+
+### Choose the moment equation {#jochmans--choose-the-moment-equation}
+
+Write $p=x_{ij}+x_{k\ell}$, $q=x_{i\ell}+x_{kj}$, $P=y_{ij}y_{k\ell}$ and
+$Q=y_{i\ell}y_{kj}$. Both methods set the average of $(p-q)D(b)$ to zero over
+admissible rectangles. Directed rectangles use four distinct agent labels.
+
+| Method | Difference $D(b)$ |
+| --- | --- |
+| `"gmm1"` | $P\exp(-p'b)-Q\exp(-q'b)$ |
+| `"gmm2"` | $P\exp(q'b)-Q\exp(p'b)$ |
+
+These are the two moment equations in Jochmans and Verardi (2020).
+GMM2 gives each GMM1 rectangle a coefficient-dependent multiplier
+$\exp((p+q)'b)$. The roots can differ. With exogenous slopes each equation
+has as many moments as slopes and uses a local Newton root solve. The
+default start is zero. Use `start=` to supply a finite vector in the
+displayed coefficient order and `max_iter=` to change the budget.
+
+The multiplicative errors must have unit conditional means and unit
+conditional products for the opposite cell pairs used by the differences,
+given the full regressor array and fixed effects. For the cell-projection
+standard errors, assume conditional independence of the observed cells
+and the large-array regularity of the source, including growth in both
+dimensions. This scope excludes fixed-$T$ and unrestricted dyadic
+dependence. Calling this estimator adopts these assumptions.
+
+An intercept, an additive row or column regressor, or dependent rectangle
+contrasts raise `IdentificationError`. The solver also requires a resolved
+full-rank Jacobian at the evaluated point. Both a scaled moment and a
+local Newton correction must pass before inference. The returned
+`fit.certificate.status` is `"local_solution"`; existence and outcome can
+depend on the data and the start. [Troubleshoot a refusal](#troubleshooting--jochmans-fits)
+
+### Read uncertainty and compare with Stata {#jochmans--read-uncertainty-and-compare-with-stata}
+
+Use `fit.coef()`, `fit.se()`, `fit.vcov()`, `fit.confint()`, `fit.tidy()`
+and `fit.summary()`. `fit.sample.positions` and `fit.sample.retained_index`
+keep input order. `pm.etable` can display fitted slopes or their
+unit-change transformations `exp(b) - 1`.
+
+Each projection row sums the kernels of rectangles incident on that
+observed cell. With $M$ rectangles and $N$ observed cells, the projection
+is $h_s=(N/M)\sum_{r\ni s}(p_r-q_r)D_r(b)$. Let $G$ be the derivative of
+the mean moment. The `vcov="paper"` default uses
+$G^{-1}(\sum_s h_s h_s'/N)G^{-\mathsf T}/N$ and normal-reference intervals.
+In the rectangle $M=\binom{I}{2}\binom{J}{2}$ and $N=IJ$. In the directed
+array $M=\binom{n}{2}\binom{n-2}{2}$ and $N=n(n-1)$.
+
+Use `vcov="stata"` to apply the `twgravity` additional multiplier
+$(n-1)/n$ for directed fits. The source averages projection products
+over its $n^2$ matrix slots and uses the observed $N$ for the final
+coefficient covariance. The option has unit multiplier in the rectangle.
+`fit.with_vcov("stata")` changes the reporting convention on an existing
+fit. Both layouts use cell projections as their available inference.
+
+Powermean subtracts the mean of the observed design columns before solving.
+In the source comparisons, `twexp` GMM2 centers on a square-padded
+array and `twgravity` centers by the observed sum divided by $n^2$.
+The different centers change valid-cell regressors by a common shift,
+scaling the equation and its projection by a coefficient-dependent
+factor. At the root that factor cancels from the sandwich because the
+corresponding Jacobian term proportional to the moment is zero. A
+fully padded row or column contributes zero to both rectangular outcome
+products. In the directed calculation the diagonal is masked in both
+factors, so only rectangles made from observed links contribute.
+
+### Predict trade after fitting {#jochmans--predict-trade-after-fitting}
+
+`fit.predict()` recovers origin and destination effects by PPML with
+the GMM slopes held fixed. The fitted trade totals match the observed
+origin and destination totals. Each residual is observed trade minus
+fitted trade.
+
+For the directed fit above, the following compares fitted trade with
+trade predicted if every retained pair had a common language.
+
+```python
+retained = bilateral_trade.iloc[fit.sample.positions]
+fitted = fit.predict()
+effects = fit.predict(type="fixed_effects")
+residuals = fit.predict(type="residual")
+same_language = fit.predict(retained.assign(common_language=1))
+```
+
+The second prediction uses the same slopes and recovered effects.
+See the [runnable GMM example](../examples/jochmans.py) for synthetic data
+and [prediction and counterfactuals](#results--prediction-and-retention)
+for the retained-row requirements.
+
+The implementation contracts matrix products and sums without listing
+rectangles. In float64 it places a conservative bound of 150 on the
+absolute centered fitted index and on the log range of positive outcomes
+after common normalization. Ill-resolved cancellation, failed root
+checks and unusable covariance can lead to refusal. [Function index](#api--pmfit)
 
 ## Choose a solver and read its assessment {#numerical-methods}
 
@@ -832,6 +998,8 @@ calls compute a selected root. Unless you supply `start`, the procedure
 starts from a certified fit of the nearest convex family member on the same
 sample. The available root need not be unique, and some combinations have
 narrower existence results. Cancellation uses its own starting rules.
+If continuation runs, earlier certified stages supply starting values. The
+reported result and its certification always use the requested `tau`.
 [Power-variance range](#options--full-family-scope-and-the-current-entry-restriction)
 
 ### What the convergence assessment checks {#numerical-methods--what-the-convergence-assessment-checks}
@@ -1638,10 +1806,13 @@ can break this agreement. Wooldridge's Proposition 3.1 establishes a
 different equivalence, between pooled canonical-link QMLE and the imputation
 procedure under its conditions. Its Poisson argument does not carry over
 to a Gamma score with a log link. The cancelled Gamma column differs because
-the four-period histories yield different weights. For the cancelled fits,
-Powermean supplies inference for the coefficients and their proportional
-contrasts. Their `predict()` method and a dedicated DiD aggregation routine
-are unavailable.
+the four-period histories yield different weights. Both cancelled fits can
+recover unit effects with `fixef()` and return fitted expected visits with
+`predict()`. To switch off the policy, set the cohort-period treatment
+indicators to zero on the retained rows and pass those rows to `predict()`.
+This holds the recovered effects fixed. The DiD aggregation and inference
+example below builds its own table from a pooled PPML fit.
+[Prediction and counterfactuals](#results--prediction-and-retention)
 
 ### Plot the cohort-by-period effects {#nonlinear-did--plot-the-cohort-by-period-effects}
 
@@ -2245,6 +2416,14 @@ A formula with fixed-effect blocks fits them jointly by default.
 Use `cancel="block"` to cancel one named block.
 [Fit options](#options) · [Gravity fit](#first-fit--fit-with-three-fixed-effect-blocks) · [Nonlinear DiD](#nonlinear-did--fit-the-twfe-equation-with-different-working-variances)
 
+Set `estimator="gmm1"` or `"gmm2"` to difference out exactly two fixed-effect
+blocks with the Jochmans exogenous moments. Use an intercept-free formula.
+The default `fe_layout="rectangular"` requires a complete crossing. Set
+`fe_layout="directed"` for complete ordered non-self links. The returned
+`JochmansResult` reports coefficient inference, sample identity and a local
+root certificate. [Two-way difference options](#options--two-way-difference-options) ·
+[Method and example](#jochmans)
+
 #### `pm.ppml()` {#api--pmppml}
 
 `pm.ppml(formula, data, **options)` returns a PPML result with `omega=1`
@@ -2446,18 +2625,21 @@ of `q` per restriction row.
 
 ##### `predict()` {#api--predict}
 
-`fit.predict(data=None, *, type="power_mean")` returns a Series of
-fitted conditional power means. Fits without fixed effects also accept
-compatible new data. On a joint gravity fit, `fit.predict()` gives the
-in-sample conditional arithmetic means on retained rows. Prediction
-requires a joint or no-FE fit.
+`fit.predict(data=None, *, type="power_mean")` returns a Series of fitted
+conditional power means. Use `type="fixed_effects"` to extract the block
+Series returned by `fixef()`, or `type="residual"` for response residuals
+on the fit's estimating scale. Both use the original fit sample.
+For fixed-effect counterfactuals, pass replacement covariates in the
+retained row order and keep the index. Slopes, offsets and fixed effects
+come from the fit. Fits without fixed effects also accept compatible new
+rows.
 [Prediction](#results--prediction-and-retention) · [Worked prediction](#reuse-a-fit--inspect-predictions-and-influence-contributions)
 
 ##### `fixef()` {#api--fixef}
 
 `fit.fixef()` returns a dictionary of block names to Series of normalized
-levels for an FE fit, including recovered levels for supported cancelled
-fits. [Fixed effects](#results--fixed-effect-results) · [Worked recovery](#results--recovered-cancelled-effects)
+levels for an FE fit, including recovered levels for cancelled and two-way
+GMM fits. [Fixed effects](#results--fixed-effect-results) · [Worked recovery](#results--recovered-cancelled-effects)
 
 #### Sample and diagnostics {#api--sample-and-diagnostics}
 
@@ -2654,8 +2836,9 @@ regime. [Methods and papers](#references)
 | Task | Domain |
 | --- | --- |
 | Fit without fixed effects | `pm.fit` with finite mean orders, power working variance or supported NB2, plus log OLS at order zero. Positive orders allow zeros. Nonpositive orders require positive outcomes. |
-| Estimate fixed effects jointly | One or more blocks after `\|` in the formula. Joint prediction is in sample. Supplied observation weights are unavailable. |
-| Cancel one block | Select a named block at nonzero mean order, with every other block retained. The working variance and equation have method-specific requirements. `fixef()` can recover the cancelled scales in sample. |
+| Estimate fixed effects jointly | One or more blocks after `\|` in the formula. Predict in sample or replace covariates on retained rows. Supplied observation weights are unavailable. |
+| Cancel one block | Select a named block at nonzero mean order, with every other block retained. Recover the cancelled scales with `fixef()` or use them for prediction. |
+| Difference out two blocks | `pm.fit` with `estimator="gmm1"` or `"gmm2"` on complete rectangles or complete directed non-self links. Cell-projection covariance and prediction with recovered effects. [Method](#jochmans) |
 | Choose a numerical procedure | Newton is the default for nonlinear fits. IOLS handles supported no-FE models with positive order and power `tau` in `[1, 2]`. Order zero uses a linear calculation. |
 | Reuse prepared rows | `pm.prepare` captures the design and available cluster information. Supported fits can change mean, working variance or covariance within the prepared domain. |
 | Estimate uncertainty | Robust, named HC and one- or multiway cluster methods within their fit-time and postfit domains. With cancellation, use observed bread. The fit-specific default covariance and the named HC rules are in [options](#options--fit-time-covariance-for-fixed-effects). |
@@ -2670,7 +2853,8 @@ requests a selected root. Those values have narrower existence results.
 The [advanced FE options](#experimental-fe)
 describe experimental module-level records and correction requirements.
 Powermean does not compute HAC or Conley covariance, the deletion or higher-order covariance estimators of Benatia et al. (2026), automatic working-variance targeting,
-instrumental-variable estimates or multiple-block cancellation. The
+or instrumental-variable estimates. The `cancel=` option of `pm.fit` accepts
+one block. The
 [options](#options) and [results](#results)
 references give accepted spellings and result-specific limits. Find a
 function or output in the [function index](#api) and look up all
@@ -2689,7 +2873,7 @@ For reproducible results, record the installed version and the wheel or source a
 
 | Function | Purpose |
 | --- | --- |
-| `fit(formula, data, **options)` | Choose mean order and working variance. |
+| `fit(formula, data, **options)` | Choose mean order and working variance, or select a two-way difference estimator. |
 | `ppml(formula, data, **options)` | Fix `omega=1`, `tau=1`. |
 | `gpml(formula, data, **options)` | Fix `omega=1`, `tau=2`. |
 | `logols(formula, data, **options)` | Fix `omega=0`; require positive outcomes. |
@@ -2742,6 +2926,22 @@ Prepared fits use only clustering information retained during preparation.
 Convenience wrappers refuse contradictory mean or variance choices.
 The full numerical defaults and domains are in [solver options](#solver-options),
 including the [IOLS options](#solver-options--iols-options).
+
+#### Two-way difference options {#options--two-way-difference-options}
+
+Select `estimator="gmm1"` or `"gmm2"` in `pm.fit` and use an intercept-free
+formula with exactly two fixed-effect identifiers. These fits accept the
+following options and require the input to contain every cell of the chosen
+geometry. Filter the data frame first to fit on a smaller complete array.
+[Two-way difference method](#jochmans)
+
+| Argument | Default | Meaning |
+| --- | --- | --- |
+| `estimator` | Required for this route | `"gmm1"` or `"gmm2"` selects the Jochmans moment equation. |
+| `fe_layout` | `"rectangular"` | A complete crossing of two dimensions, or `"directed"` for all ordered non-self links among common agents. |
+| `vcov` | `"paper"` | Observed-cell normalization, or `"stata"` to match the directed Stata normalization. |
+| `start` | Zero slopes | Finite starting slopes in formula design order. |
+| `max_iter` | `100` | Maximum number of accepted Newton updates. |
 
 #### Full-family scope and the current entry restriction {#options--full-family-scope-and-the-current-entry-restriction}
 
@@ -2989,9 +3189,9 @@ and the numerical assessment concerns the computed point.
 | `confint(level=0.95)` | A DataFrame with `lower` and `upper`. |
 | `tidy(level=0.95)` | Coefficients and uncertainty in one table. |
 | `summary(level=0.95)` | Text summary, displayed with `print(result.summary())`. |
-| `predict(data=None, type="power_mean")` | No-FE: conditional power means, including compatible new data. Joint FE: in-sample values only. Cancelled: refused. |
+| `predict(data=None, type="power_mean")` | Fitted conditional power means, fixed-effect levels or response residuals. Replacement covariates are supported for fitted means. |
 | `influence(unit="sampling")` | Retained first-order contributions by sampling unit and coefficient. A cancelled result gives one row per cancelled group by default. Use `unit="row"` for contributions indexed by original row position. |
-| `fixef()` | Joint FE: normalized estimated levels. Cancelled: retained blocks and the [recovered cancelled block](#results--recovered-cancelled-effects). Refused for no-FE fits. |
+| `fixef()` | Joint FE: normalized estimated levels. Cancelled and two-way GMM: includes ex-post recovered levels. Available for fits with fixed effects. |
 | `effect`, `effects`, `contrast` | Proportional changes on the fitted conditional power mean; see [below](#results--proportional-effects-contrasts-and-tests). |
 | `lincom`, `nlcom`, `test`, `wald` | Coefficient combinations and restriction tests. |
 | `sample.table()` | Counts by exclusion reason, in processing order. |
@@ -3164,12 +3364,13 @@ reference. A corrected FE result adds the columns `uncorrected` and `bias`.
 
 ### Prediction and retention {#results--prediction-and-retention}
 
-Interpret a prediction using the mean order chosen at fitting. At order one predictions are conditional arithmetic means. Other orders give
-conditional power means. Exponentiating the fitted log OLS index does not add
-the retransformation correction needed for an arithmetic mean. New data must
-supply the regressors in the original formula and any offset or exposure used
-by the fit. This includes formula inputs for columns omitted due to
-collinearity; those columns are evaluated but do not enter the prediction.
+Interpret a prediction using the mean order chosen at fitting. At order one,
+predictions are conditional arithmetic means. Other orders give conditional
+power means. Exponentiating the fitted log OLS index does not add
+the retransformation correction needed for an arithmetic mean. A replacement
+frame supplies the original raw regressors, including inputs for formula
+columns omitted due to collinearity. No-FE predictions on new data also read
+the offset or exposure specified at fitting.
 
 For predictions without fixed effects, `predict(data)` uses the categorical
 levels learned during fitting, including the reference level. A missing
@@ -3178,8 +3379,64 @@ If any observed value is outside the fitted levels, `predict(data)` raises
 a `SpecificationError` that identifies the factor and the unexpected value.
 `contrast()` also requires categorical values to belong to the fitted levels.
 
-Joint FE prediction supports in-sample fitted values only: supplying new data
-is unavailable.
+For a fixed-effect fit, `fit.predict()` uses the retained rows in fitting order.
+`fit.predict(type="fixed_effects")` returns the same dictionary of normalized
+level Series as `fit.fixef()`. `fit.predict(type="residual")` subtracts the fitted
+response from the observed response on the estimating scale. The response is
+`Y` at `omega=1`, `log(Y)` at `omega=0`, and `Y**omega` at other orders.
+
+For rows with finite effects, Powermean adds the slope index, offset and
+fixed effects on the log scale, then exponentiates. An exposure contributes
+its logarithm as an offset. Joint fits already have the effects. Cancelled
+fits recover the missing group scale from the observed outcomes and fitted
+index. Two-way GMM fits recover both effect blocks by PPML with the GMM
+slopes held fixed. [Fixed-effect recovery](#results--fixed-effect-results)
+
+For a fixed-effect counterfactual, pass a frame with the same retained index
+and row order, containing the raw regressors used by the original formula.
+The fit replays its learned coding and transforms, holds the original offsets
+and effects fixed, and evaluates the slopes at the replacement covariates.
+If the frame includes FE identifiers, they must match the fitted membership.
+An outcome column is unnecessary.
+
+#### Predict from a cancelled Gamma fit {#results--predict-from-a-cancelled-gamma-fit}
+
+Run this from the source root. The simulated firm panel uses mean order one,
+so fitted sales and residuals are in outcome units.
+
+```python
+import numpy as np
+import pandas as pd
+import powermean as pm
+
+from examples.short_panel import FORMULA, firm_data
+
+data = firm_data()
+fit = pm.fit(FORMULA, data, omega=1, tau=2, cancel="firm", cluster="firm")
+rows = data.iloc[fit.sample.positions]
+fitted = fit.predict()
+effects = fit.predict(type="fixed_effects")
+residuals = fit.predict(type="residual")
+counterfactual = fit.predict(rows.assign(price_index=rows["price_index"] + 0.10))
+
+log_mean = (
+    fit.coef()["price_index"] * rows["price_index"]
+    + rows["firm"].map(effects["firm"])
+    + rows["year"].map(effects["year"])
+)
+np.testing.assert_allclose(fitted, np.exp(log_mean))
+print(pd.DataFrame({
+    "Sales": rows["sales"],
+    "Fitted sales": fitted,
+    "Sales at higher price": counterfactual,
+    "Residual": residuals,
+}).head().round(3))
+print(effects["firm"].head())
+```
+
+The counterfactual adds 0.10 to the price index and keeps each firm's
+recovered scale and year effect fixed. For prediction after a bias
+correction, see [which fitted point is used](#results--corrected-results).
 
 #### Recompute uncertainty from stored information {#results--recompute-uncertainty-from-stored-information}
 
@@ -3305,7 +3562,18 @@ The normalization preserves the fitted index and `predict()` returns in-sample
 fitted values.
 
 For cancelled fits, `fixef()` returns the retained blocks and the recovered
-cancelled block described below. Prediction is unavailable for cancelled fits.
+cancelled block described below. `predict()` uses the same recovery across
+supported working variances. A retained all-zero group gives zero fitted
+means and a missing log effect. The prediction's `zero_boundary_rows` attribute
+lists boundary rows by position within the retained sample.
+
+For two-way GMM, post-estimation recovery holds the GMM slopes fixed and fits
+only the two effect blocks by PPML at the slope index. The fitted means match
+the observed row and column totals on observed cells. A directed fit uses
+its non-self links. If a cell cannot carry positive mass at those margins,
+its fitted mean is zero. An unsupported level has a missing effect. In each
+component of the positive support, the first supported column effect is
+normalized to zero.
 
 #### Fixed-effect block counts in the summary {#results--fixed-effect-block-counts-in-the-summary}
 
@@ -3387,8 +3655,8 @@ is `v` centered within the group, its `log_scale`, a `status` and a
 after a short-group or cell correction, its reporting point. The `attrs` state that neither
 consistency of each effect nor unbiasedness of the plug-in values is
 asserted and that no standard errors are supplied: with fixed short groups
-these values remain noisy. They describe the estimation sample; they are
-neither predictions nor estimates with a known sampling error.
+these values remain noisy. The resulting fitted means and counterfactuals
+condition on the recovered scales.
 
 Inspect the fitted levels and recovered scales after following the
 [short-panel example](#cancellation):
@@ -3436,6 +3704,18 @@ status with coefficients and standard errors. The
 [example collection](#examples) links these outputs back to
 recorded displays; [validation](#validation) explains what evidence
 is needed to make broader claims.
+
+### Jochmans fits {#results--jochmans-fits}
+
+`pm.fit(..., estimator="gmm1")` or `estimator="gmm2"` returns a
+`JochmansResult`. Read `coef()`, `se()`,
+`vcov()`, `confint(level)`, `tidy(level)`, `effects(level=...)`,
+`summary(level)` and `sample`. It supports `pm.etable()` and
+`with_vcov("paper")` or `with_vcov("stata")`. The certificate records
+the final relative moment and scaled Newton correction. Both effect
+blocks are differenced, so the result exposes slope inference and
+unit-change transformations of the slope coordinates.
+[Method and covariance conventions](#jochmans)
 
 ## Tables and formats {#tables}
 
@@ -3888,12 +4168,13 @@ covariance evaluated there. `provenance.options["bias_correction"]` records
 the correction. If the root is not certified, the coefficients and the
 correction are withheld.
 
-After a WZ correction, `fixef()` and joint in-sample `predict()` remain
+After a WZ correction, `fixef()` and `predict()` are
 outputs of the original uncorrected root; corrected slopes are not combined
 with original effects. Their `attrs` record
 `evaluation_point="original uncorrected estimating root"` and
-`nuisance_correction="not_supplied"`. Cancelled `predict()` stays refused.
-After a short-group or cell correction, retained and recovered cancelled effects use the corrected reporting point.
+`nuisance_correction="not_supplied"`.
+After a short-group or cell correction, cancelled predictions and effects
+use the corrected reporting point.
 
 The WZ covariance adjustment is a separate request:
 `vcov={"cluster": pair, "adjustment": "wz"}`, where `pair` names the pair
@@ -3925,9 +4206,8 @@ equal one. HAC and Conley computation are deferred.
 Joint `fixef()` returns estimated normalized effects. Cancelled `fixef()`
 returns the retained blocks and, under the cancelled block's name, effects
 recovered in sample at the stored point; [results](#results--recovered-cancelled-effects)
-describes their status labels. Cancelled `predict()` is refused, in sample
-and for new data. A failed fit retains its actual status and diagnostics,
-not a manufactured successful result.
+describes their status labels and how they are used in prediction.
+A failed fit retains its actual status and diagnostics.
 
 Preparation remains order neutral. Each fit still needs controls consistent
 with its requested order, family and formulation. See
@@ -3983,7 +4263,7 @@ by the package already available. A local, offline wheel-installation recipe is:
 
 ```sh
 python -m pip install --no-index --no-deps --no-compile \
-    ./artifacts/powermean-0.1.0-*.whl
+    ./artifacts/powermean-*.whl
 ```
 
 Put only the selected wheel in `artifacts`. This offline command uses the
@@ -4208,6 +4488,23 @@ distribution and final numerical accuracy. [Compare with ppmlhdfe](#compare-ppml
 If the issue persists, keep both calls and use a small example someone else
 can run. [Report a problem](#report-a-problem)
 
+### Jochmans fits {#troubleshooting--jochmans-fits}
+
+- For `SampleError`, check the counts of every row/column pair and make
+  sure model values are finite. For directed links, use matching agent
+  labels in both identifiers, exclude self-links, and supply every
+  ordered pair of different agents.
+- For `IdentificationError`, check that slopes vary in rectangle
+  contrasts and that eligible rectangles contain positive products.
+  A Jacobian refusal means the equation has insufficient resolved
+  slope information at the evaluated point.
+- `ConvergenceError` identifies the numerical failure in `status`.
+  For an iteration limit or line-search refusal, inspect the supplied
+  start and the last evaluated slope state when available. An
+  `unusable_covariance` refusal means that the projection did not
+  yield a finite, resolved full covariance.
+  [Jochmans estimation and covariance](#jochmans)
+
 ## Report a reproducible problem {#report-a-problem}
 
 After [troubleshooting](#troubleshooting), a small reproducible example lets
@@ -4337,6 +4634,17 @@ from that same revision. [Paper](https://arxiv.org/abs/2203.11820v4) ·
 | [Cancellation](#cancellation) | §5.1, Proposition 7, Supplemental Appendix S3.3 and S3.6.1. Equations (S3.18) and (S3.19) compare cancellation and joint profiling. |
 | [Bias from retained effects](#bias-correction) | §5.2, Theorem 2 and Appendix C.2. Equation (5.7) is the empirical group correction. |
 | [Delete-group and higher-order covariance](#covariance-refinements--delete-group-and-higher-order-covariance) | Supplemental Appendix S3.4.2, Proposition S12, and S3.4.3, Proposition S13. |
+
+### Two-way exponential regression {#references--two-way-exponential-regression}
+
+- Jochmans, Koen (2017). *Two-Way Models for Gravity*. The Review of
+  Economics and Statistics. See section II, Theorem 2 and its supplemental
+  proof for the difference equation and cell-projection inference.
+- Jochmans, Koen and Vincenzo Verardi (2020). *Fitting exponential regression
+  models with two-way fixed effects*. The Stata Journal. Section 2 and the
+  computational appendix describe the GMM1 and GMM2 moments and the array
+  computations used by `twexp` and `twgravity`.
+  [Powermean implementation](#jochmans)
 
 ### The separate three-way PPML correction {#references--the-separate-three-way-ppml-correction}
 

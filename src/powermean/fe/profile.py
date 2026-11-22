@@ -70,6 +70,7 @@ the checked start as that state; a completed block does not).  Nothing is retrie
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from types import MemberDescriptorType
 from typing import cast
@@ -518,12 +519,35 @@ def _result(
     )
 
 
+def _refine(
+    problem: ProfileProblem,
+    point: _Point,
+    counters: _Counters,
+    numerators: Numerators | None,
+    admit: Callable[[Coefficients], bool],
+) -> _Point:
+    """Try one more sweep from a passing point, keeping only a better check."""
+    assert point.check is not None
+    moved = _sweep(problem, point, counters, numerators)
+    if moved.failure:
+        return point
+    checked = _evaluate(problem, moved.coefficients, moved.index, counters)
+    if (
+        checked.check is not None
+        and checked.check.maximum < point.check.maximum
+        and admit(checked.coefficients)
+    ):
+        return checked
+    return point
+
+
 def profile(
     problem: ProfileProblem,
     *,
     tolerance: float,
     max_sweeps: int,
     state: ProfileState | None = None,
+    _refinement: tuple[float, Callable[[Coefficients], bool]] | None = None,
 ) -> ProfileResult:
     """Profile the blocks of ``problem`` by ordered exact block updates.
 
@@ -540,6 +564,9 @@ def profile(
     state : ProfileState, optional
         The starting coefficients, bound to the same grouping; the cold start if
         omitted.  Recorded as ``start`` in the result, never modified.
+    _refinement : tuple, optional
+        A tighter target and an admission check for one optional extra sweep
+        within the existing budget. The original tolerance still controls success.
 
     Returns
     -------
@@ -582,6 +609,12 @@ def profile(
                 counters=counters,
             )
         if point.check.passing(tol):
+            if (
+                _refinement is not None
+                and not point.check.passing(_refinement[0])
+                and counters.values["sweeps_attempted"] < budget
+            ):
+                point = _refine(problem, point, counters, numerators, _refinement[1])
             return _result(
                 point,
                 CONVERGED,

@@ -253,7 +253,10 @@ class CancelledOperator(BuilderRecord):
 
     def rmatvec(self, values: FloatArray) -> FloatArray:
         """B_id' u=T'B'u, distinct from coefficient reduction P."""
-        full = self.design.rmatvec(values)
+        return self.pullback(self.design.rmatvec(values))
+
+    def pullback(self, full: FloatArray) -> FloatArray:
+        """Apply the transpose of the coefficient expansion to a score."""
         columns = self._columns
         if columns is not None:
             return finite_product(full[columns.view()])

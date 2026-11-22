@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.1.1
+
+- Predict fitted power means and response residuals for cancelled and two-way
+  GMM fits, with ex-post fixed effects available through `predict()` or
+  `fixef()`. Fixed-effect fits accept replacement covariates on retained rows.
+- Fit Jochmans GMM1 and GMM2 for complete rectangular panels and directed
+  dyads using the `estimator=` option of `powermean.fit`. Report slopes, full cell-projection
+  covariance, and normal-reference intervals. Select the Stata `twgravity`
+  covariance convention with `vcov="stata"`.
+- Follow the two-way exponential regression guide and runnable Python example.
+- Correct false certification and convergence refusals in cancelled Gamma,
+  joint Gamma near the support boundary, and exact-fit cancelled PPML with
+  Weidner–Zylkin inference. Improve convex absorbed fits and dense PPML with an
+  exposure and frequency weights.
+- Improve certification at strict tolerances in profiled interior-power
+  fixed-effect fits.
+- Stabilize the signed fixed-effect coefficient check when the reported
+  standard error is zero. Correct working covariance rank when a finite matrix
+  has an eigenvalue beyond float64 range.
+
 ## 0.1.0
 
 - Fit power-mean regressions with multiple fixed-effect blocks or cancel

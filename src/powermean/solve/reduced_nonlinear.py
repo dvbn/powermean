@@ -225,6 +225,7 @@ class ConditionalSpace:
         tolerance: float,
         max_sweeps: int,
         warm: ProfileState | None = None,
+        refine_tol: float | None = None,
     ) -> ConditionalSolve:
         """Return the actual conditional outcome before reconstructing full q."""
         theta, alpha = self.unpack(values)
@@ -238,8 +239,25 @@ class ConditionalSpace:
         if warm is not None:
             start = ProfileState(prepared.grouping, (warm.coefficients[self.block],))
         if type(self.problem.variance) is PowerVariance:
+            refinement = None
+            if refine_tol is not None:
+
+                def admit(coefficients: Coefficients) -> bool:
+                    # Declared-order reconstruction can round differently from
+                    # adding the conditional effect to the pre-summed base.
+                    try:
+                        _, index = self._canonical(base, effects, coefficients[0])
+                        return fresh_equations(prepared, index).passing(tolerance)
+                    except FloatingPointError:
+                        return False
+
+                refinement = (refine_tol, admit)
             result = profile(
-                prepared, tolerance=tolerance, max_sweeps=max_sweeps, state=start
+                prepared,
+                tolerance=tolerance,
+                max_sweeps=max_sweeps,
+                state=start,
+                _refinement=refinement,
             )
             scalar = None
         else:
@@ -257,6 +275,24 @@ class ConditionalSpace:
             scalar,
         )
 
+    def _canonical(
+        self, base: FloatArray, retained: Coefficients, conditional: FloatArray
+    ) -> tuple[Coefficients, FloatArray]:
+        """Insert the conditional coefficients and add effects in declared order."""
+        effects = (
+            *retained[: self.block],
+            conditional,
+            *retained[self.block + 1 :],
+        )
+        index = base
+        for block, coefficients in zip(
+            self.problem.grouping.blocks, effects, strict=True
+        ):
+            index = checked_sum(
+                index, coefficients[block.codes], "reduced reconstructed index"
+            )
+        return effects, index
+
     def reconstruct(self, solved: ConditionalSolve) -> ConditionalPoint:
         """Rebuild/check full original-order q only after a completed scalar root."""
         if (
@@ -267,18 +303,9 @@ class ConditionalSpace:
             raise ValueError("the conditional solve belongs to another operation")
         solved.require()
         result, prepared = solved.result, solved.prepared
-        effects = (
-            *solved.effects[: self.block],
-            result.state.coefficients[0],
-            *solved.effects[self.block + 1 :],
+        effects, index = self._canonical(
+            solved.base, solved.effects, result.state.coefficients[0]
         )
-        index = solved.base
-        for block, coefficients in zip(
-            self.problem.grouping.blocks, effects, strict=True
-        ):
-            index = checked_sum(
-                index, coefficients[block.codes], "reduced reconstructed index"
-            )
         # The completed one-block check is also the canonical-index check
         # when reconstruction yields the same binary index. Otherwise the
         # changed rounding can affect both representability and the residual.

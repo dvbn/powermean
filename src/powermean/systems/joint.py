@@ -64,6 +64,7 @@ from powermean.model.rows import (
     _immutable,
     evaluate_criterion,
     evaluate_rows,
+    poisson_exposure_rows,
 )
 from powermean.model.variance import (
     FloatArray,
@@ -295,6 +296,7 @@ class JointSystem:
     active_design: FloatArray = field(repr=False)
     active_offset: FloatArray = field(repr=False)
     active_weights: FloatArray = field(repr=False)
+    active_exposure: FloatArray | None = field(repr=False)
 
     def __init__(
         self,
@@ -304,6 +306,7 @@ class JointSystem:
         variance: PowerVariance | NB2Variance,
         offset: ArrayLike | None = None,
         weights: ArrayLike | None = None,
+        exposure: ArrayLike | None = None,
     ) -> None:
         if type(variance) not in (PowerVariance, NB2Variance):
             raise TypeError("variance must be a supported built-in working variance")
@@ -316,6 +319,19 @@ class JointSystem:
             "weights": values,
         }
         active = values > 0
+        raw_exposure = None
+        if exposure is not None:
+            raw = _finite_array(exposure, "exposure")
+            if (
+                not isinstance(variance, PowerVariance)
+                or variance.tau != 1.0
+                or raw.shape != outcome.shape
+                or np.any(raw <= 0.0)
+                or not np.array_equal(np.log(raw), given["offset"])
+            ):
+                raise ValueError("raw exposure must match the Poisson log offset")
+            raw_exposure = _immutable(raw[active])
+        object.__setattr__(self, "active_exposure", raw_exposure)
         for name, value in given.items():
             owned = _immutable(value)
             kept = owned if active.all() else _immutable(owned[active])
@@ -345,6 +361,11 @@ class JointSystem:
 
     def _rows(self, coefficients: FloatArray) -> RowEvaluation:
         """The rows of :func:`powermean.model.rows.evaluate_rows` at the index."""
+        if self.active_exposure is not None:
+            with np.errstate(over="ignore", under="ignore", invalid="ignore"):
+                linear = self.active_design @ coefficients
+                q = _finite_result(linear + self.active_offset, "index")
+            return poisson_exposure_rows(self.active_z, q, linear, self.active_exposure)
         q = self._index(coefficients)
         return evaluate_rows(self.active_z, q, variance=self.variance)
 

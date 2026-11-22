@@ -15,8 +15,10 @@ are code tuples sorted lexicographically (no overflowing scalar key or ``L_g L_h
 allocation).  Both orientations of a level pair sum the products ``C_i`` of the
 same rows in the same order, so each unordered pair of blocks is aggregated once
 and every such sum is stored at both orientations: that one row-order sum, not an
-average or a symmetry repair.  ``S`` holds the slope sums of ``X_ij b_i`` and the
-level sums of ``b``.  Both stay RAW sums, never divided by the rows or the weight
+average or a symmetry repair. A signed-root coefficient retry can compensate
+the mixed slope-level sums of the same checked products. ``S`` holds the slope sums
+of ``X_ij b_i`` and the level sums of ``b``. Both stay raw sums, never divided by the
+rows or the weight
 total.  ``H`` has owned lossless numeric partitions when a categorical principal block
 exists, with canonical rectangular CSC couplings; otherwise it is canonical CSC.
 Full CSC access remains lossless and detached. Each representation has no
@@ -37,8 +39,10 @@ rescaling of the raw weights.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterator
 from dataclasses import dataclass
+from itertools import chain
 from typing import Protocol, overload
 
 import numpy as np
@@ -50,9 +54,10 @@ from powermean.fe import reductions as _reductions
 from powermean.fe._cancel_storage import IndexStorage
 from powermean.fe.absorb_numeric import checked_product, group_sums
 from powermean.fe.certificate_basis import CertificateBasis, SupportCheck
+from powermean.fe.groups import Block
 from powermean.fe.reductions import immutable_array
 from powermean.model.order import IndexArray
-from powermean.model.variance import FloatArray
+from powermean.model.variance import FloatArray, NB2Variance, PowerVariance
 from powermean.solve.absorbed_certificate_point import (
     AdmittedPoint,
     FreshRows,
@@ -101,6 +106,8 @@ class FEGeometry:
     norm: float
     curvature: SparseMatrix | CompactMatrix | None
     refusal: str
+    slope_center: float = 0.0
+    compensated_mixed: bool = False
 
     @property
     def n_slopes(self) -> int:
@@ -132,6 +139,10 @@ class FEGeometry:
             "s": self.scale,
         }
         found: list[tuple[str, object]] = [(k, _bytes(v)) for k, v in arrays.items()]
+        if self.slope_center:
+            found.append(("slope_center", self.slope_center))
+        if self.compensated_mixed:
+            found.append(("compensated_mixed", True))
         if isinstance(h, CompactMatrix):
             found.append(("H partition", h.binding()))
         else:
@@ -254,6 +265,18 @@ def _slope_entries(
         entries.add(np.arange(k), np.full(k, column), sums)
 
 
+def _compensated_mixed(terms: FloatArray, block: Block, kept: IndexArray) -> FloatArray:
+    """Accumulate the checked products on each kept level before rounding."""
+    ordered = np.argsort(block.codes, kind="stable")
+    bounds = np.concatenate(([0], np.cumsum(block.counts)))
+    sums = np.empty((kept.size, terms.shape[1]))
+    for row, level in enumerate(kept):
+        group = terms[ordered[bounds[level] : bounds[level + 1]]]
+        for column in range(terms.shape[1]):
+            sums[row, column] = math.fsum(group[:, column])
+    return sums
+
+
 def _mixed_values(
     design: FloatArray,
     curvature: FloatArray,
@@ -262,6 +285,7 @@ def _mixed_values(
     selected: tuple[tuple[IndexStorage, IndexStorage], ...] | None = None,
     *,
     shared: bool = False,
+    compensated: bool = False,
 ) -> Iterator[tuple[IndexArray, int, int, FloatArray]]:
     """Original orientations, sharing only inside an original owned consumer.
 
@@ -288,7 +312,11 @@ def _mixed_values(
         else:
             kept, index = (part.view() for part in selected[number])
         if k:
-            sums = group_sums(slope_level, block.codes, block.n_levels)[kept]
+            sums = (
+                _compensated_mixed(slope_level, block, kept)
+                if compensated
+                else group_sums(slope_level, block.codes, block.n_levels)[kept]
+            )
             yield index, kept.size, 0, sums
             if not shared:
                 sums = group_sums(level_slope, block.codes, block.n_levels)[kept]
@@ -304,13 +332,17 @@ def _mixed_entries(
     entries: _EntrySink,
     *,
     shared: bool = False,
+    compensated: bool = False,
 ) -> None:
     """Original dynamic coordinates and callback order for every fresh batch."""
     k = design.shape[1]
-    batches = (
-        _mixed_values(design, curvature, basis, k, shared=True)
-        if shared
-        else _mixed_values(design, curvature, basis, k)
+    batches = _mixed_values(
+        design,
+        curvature,
+        basis,
+        k,
+        shared=shared or compensated,
+        compensated=compensated,
     )
     for index, count, direction, values in batches:
         if direction == 0:
@@ -391,13 +423,17 @@ def _owned(
 
 
 def hessian(
-    design: FloatArray, curvature: FloatArray, basis: CertificateBasis
+    design: FloatArray,
+    curvature: FloatArray,
+    basis: CertificateBasis,
+    *,
+    compensated: bool = False,
 ) -> SparseMatrix:
     """``H = B' diag(C) B`` in owned canonical CSC, every ordered entry summed once."""
     k = design.shape[1]
     entries = _Entries()
     _slope_entries(design, curvature, entries)
-    _mixed_entries(design, curvature, basis, entries)
+    _mixed_entries(design, curvature, basis, entries, compensated=compensated)
     _pair_entries(curvature, basis, k, entries)
     rows = np.concatenate([np.zeros(0, dtype=np.intp), *entries.rows])
     cols = np.concatenate([np.zeros(0, dtype=np.intp), *entries.cols])
@@ -596,7 +632,11 @@ class Assembly:
 
 
 def assembled(
-    point: AdmittedPoint, rows: FreshRows, basis: CertificateBasis
+    point: AdmittedPoint,
+    rows: FreshRows,
+    basis: CertificateBasis,
+    *,
+    compensated: bool = False,
 ) -> Assembly:
     """``S`` and ``H`` of the fresh rows on the fixed ``J`` (``FloatingPointError``)."""
     if basis.grouping is not point.sample.grouping:
@@ -612,11 +652,13 @@ def assembled(
     s = moment(owned, rows.b, basis)
     block = kept_block(basis, owned.shape[1])
     if block is None:
-        h: SparseMatrix | CompactMatrix = hessian(owned, rows.curvature, basis)
+        h: SparseMatrix | CompactMatrix = hessian(
+            owned, rows.curvature, basis, compensated=compensated
+        )
     else:
         entries = CompactEntries(owned.shape[1] + basis.n_kept, block)
         _slope_entries(owned, rows.curvature, entries)
-        _mixed_entries(owned, rows.curvature, basis, entries)
+        _mixed_entries(owned, rows.curvature, basis, entries, compensated=compensated)
         _pair_entries(rows.curvature, basis, owned.shape[1], entries)
         h = entries.finish()
     return Assembly(owned, s, h)
@@ -698,12 +740,97 @@ def assembly_step(assembly: Assembly) -> WorkStep:
     return WorkStep("assembly", "completed", "", counters)
 
 
+def centered_gamma_design(
+    design: FloatArray,
+    curvature: FloatArray,
+    variance: PowerVariance | NB2Variance | None,
+    omega: float,
+) -> tuple[FloatArray, float] | None:
+    """Shift one Gamma slope by a constant already in the fixed-effect span."""
+    if (
+        type(variance) is not PowerVariance
+        or variance.tau != 2.0
+        or omega != 1.0
+        or design.shape[1] != 1
+        or not 0 < design.shape[0] <= 1024
+    ):
+        return None
+    # Anchor at the outcome row with largest curvature. When the informative
+    # rows cluster around this value, the shifted slope avoids subtracting
+    # two large fixed-effect contributions to resolve a tiny slope curvature.
+    center = float(design[np.argmax(curvature), 0])
+    if center == 0.0:
+        return None
+    with np.errstate(over="ignore", invalid="ignore"):
+        shifted = design - center
+    if not np.isfinite(shifted).all() or any(
+        math.fsum((float(old), -center, -float(new))) != 0.0
+        for old, new in zip(design[:, 0], shifted[:, 0], strict=True)
+    ):
+        return None
+    return immutable_array(shifted), center
+
+
+def _gamma_equations(
+    design: FloatArray, rows: FreshRows, basis: CertificateBasis
+) -> FloatArray:
+    """Accumulate B'(a Z exp(-q) - a) before rounding the row differences."""
+    mass, weights = rows.curvature, rows.weights
+    x = design[:, 0]
+    found = np.empty(1 + basis.n_kept)
+    found[0] = math.fsum(chain(x * mass, -(x * weights)))
+    for block, mapping in zip(basis.grouping.blocks, basis.positions, strict=True):
+        ordered = np.argsort(block.codes, kind="stable")
+        boundaries = np.concatenate(([0], np.cumsum(block.counts)))
+        for level in np.flatnonzero(mapping >= 0):
+            indices = ordered[boundaries[level] : boundaries[level + 1]]
+            found[1 + mapping[level]] = math.fsum(
+                chain(mass[indices], -weights[indices])
+            )
+    return immutable_array(found)
+
+
+def centered_gamma_geometry(geometry: FEGeometry) -> FEGeometry | None:
+    """Reassemble in the shifted chart, which preserves the fitted index and slope.
+
+    The constant subtracted from the slope column is in the span of the kept
+    fixed effects. Corrections and influence are contracted with this same
+    design. The reported slope and the original point require no remapping.
+    """
+    point, rows, basis = geometry.point, geometry.rows, geometry.basis
+    if not basis.n_kept:
+        return None
+    shifted = centered_gamma_design(
+        geometry.design, rows.curvature, point.variance, point.sample.omega
+    )
+    if shifted is None:
+        return None
+    design, center = shifted
+    try:
+        with np.errstate(over="raise", invalid="raise"):
+            equations = _gamma_equations(design, rows, basis)
+        h = hessian(design, rows.curvature, basis)
+    except (OverflowError, FloatingPointError):
+        return None
+    return fresh_geometry(
+        point,
+        rows,
+        basis,
+        geometry.support,
+        Assembly(design, equations, h),
+        slope_center=center,
+    )
+
+
 def fresh_geometry(
     point: AdmittedPoint,
     rows: FreshRows,
     basis: CertificateBasis,
     support: SupportCheck,
     assembly: Assembly,
+    *,
+    slope_center: float = 0.0,
+    compensated_mixed: bool = False,
 ) -> FEGeometry:
     """The scaled geometry of the assembled sums; ``FloatingPointError`` on range.
 
@@ -714,12 +841,36 @@ def fresh_geometry(
         scale = equilibration(h)
     except ValueError as error:
         found = (None, None, float("nan"), None, str(error))
-        return FEGeometry(point, rows, basis, support, owned, s, h, *found)
+        return FEGeometry(
+            point,
+            rows,
+            basis,
+            support,
+            owned,
+            s,
+            h,
+            *found,
+            slope_center=slope_center,
+            compensated_mixed=compensated_mixed,
+        )
     ordinary = scaled_ordinary(h, scale)
     curvature = scaled_curvature(h, scale)
     norm = one_norm(ordinary)
     return FEGeometry(
-        point, rows, basis, support, owned, s, h, scale, ordinary, norm, curvature, ""
+        point,
+        rows,
+        basis,
+        support,
+        owned,
+        s,
+        h,
+        scale,
+        ordinary,
+        norm,
+        curvature,
+        "",
+        slope_center=slope_center,
+        compensated_mixed=compensated_mixed,
     )
 
 

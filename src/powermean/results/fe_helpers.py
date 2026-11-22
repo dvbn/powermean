@@ -5,16 +5,13 @@ from __future__ import annotations
 import copy
 import math
 import statistics
-from collections.abc import Mapping
 from dataclasses import fields, is_dataclass
 from types import MappingProxyType
-from typing import Any, Literal, TypedDict, cast
+from typing import Any, cast
 
 import numpy as np
 
-from powermean import messages
 from powermean.data.raw import _OwnedMapping
-from powermean.errors import SpecificationError
 from powermean.fe._cancel_storage import FloatStorage, IndexStorage
 from powermean.model.variance import FloatArray
 from powermean.results.owned import owned_array
@@ -141,68 +138,6 @@ def _copied(value: object, memo: dict[int, object]) -> object:
 def detached_record[RecordT](value: RecordT) -> RecordT:
     """Return independent outward record wrappers of the same concrete type."""
     return cast("RecordT", _detached(value, {}))
-
-
-PredictionKind = Literal["power_mean"]
-PREDICTION_KINDS: tuple[PredictionKind, ...] = ("power_mean",)
-DEFAULT_PREDICTION: PredictionKind = "power_mean"
-PREDICTION_KEYWORDS: tuple[str, ...] = ("type",)
-
-
-class PredictionOptions(TypedDict, total=False):
-    """The keyword options of :meth:`Result.predict`, as ``DESIGN.md``, 4.4, names them.
-
-    ``type`` is the kind of prediction, ``"power_mean"`` by default: the fitted
-    conditional power mean of the order of the fit, the only kind of the first
-    milestone.  No other key exists; :func:`prediction_kind` refuses one at run time,
-    as the type checker refuses it at the call.
-    """
-
-    type: PredictionKind
-
-
-def prediction_kind(options: Mapping[str, object]) -> PredictionKind:
-    """The kind of prediction that the keywords of ``predict`` name.
-
-    Parameters
-    ----------
-    options : mapping
-        The keywords given, as the collector received them.
-
-    Returns
-    -------
-    str
-        ``"power_mean"``, the default and the only kind.
-
-    Raises
-    ------
-    SpecificationError
-        A keyword other than ``type`` (``specification.unknown_option``, with the
-        valid keyword), or a ``type`` that the first milestone does not have
-        (``specification.invalid_value``, with the valid kinds).
-    """
-    for key in options:
-        if key not in PREDICTION_KEYWORDS:
-            raise SpecificationError(
-                "specification.unknown_option",
-                {
-                    "kind": "keyword of predict",
-                    "key": key,
-                    "valid": messages.format_keys(PREDICTION_KEYWORDS),
-                },
-            )
-    kind = options.get("type", DEFAULT_PREDICTION)
-    for valid in PREDICTION_KINDS:
-        if kind == valid:
-            return valid
-    raise SpecificationError(
-        "specification.invalid_value",
-        {
-            "argument": "type",
-            "value": kind,
-            "valid": messages.format_keys(PREDICTION_KINDS),
-        },
-    )
 
 
 def normal_quantile(level: float) -> float:

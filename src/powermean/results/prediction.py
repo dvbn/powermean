@@ -43,13 +43,64 @@ the retained design is never handed out.
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Iterable, Mapping
+from fractions import Fraction
+from typing import Any, Literal, TypedDict
 
 import numpy as np
 import pandas as pd
+from numpy.typing import NDArray
 
+from powermean import messages
+from powermean.errors import SpecificationError
 from powermean.formula.frame import Design, replay_prediction_design
+from powermean.model.order import IndexArray
 from powermean.model.variance import FloatArray
+from powermean.results import naming
+
+PredictionKind = Literal["power_mean", "fixed_effects", "residual"]
+PREDICTION_KINDS: tuple[PredictionKind, ...] = (
+    "power_mean",
+    "fixed_effects",
+    "residual",
+)
+DEFAULT_PREDICTION: PredictionKind = "power_mean"
+PREDICTION_KEYWORDS: tuple[str, ...] = ("type",)
+
+
+class PredictionOptions(TypedDict, total=False):
+    """Choose fitted power means, normalized FE levels, or response residuals."""
+
+    type: PredictionKind
+
+
+type Prediction = pd.Series[float] | dict[str, pd.Series[float]]
+
+
+def prediction_kind(options: Mapping[str, object]) -> PredictionKind:
+    """Validate the shared public predict options."""
+    for key in options:
+        if key not in PREDICTION_KEYWORDS:
+            raise SpecificationError(
+                "specification.unknown_option",
+                {
+                    "kind": "keyword of predict",
+                    "key": key,
+                    "valid": messages.format_keys(PREDICTION_KEYWORDS),
+                },
+            )
+    kind = options.get("type", DEFAULT_PREDICTION)
+    for valid in PREDICTION_KINDS:
+        if kind == valid:
+            return valid
+    raise SpecificationError(
+        "specification.invalid_value",
+        {
+            "argument": "type",
+            "value": kind,
+            "valid": messages.format_keys(PREDICTION_KINDS),
+        },
+    )
 
 
 def _doubles(column: pd.Series[Any], name: str) -> FloatArray:
@@ -158,6 +209,231 @@ def replayed_matrix(design: Design, data: pd.DataFrame) -> FloatArray:
     invalid = replayed.referenced_invalid | replayed.evaluated_invalid
     matrix[invalid] = np.nan
     return matrix
+
+
+def prediction_data(data: pd.DataFrame | None, kind: PredictionKind) -> None:
+    """Only fitted means can take a replacement covariate frame."""
+    if data is not None and not isinstance(data, pd.DataFrame):
+        raise TypeError("data must be a pandas DataFrame")
+    if data is not None and kind != "power_mean":
+        raise SpecificationError(
+            "specification.invalid_value",
+            {
+                "argument": "data",
+                "value": "new covariates",
+                "valid": "None for " + kind,
+            },
+        )
+
+
+def retained_rows(original: IndexArray, retained: IndexArray) -> slice | IndexArray:
+    """Locate the final rows in the original order sample after FE pruning."""
+    if original.size == retained.size:
+        return slice(None)
+    rows = np.searchsorted(original, retained)
+    if np.any(rows == original.size) or not np.array_equal(original[rows], retained):
+        raise ValueError("the fitted rows are not a subset of the order sample")
+    return rows
+
+
+def slope_index(matrix: FloatArray, beta: FloatArray) -> FloatArray:
+    """Evaluate the slope index, preserving incomplete rows and checking range."""
+    complete = np.isfinite(matrix).all(axis=1)
+    with np.errstate(over="ignore", invalid="ignore"):
+        index = matrix @ beta
+    if not np.isfinite(index[complete]).all():
+        raise FloatingPointError("a prediction index is not representable in float64")
+    index[~complete] = np.nan
+    return index
+
+
+def check_fitted_groups(
+    data: pd.DataFrame,
+    labels: pd.Index[Any],
+    blocks: Iterable[tuple[tuple[str, ...], Iterable[object], IndexArray]],
+) -> None:
+    """When FE identifiers are provided, verify their original row membership."""
+    if not data.index.equals(labels):
+        raise SpecificationError(
+            "specification.invalid_value",
+            {
+                "argument": "data",
+                "value": "a different row index",
+                "valid": "the retained index in fitting order",
+            },
+        )
+    if not data.columns.is_unique:
+        raise ValueError("counterfactual data must have unique column names")
+    for names, levels, codes in blocks:
+        for position, name in enumerate(names):
+            if name not in data:
+                continue
+            values = (
+                levels if len(names) == 1 else (level[position] for level in levels)
+            )
+            expected = pd.Index(list(values), dtype=object, tupleize_cols=False).take(
+                codes
+            )
+            supplied = pd.Index(_column(data, name), dtype=object, tupleize_cols=False)
+            if not expected.equals(supplied):
+                raise SpecificationError(
+                    "specification.invalid_value",
+                    {
+                        "argument": name,
+                        "value": "different fixed-effect identifiers",
+                        "valid": "the fitted identifiers in retained row order",
+                    },
+                )
+
+
+def counterfactual_index(
+    matrix: FloatArray,
+    columns: tuple[str, ...],
+    beta: pd.Series[float],
+    original: FloatArray,
+    original_columns: tuple[str, ...],
+    *,
+    q: FloatArray,
+    omega: float,
+    zero: NDArray[np.bool_] | None = None,
+) -> FloatArray:
+    """Update the fitted index without losing resolved changes to cancellation."""
+    names = tuple(beta.index)
+    matrix = _active_columns(matrix, columns, names)
+    original = _active_columns(original, original_columns, names)
+    coefficients = beta.to_numpy()
+    multiplier = 1.0 if omega == 0 else omega
+    if zero is None:
+        return _adjust_index(q, matrix, original, coefficients, multiplier)
+    found = q + boundary_delta(matrix)
+    found[~zero] = _adjust_index(
+        q[~zero], matrix[~zero], original[~zero], coefficients, multiplier
+    )
+    return found
+
+
+def _active_columns(
+    matrix: FloatArray, columns: tuple[str, ...], names: tuple[str, ...]
+) -> FloatArray:
+    return (
+        matrix
+        if columns == names
+        else matrix[:, [columns.index(name) for name in names]]
+    )
+
+
+def _adjust_index(
+    q: FloatArray,
+    changed: FloatArray,
+    original: FloatArray,
+    beta: FloatArray,
+    multiplier: float,
+) -> FloatArray:
+    """Apply the slope changes with exact fallback when error can be amplified."""
+    complete = np.isfinite(changed).all(axis=1)
+    limits = np.finfo(np.float64)
+    with np.errstate(all="ignore"):
+        difference = changed - original
+        index = q + multiplier * (difference @ beta)
+        magnitude = np.abs(q) + abs(multiplier) * (np.abs(difference) @ np.abs(beta))
+        # Use the ratio of the absolute contributions to the output scale to
+        # detect cancellation independently of the number of columns.
+        cancellation = magnitude / 256 > np.maximum(abs(multiplier), np.abs(index))
+    # Near the float64 limit, even a finite intermediate may have rounded
+    # toward zero when the exact final result would overflow.
+    uncertain = complete & (
+        ~np.isfinite(index) | ~(magnitude <= limits.max / 2) | cancellation
+    )
+    if abs(multiplier) < limits.tiny:
+        # A scaled change can round away before the addition even when the
+        # final index should round up by one subnormal step.
+        uncertain |= complete & np.any(difference != 0, axis=1)
+    if uncertain.any():
+        weights = [Fraction(value) for value in beta]
+        scale = Fraction(multiplier)
+        try:
+            for row in np.flatnonzero(uncertain):
+                index[row] = float(
+                    Fraction(q[row])
+                    + scale
+                    * sum(
+                        (Fraction(a) - Fraction(b)) * weight
+                        for a, b, weight in zip(
+                            changed[row], original[row], weights, strict=True
+                        )
+                    )
+                )
+        except OverflowError as error:
+            raise FloatingPointError(
+                "a prediction index is not representable in float64"
+            ) from error
+    index[~complete] = np.nan
+    return index
+
+
+def boundary_delta(matrix: FloatArray) -> FloatArray:
+    """A known zero stays at zero when its replacement regressors are supplied."""
+    return np.where(np.isfinite(matrix).all(axis=1), 0.0, np.nan)
+
+
+def exp_index(index: FloatArray, *, boundary: bool = False) -> FloatArray:
+    """Exponentiate finite rows, allowing -inf only for a known zero boundary."""
+    finite = np.isfinite(index)
+    if np.isposinf(index).any() or (not boundary and np.isneginf(index).any()):
+        raise FloatingPointError("a prediction index is not representable in float64")
+    with np.errstate(over="ignore", under="ignore"):
+        fitted = np.exp(index)
+    if not np.isfinite(fitted[finite]).all():
+        raise FloatingPointError("a fitted power mean is not representable in float64")
+    if np.any(finite & (fitted == 0)):
+        raise FloatingPointError(
+            "a fitted power mean is not representable in float64: it rounds to zero"
+        )
+    return fitted
+
+
+def fitted_series(
+    q: FloatArray,
+    labels: pd.Index[Any],
+    omega: float,
+    *,
+    boundary: bool = False,
+    counterfactual: bool = False,
+) -> pd.Series[float]:
+    """A fitted mean from the transformed or log-outcome index."""
+    with np.errstate(over="ignore", invalid="ignore"):
+        index = q if omega == 0 else q / omega
+    if np.any(np.isfinite(q) & ~np.isfinite(index)):
+        raise FloatingPointError("a prediction index is not representable in float64")
+    series = pd.Series(
+        exp_index(index, boundary=boundary),
+        index=labels.copy(deep=True),
+        name="power_mean",
+    )
+    series.attrs.update(label=naming.prediction_label(omega), omega=omega)
+    if counterfactual:
+        series.attrs["counterfactual"] = True
+    return series
+
+
+def residual_series(
+    q: FloatArray,
+    response: FloatArray,
+    labels: pd.Index[Any],
+    omega: float,
+    *,
+    boundary: bool = False,
+) -> pd.Series[float]:
+    """Observed minus fitted outcome on the estimating equation's scale."""
+    fitted = q if omega == 0 else exp_index(q, boundary=boundary)
+    with np.errstate(over="raise", invalid="raise"):
+        residual = response - fitted
+    series = pd.Series(residual, index=labels.copy(deep=True), name="residual")
+    scale = (
+        "log outcome" if omega == 0 else "outcome" if omega == 1 else "power outcome"
+    )
+    series.attrs.update(label=f"response residual on the {scale} scale", omega=omega)
+    return series
 
 
 def power_mean(matrix: FloatArray, beta: FloatArray, offset: FloatArray) -> FloatArray:

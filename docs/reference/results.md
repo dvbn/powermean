@@ -21,9 +21,9 @@ and the numerical assessment concerns the computed point.
 | `confint(level=0.95)` | A DataFrame with `lower` and `upper`. |
 | `tidy(level=0.95)` | Coefficients and uncertainty in one table. |
 | `summary(level=0.95)` | Text summary, displayed with `print(result.summary())`. |
-| `predict(data=None, type="power_mean")` | No-FE: conditional power means, including compatible new data. Joint FE: in-sample values only. Cancelled: refused. |
+| `predict(data=None, type="power_mean")` | Fitted conditional power means, fixed-effect levels or response residuals. Replacement covariates are supported for fitted means. |
 | `influence(unit="sampling")` | Retained first-order contributions by sampling unit and coefficient. A cancelled result gives one row per cancelled group by default. Use `unit="row"` for contributions indexed by original row position. |
-| `fixef()` | Joint FE: normalized estimated levels. Cancelled: retained blocks and the [recovered cancelled block](#recovered-cancelled-effects). Refused for no-FE fits. |
+| `fixef()` | Joint FE: normalized estimated levels. Cancelled and two-way GMM: includes ex-post recovered levels. Available for fits with fixed effects. |
 | `effect`, `effects`, `contrast` | Proportional changes on the fitted conditional power mean; see [below](#proportional-effects-contrasts-and-tests). |
 | `lincom`, `nlcom`, `test`, `wald` | Coefficient combinations and restriction tests. |
 | `sample.table()` | Counts by exclusion reason, in processing order. |
@@ -196,12 +196,13 @@ reference. A corrected FE result adds the columns `uncorrected` and `bias`.
 
 ## Prediction and retention
 
-Interpret a prediction using the mean order chosen at fitting. At order one predictions are conditional arithmetic means. Other orders give
-conditional power means. Exponentiating the fitted log OLS index does not add
-the retransformation correction needed for an arithmetic mean. New data must
-supply the regressors in the original formula and any offset or exposure used
-by the fit. This includes formula inputs for columns omitted due to
-collinearity; those columns are evaluated but do not enter the prediction.
+Interpret a prediction using the mean order chosen at fitting. At order one,
+predictions are conditional arithmetic means. Other orders give conditional
+power means. Exponentiating the fitted log OLS index does not add
+the retransformation correction needed for an arithmetic mean. A replacement
+frame supplies the original raw regressors, including inputs for formula
+columns omitted due to collinearity. No-FE predictions on new data also read
+the offset or exposure specified at fitting.
 
 For predictions without fixed effects, `predict(data)` uses the categorical
 levels learned during fitting, including the reference level. A missing
@@ -210,8 +211,64 @@ If any observed value is outside the fitted levels, `predict(data)` raises
 a `SpecificationError` that identifies the factor and the unexpected value.
 `contrast()` also requires categorical values to belong to the fitted levels.
 
-Joint FE prediction supports in-sample fitted values only: supplying new data
-is unavailable.
+For a fixed-effect fit, `fit.predict()` uses the retained rows in fitting order.
+`fit.predict(type="fixed_effects")` returns the same dictionary of normalized
+level Series as `fit.fixef()`. `fit.predict(type="residual")` subtracts the fitted
+response from the observed response on the estimating scale. The response is
+`Y` at `omega=1`, `log(Y)` at `omega=0`, and `Y**omega` at other orders.
+
+For rows with finite effects, Powermean adds the slope index, offset and
+fixed effects on the log scale, then exponentiates. An exposure contributes
+its logarithm as an offset. Joint fits already have the effects. Cancelled
+fits recover the missing group scale from the observed outcomes and fitted
+index. Two-way GMM fits recover both effect blocks by PPML with the GMM
+slopes held fixed. [Fixed-effect recovery](#fixed-effect-results)
+
+For a fixed-effect counterfactual, pass a frame with the same retained index
+and row order, containing the raw regressors used by the original formula.
+The fit replays its learned coding and transforms, holds the original offsets
+and effects fixed, and evaluates the slopes at the replacement covariates.
+If the frame includes FE identifiers, they must match the fitted membership.
+An outcome column is unnecessary.
+
+### Predict from a cancelled Gamma fit
+
+Run this from the source root. The simulated firm panel uses mean order one,
+so fitted sales and residuals are in outcome units.
+
+```python
+import numpy as np
+import pandas as pd
+import powermean as pm
+
+from examples.short_panel import FORMULA, firm_data
+
+data = firm_data()
+fit = pm.fit(FORMULA, data, omega=1, tau=2, cancel="firm", cluster="firm")
+rows = data.iloc[fit.sample.positions]
+fitted = fit.predict()
+effects = fit.predict(type="fixed_effects")
+residuals = fit.predict(type="residual")
+counterfactual = fit.predict(rows.assign(price_index=rows["price_index"] + 0.10))
+
+log_mean = (
+    fit.coef()["price_index"] * rows["price_index"]
+    + rows["firm"].map(effects["firm"])
+    + rows["year"].map(effects["year"])
+)
+np.testing.assert_allclose(fitted, np.exp(log_mean))
+print(pd.DataFrame({
+    "Sales": rows["sales"],
+    "Fitted sales": fitted,
+    "Sales at higher price": counterfactual,
+    "Residual": residuals,
+}).head().round(3))
+print(effects["firm"].head())
+```
+
+The counterfactual adds 0.10 to the price index and keeps each firm's
+recovered scale and year effect fixed. For prediction after a bias
+correction, see [which fitted point is used](#corrected-results).
 
 ### Recompute uncertainty from stored information
 
@@ -337,7 +394,18 @@ The normalization preserves the fitted index and `predict()` returns in-sample
 fitted values.
 
 For cancelled fits, `fixef()` returns the retained blocks and the recovered
-cancelled block described below. Prediction is unavailable for cancelled fits.
+cancelled block described below. `predict()` uses the same recovery across
+supported working variances. A retained all-zero group gives zero fitted
+means and a missing log effect. The prediction's `zero_boundary_rows` attribute
+lists boundary rows by position within the retained sample.
+
+For two-way GMM, post-estimation recovery holds the GMM slopes fixed and fits
+only the two effect blocks by PPML at the slope index. The fitted means match
+the observed row and column totals on observed cells. A directed fit uses
+its non-self links. If a cell cannot carry positive mass at those margins,
+its fitted mean is zero. An unsupported level has a missing effect. In each
+component of the positive support, the first supported column effect is
+normalized to zero.
 
 ### Fixed-effect block counts in the summary
 
@@ -419,8 +487,8 @@ is `v` centered within the group, its `log_scale`, a `status` and a
 after a short-group or cell correction, its reporting point. The `attrs` state that neither
 consistency of each effect nor unbiasedness of the plug-in values is
 asserted and that no standard errors are supplied: with fixed short groups
-these values remain noisy. They describe the estimation sample; they are
-neither predictions nor estimates with a known sampling error.
+these values remain noisy. The resulting fitted means and counterfactuals
+condition on the recovered scales.
 
 Inspect the fitted levels and recovered scales after following the
 [short-panel example](../methods/cancellation.md):
@@ -468,6 +536,18 @@ status with coefficients and standard errors. The
 [example collection](../examples/README.md) links these outputs back to
 recorded displays; [validation](../validation.md) explains what evidence
 is needed to make broader claims.
+
+## Jochmans fits
+
+`pm.fit(..., estimator="gmm1")` or `estimator="gmm2"` returns a
+`JochmansResult`. Read `coef()`, `se()`,
+`vcov()`, `confint(level)`, `tidy(level)`, `effects(level=...)`,
+`summary(level)` and `sample`. It supports `pm.etable()` and
+`with_vcov("paper")` or `with_vcov("stata")`. The certificate records
+the final relative moment and scaled Newton correction. Both effect
+blocks are differenced, so the result exposes slope inference and
+unit-change transformations of the slope coordinates.
+[Method and covariance conventions](../methods/jochmans.md)
 
 <!-- guide-navigation:start -->
 [Previous: Options](options.md) · [Guide index](../README.md) · [Next: Tables](tables.md)

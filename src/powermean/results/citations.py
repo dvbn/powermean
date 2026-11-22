@@ -30,10 +30,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
-from powermean.data.specs import Estimator
-from powermean.model.variance import PowerVariance
+if TYPE_CHECKING:
+    from powermean.data.specs import Estimator
 
 Kind = Literal["article"]
 
@@ -108,6 +108,8 @@ PML_POISSON = "gourieroux1984b"
 QUASI_LIKELIHOOD = "wedderburn1974"
 PPML = "santos_silva_tenreyro2006"
 CONVENTION = "ppmlhdfe2020"
+JOCHMANS = "jochmans2017"
+JOCHMANS_VERARDI = "jochmans_verardi2020"
 
 _ENTRIES = (
     Reference(
@@ -185,6 +187,22 @@ _ENTRIES = (
         pages="95-115",
         doi="10.1177/1536867X20909691",
     ),
+    Reference(
+        JOCHMANS,
+        ("Koen Jochmans",),
+        2017,
+        "Two-Way Models for Gravity",
+        kind="article",
+        journal="The Review of Economics and Statistics",
+    ),
+    Reference(
+        JOCHMANS_VERARDI,
+        ("Koen Jochmans", "Vincenzo Verardi"),
+        2020,
+        "Fitting exponential regression models with two-way fixed effects",
+        kind="article",
+        journal="The Stata Journal",
+    ),
 )
 
 REGISTRY = MappingProxyType({entry.key: entry for entry in _ENTRIES})
@@ -202,6 +220,8 @@ def reference_keys(estimator: Estimator) -> tuple[str, ...]:
     the default standard errors reproduce.  Log OLS cites the manuscripts and the
     convention only.
     """
+    from powermean.model.variance import PowerVariance  # noqa: PLC0415
+
     keys = list(MANUSCRIPTS)
     if estimator.route == "power":
         keys.append(PML_THEORY)

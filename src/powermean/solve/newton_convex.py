@@ -100,6 +100,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.metadata
+import math
 import sys
 import time
 import warnings
@@ -123,6 +124,11 @@ from powermean.model.variance import (
 from powermean.solve.assessment import AssessmentLog, Assessor, certificate_controls
 from powermean.solve.cancelled_loss import CancelledLinearLoss
 from powermean.solve.cancelled_operator import CancelledProblem, ImplicitNewtonProblem
+from powermean.solve.factorization import (
+    SingularJacobianError,
+    factorize,
+    symmetric_cholesky,
+)
 from powermean.solve.line_search import AbsoluteSum, line_search
 from powermean.solve.newton_retry import run_attempts
 from powermean.solve.newton_trace import (
@@ -359,7 +365,10 @@ def _inner_failure(solver: Solver) -> NativeReason:
 
 
 def _step(
-    solver: Solver, problem: NewtonProblem, index: IndexEvaluation | None
+    solver: Solver,
+    problem: NewtonProblem,
+    index: IndexEvaluation | None,
+    options: SolverOptions,
 ) -> NativeReason | None:
     """The Newton step, or the reason that refuses it.
 
@@ -370,9 +379,37 @@ def _step(
     design, z, weights = problem
     if index is None or index.factorized:
         solver.inner_solve(X=design, y=z, sample_weight=weights)
-        if solver.use_fallback_lbfgs_solve:
+        if solver.use_fallback_lbfgs_solve and not _equilibrated_cancelled_step(
+            solver, options
+        ):
             return _inner_failure(solver)
     return None if index is None else index.completed(solver)
+
+
+def _equilibrated_cancelled_step(solver: Solver, options: SolverOptions) -> bool:
+    """Recover a cancelled Gamma direction when curvature differs in scale."""
+    loss: object = solver.linear_loss
+    if not isinstance(loss, CancelledLinearLoss) or solver.hessian_warning:
+        return False
+    if _inner_failure(solver) != "factorization_failure":
+        return False
+    diagonal = np.diag(solver.hessian)
+    if not (diagonal > 0).all():
+        return False
+    try:
+        with np.errstate(invalid="raise", over="raise", divide="raise"):
+            scale = np.sqrt(diagonal)
+            symmetric_cholesky((solver.hessian / scale[:, None]) / scale)
+        direction = -factorize(solver.hessian, options.rcond_min).solve(solver.gradient)
+    except (SingularJacobianError, FloatingPointError, np.linalg.LinAlgError):
+        return False
+    product = np.float64(solver.gradient @ direction)
+    if not np.isfinite(direction).all() or not np.isfinite(product) or product > 0:
+        return False
+    solver.coef_newton = direction
+    solver.gradient_times_newton = product
+    solver.use_fallback_lbfgs_solve = False
+    return True
 
 
 def _test(
@@ -412,17 +449,17 @@ def _iterate(
     tally.loss_evaluated = True
     if index is not None:
         index.opened(solver)
-    if hooks is not None:
-        hooks.started(float(solver.loss_value))
     solver.iteration = 1
-    solver.converged = False
+    solver.converged = hooks is not None and bool(
+        hooks.started(float(solver.loss_value))
+    )
     solver.use_fallback_lbfgs_solve = False
     failure: NativeReason | None = None
     while solver.iteration <= solver.max_iter and not solver.converged:
         solver.use_fallback_lbfgs_solve = False
         solver.update_gradient_hessian(X=design, y=z, sample_weight=weights)
         tally.gradient_evaluated = True
-        failure = _step(solver, problem, index)
+        failure = _step(solver, problem, index, options)
         if failure is not None:
             break
         if index is None:
@@ -434,8 +471,8 @@ def _iterate(
             break
         tally.steps += 1
         gradient = _test(solver, problem, index)
-        if hooks is not None:
-            hooks.stepped(bool(solver.converged), gradient)
+        if hooks is not None and hooks.stepped(bool(solver.converged), gradient):
+            solver.converged = False
         solver.iteration += 1
     solver.iteration -= 1
     solver.finalize(X=design, y=z, sample_weight=weights)
@@ -651,6 +688,31 @@ def _check(system: JointSystem, start: Start, options: SolverOptions) -> None:
         raise ValueError("start must have one value per column of the design")
 
 
+def _poisson_cell_start(system: JointSystem) -> FloatArray | None:
+    """A restart from sufficient statistics for a saturated set of design rows."""
+    exposure = system.active_exposure
+    if exposure is None or system.dimension > 8:
+        return None
+    patterns, code = np.unique(system.active_design, axis=0, return_inverse=True)
+    if patterns.shape != (system.dimension, system.dimension):
+        return None
+    z, weights = system.active_z, system.active_weights
+    eta = np.empty(system.dimension)
+    try:
+        with np.errstate(over="raise", invalid="raise"):
+            for cell in range(system.dimension):
+                use = code == cell
+                e = math.fsum(weights[use] * exposure[use])
+                d = math.fsum(weights[use] * (z[use] - exposure[use]))
+                if e <= 0.0 or d <= -e:
+                    return None
+                eta[cell] = math.log1p(d / e)
+            start = np.linalg.solve(patterns, eta)
+    except (FloatingPointError, OverflowError, np.linalg.LinAlgError, ValueError):
+        return None
+    return start if np.isfinite(start).all() else None
+
+
 def solve(
     system: JointSystem,
     start: Start,
@@ -697,6 +759,7 @@ def solve(
         variance=system.variance,
         curvature=options.curvature,
         budget=budget,
+        exposure=system.active_exposure,
     )
     problem = NewtonProblem(
         system.active_design, system.active_z, system.active_weights
@@ -705,7 +768,13 @@ def solve(
     if assess is not None:
         log = AssessmentLog(assess, system, certificate_controls(options))
 
+    tried = False
+
     def attempt(coefficients: FloatArray, max_iter: int) -> NewtonAttempt:
+        nonlocal tried
+        if tried and (cell_start := _poisson_cell_start(system)) is not None:
+            coefficients = cell_start
+        tried = True
         return run_attempt(
             provider,
             point,
@@ -774,11 +843,11 @@ class Transaction(Protocol):
 class Hooks(Transaction, Protocol):
     """The points of the profiled iteration at which the attempt may stop."""
 
-    def started(self, loss: float, /) -> None:
-        """The start is evaluated, with its averaged loss."""
+    def started(self, loss: float, /) -> bool | None:
+        """The start is evaluated. Return true when its certificate passes."""
         ...
 
-    def stepped(self, converged: bool, gradient: FloatArray, /) -> None:
+    def stepped(self, converged: bool, gradient: FloatArray, /) -> bool | None:
         """A step was accepted and the native test run; the accepted gradient."""
         ...
 

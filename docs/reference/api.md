@@ -15,6 +15,14 @@ A formula with fixed-effect blocks fits them jointly by default.
 Use `cancel="block"` to cancel one named block.
 [Fit options](options.md) · [Gravity fit](../get-started.md#fit-with-three-fixed-effect-blocks) · [Nonlinear DiD](../examples/nonlinear-did.md#fit-the-twfe-equation-with-different-working-variances)
 
+Set `estimator="gmm1"` or `"gmm2"` to difference out exactly two fixed-effect
+blocks with the Jochmans exogenous moments. Use an intercept-free formula.
+The default `fe_layout="rectangular"` requires a complete crossing. Set
+`fe_layout="directed"` for complete ordered non-self links. The returned
+`JochmansResult` reports coefficient inference, sample identity and a local
+root certificate. [Two-way difference options](options.md#two-way-difference-options) ·
+[Method and example](../methods/jochmans.md)
+
 ### `pm.ppml()`
 
 `pm.ppml(formula, data, **options)` returns a PPML result with `omega=1`
@@ -216,18 +224,21 @@ of `q` per restriction row.
 
 #### `predict()`
 
-`fit.predict(data=None, *, type="power_mean")` returns a Series of
-fitted conditional power means. Fits without fixed effects also accept
-compatible new data. On a joint gravity fit, `fit.predict()` gives the
-in-sample conditional arithmetic means on retained rows. Prediction
-requires a joint or no-FE fit.
+`fit.predict(data=None, *, type="power_mean")` returns a Series of fitted
+conditional power means. Use `type="fixed_effects"` to extract the block
+Series returned by `fixef()`, or `type="residual"` for response residuals
+on the fit's estimating scale. Both use the original fit sample.
+For fixed-effect counterfactuals, pass replacement covariates in the
+retained row order and keep the index. Slopes, offsets and fixed effects
+come from the fit. Fits without fixed effects also accept compatible new
+rows.
 [Prediction](results.md#prediction-and-retention) · [Worked prediction](../examples/reuse-a-fit.md#inspect-predictions-and-influence-contributions)
 
 #### `fixef()`
 
 `fit.fixef()` returns a dictionary of block names to Series of normalized
-levels for an FE fit, including recovered levels for supported cancelled
-fits. [Fixed effects](results.md#fixed-effect-results) · [Worked recovery](results.md#recovered-cancelled-effects)
+levels for an FE fit, including recovered levels for cancelled and two-way
+GMM fits. [Fixed effects](results.md#fixed-effect-results) · [Worked recovery](results.md#recovered-cancelled-effects)
 
 ### Sample and diagnostics
 

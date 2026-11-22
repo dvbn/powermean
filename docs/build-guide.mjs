@@ -15,6 +15,7 @@ const groups = [
     ['methods/model.md', 'model', 'Mean and variance'],
     ['methods/fixed-effects.md', 'fixed-effects', 'Fixed effects'],
     ['methods/cancellation.md', 'cancellation', 'Cancel one block'],
+    ['methods/jochmans.md', 'jochmans', 'Difference out two blocks'],
     ['methods/numerical-methods.md', 'numerical-methods', 'Numerical methods'],
   ]],
   ['Read and report results', 'read-and-report', [

@@ -244,6 +244,17 @@ class AssessmentHandoff:
         self._assessed = 0
         self._capture = 0.0
 
+    def strictly_assess(
+        self, whole: WholePoint[PointView], controls: CertificateControls, /
+    ) -> bool:
+        """Require the strict certificate when resuming after a support alarm."""
+        start = len(self._kept)
+        found = self(whole, controls)
+        strict = found.accepted and found.error <= controls.tol
+        if not strict:
+            del self._kept[start:]
+        return strict
+
     def __call__(
         self,
         whole: WholePoint[PointView],

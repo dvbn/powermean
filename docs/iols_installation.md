@@ -16,7 +16,7 @@ by the package already available. A local, offline wheel-installation recipe is:
 
 ```sh
 python -m pip install --no-index --no-deps --no-compile \
-    ./artifacts/powermean-0.1.0-*.whl
+    ./artifacts/powermean-*.whl
 ```
 
 Put only the selected wheel in `artifacts`. This offline command uses the

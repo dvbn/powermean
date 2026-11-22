@@ -64,6 +64,7 @@ from powermean.model.rows import (
     _immutable,
     evaluate_criterion,
     evaluate_rows,
+    poisson_exposure_rows,
 )
 from powermean.model.variance import (
     FloatArray,
@@ -277,14 +278,18 @@ class PointLoss(PointwiseLoss):
         variance: PowerVariance | NB2Variance,
         curvature: Curvature,
         budget: Budget,
+        exposure: FloatArray | None = None,
     ) -> None:
         self.offset = offset
         self.variance = variance
         self.curvature = curvature
         self.budget = budget
+        self.exposure = exposure
         self._held: _HeldRows | None = None
 
-    def _rows(self, y_true: FloatArray, q: FloatArray, *, hold: bool) -> RowEvaluation:
+    def _rows(
+        self, y_true: FloatArray, q: FloatArray, raw: FloatArray, *, hold: bool
+    ) -> RowEvaluation:
         """``evaluate_rows(y_true, q, variance=self.variance)``, or the held rows.
 
         The held rows are returned only for the same bits of ``y_true`` and ``q`` and
@@ -293,11 +298,20 @@ class PointLoss(PointwiseLoss):
         """
         held = self._held
         current = evaluate_rows is _EVALUATE_ROWS
-        if current and held is not None and held.matches(y_true, q, self.variance):
+        identity = q if self.exposure is None else raw
+        if (
+            current
+            and held is not None
+            and held.matches(y_true, identity, self.variance)
+        ):
             return held.rows
-        rows = evaluate_rows(y_true, q, variance=self.variance)
+        rows = (
+            evaluate_rows(y_true, q, variance=self.variance)
+            if self.exposure is None
+            else poisson_exposure_rows(y_true, q, raw, self.exposure)
+        )
         if hold and current:
-            self._held = _held_rows(y_true, q, self.variance, rows, held)
+            self._held = _held_rows(y_true, identity, self.variance, rows, held)
         return rows
 
     def index(self, raw_prediction: FloatArray) -> FloatArray:
@@ -341,7 +355,7 @@ class PointLoss(PointwiseLoss):
         self.budget.charge("loss_gradient")
         q = self.index(raw_prediction)
         values = evaluate_criterion(y_true, q, variance=self.variance)
-        rows = self._rows(y_true, q, hold=True)
+        rows = self._rows(y_true, q, raw_prediction, hold=True)
         return _weighted(values, sample_weight), _weighted(-rows.score, sample_weight)
 
     @override
@@ -355,7 +369,12 @@ class PointLoss(PointwiseLoss):
     ) -> FloatArray:
         """``-a r`` of each row, from the rows alone."""
         self.budget.charge("gradient")
-        rows = evaluate_rows(y_true, self.index(raw_prediction), variance=self.variance)
+        q = self.index(raw_prediction)
+        rows = (
+            evaluate_rows(y_true, q, variance=self.variance)
+            if self.exposure is None
+            else poisson_exposure_rows(y_true, q, raw_prediction, self.exposure)
+        )
         return _weighted(-rows.score, sample_weight)
 
     @override
@@ -369,7 +388,9 @@ class PointLoss(PointwiseLoss):
     ) -> tuple[FloatArray, FloatArray]:
         """``-a r`` and ``a c``, or ``a w`` with the expected curvature, of each row."""
         self.budget.charge("gradient_hessian")
-        rows = self._rows(y_true, self.index(raw_prediction), hold=False)
+        rows = self._rows(
+            y_true, self.index(raw_prediction), raw_prediction, hold=False
+        )
         if self.curvature == "observed":
             hessian = rows.observed_curvature
         else:

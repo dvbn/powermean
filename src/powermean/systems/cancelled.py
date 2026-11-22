@@ -40,7 +40,7 @@ from powermean.fe.cancel import (
     to_sorted,
 )
 from powermean.fe.retained import CenteredDesign
-from powermean.model.variance import FloatArray, Variance
+from powermean.model.variance import FloatArray, PowerVariance, Variance
 from powermean.systems._cancel_rows import group_residuals, row_components
 
 BoolArray = NDArray[np.bool_]
@@ -537,6 +537,31 @@ def _log_weights(structure: CancelStructure, weights: ArrayLike | None) -> Float
     return np.log(to_sorted(structure, array))
 
 
+def gamma_score(design: CenteredDesign, log_t: FloatArray, t: FloatArray) -> FloatArray:
+    """Form B't from sorted masses in a unit-weight, centred Gamma equation."""
+    structure = design.structure
+    codes = structure.sorted_codes
+    positive = t > 0
+    upper = np.maximum.reduceat(log_t, structure.starts)
+    lower = np.minimum.reduceat(np.where(positive, log_t, np.inf), structure.starts)
+    selected = ((lower + 0.5 >= upper) & np.isfinite(upper))[codes]
+    close = positive & selected
+    if not close.any():
+        return design.rmatvec_sorted(t)
+    with np.errstate(over="raise", invalid="raise"):
+        # Use separate contractions so the small exponential differences are
+        # still present when the contribution of the common mass cancels.
+        baseline = np.where(selected, 0.0, t)
+        baseline[close] = np.exp(upper[codes[close]])
+        difference = np.zeros_like(t)
+        difference[close] = baseline[close] * np.expm1(
+            log_t[close] - upper[codes[close]]
+        )
+        return finite_product(
+            design.rmatvec_sorted(baseline) + design.rmatvec_sorted(difference)
+        )
+
+
 def cancelled_equations(
     design: CenteredDesign,
     z: ArrayLike,
@@ -586,10 +611,27 @@ def cancelled_equations(
     rows = row_components(outcomes, q, log_weights, variance)
     group_w, group_t = segment_sum(structure, rows.w), segment_sum(structure, rows.t)
     pi, rho, k = group_residuals(rows, group_w, group_t, structure.sorted_codes)
+    codes = structure.sorted_codes
+    if (
+        obs_weights is None
+        and type(variance) is PowerVariance
+        and variance.tau == 1.0
+        and pi[0] * group_t[codes[0]] == outcomes[0]
+        and np.array_equal(pi * group_t[codes], outcomes)
+    ):
+        # A log-share round trip can leave nonzero noise even though every
+        # fitted mean equals its outcome at the representable exact fit.
+        rho.fill(0.0)
     # Exact algebraic zero; logarithmic round trips must not create singleton noise.
     rho[structure.counts[structure.sorted_codes] == 1] = 0.0
     positive_counts = np.add.reduceat((outcomes > 0).astype(np.intp), structure.starts)
-    score = design.rmatvec_sorted(rho)
+    score = (
+        gamma_score(design, rows.log_t, rows.t)
+        if obs_weights is None
+        and type(variance) is PowerVariance
+        and variance.tau == 2.0
+        else design.rmatvec_sorted(rho)
+    )
     record = object.__new__(CancelledState)
     object.__setattr__(record, "design", design)
     object.__setattr__(record, "_theta", FloatStorage.store(coefficients))

@@ -11,7 +11,7 @@ For reproducible results, record the installed version and the wheel or source a
 
 | Function | Purpose |
 | --- | --- |
-| `fit(formula, data, **options)` | Choose mean order and working variance. |
+| `fit(formula, data, **options)` | Choose mean order and working variance, or select a two-way difference estimator. |
 | `ppml(formula, data, **options)` | Fix `omega=1`, `tau=1`. |
 | `gpml(formula, data, **options)` | Fix `omega=1`, `tau=2`. |
 | `logols(formula, data, **options)` | Fix `omega=0`; require positive outcomes. |
@@ -64,6 +64,22 @@ Prepared fits use only clustering information retained during preparation.
 Convenience wrappers refuse contradictory mean or variance choices.
 The full numerical defaults and domains are in [solver options](solver-options.md),
 including the [IOLS options](solver-options.md#iols-options).
+
+### Two-way difference options
+
+Select `estimator="gmm1"` or `"gmm2"` in `pm.fit` and use an intercept-free
+formula with exactly two fixed-effect identifiers. These fits accept the
+following options and require the input to contain every cell of the chosen
+geometry. Filter the data frame first to fit on a smaller complete array.
+[Two-way difference method](../methods/jochmans.md)
+
+| Argument | Default | Meaning |
+| --- | --- | --- |
+| `estimator` | Required for this route | `"gmm1"` or `"gmm2"` selects the Jochmans moment equation. |
+| `fe_layout` | `"rectangular"` | A complete crossing of two dimensions, or `"directed"` for all ordered non-self links among common agents. |
+| `vcov` | `"paper"` | Observed-cell normalization, or `"stata"` to match the directed Stata normalization. |
+| `start` | Zero slopes | Finite starting slopes in formula design order. |
+| `max_iter` | `100` | Maximum number of accepted Newton updates. |
 
 ### Full-family scope and the current entry restriction
 
