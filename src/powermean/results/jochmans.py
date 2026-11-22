@@ -103,7 +103,7 @@ class JochmansResult:
                 "reference": "normal",
             }
         )
-        refs = (*citations.MANUSCRIPTS, citations.JOCHMANS, citations.JOCHMANS_VERARDI)
+        refs = (*citations.MANUSCRIPTS, citations.JOCHMANS)
         return _Provenance(
             estimator,
             covariance,

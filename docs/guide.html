@@ -2964,7 +2964,8 @@ Zeros                      4.2%                4.2%
 </section>
 <section id="jochmans" class="level2">
 <h2 class="anchored" data-anchor-id="jochmans">Difference out two fixed-effect blocks</h2>
-<p>Set <code>estimator=&quot;gmm1&quot;</code> or <code>&quot;gmm2&quot;</code> in <code>pm.fit</code> for an exogenous exponential mean with two fixed-effect blocks. Jochmans’s differences remove both blocks from the estimating equation. The fitted result reports the slopes. <a href="#references--two-way-exponential-regression">Papers</a></p>
+<p>Set <code>estimator=&quot;gmm1&quot;</code> or <code>&quot;gmm2&quot;</code> in <code>pm.fit</code> for an exogenous exponential mean with two fixed-effect blocks. The differences in Jochmans (2017) remove both blocks from the estimating equation. The fitted result reports the slopes.</p>
+<p>Koen Jochmans (2017). <em>Two-Way Models for Gravity</em>. The Review of Economics and Statistics 99, 478–485. Section II derives the difference moments and cell-projection inference (Theorem 2). Section III defines GMM1 and GMM2. <a href="https://doi.org/10.1162/REST_a_00620">Published paper</a> · <a href="https://www.repository.cam.ac.uk/handle/1810/286880">Open manuscript</a></p>
 <section id="jochmans--choose-the-observed-array" class="level3">
 <h3 class="anchored" data-anchor-id="jochmans--choose-the-observed-array">Choose the observed array</h3>
 <p>Supply a data frame with one row per observed cell, finite regressors and a finite nonnegative outcome. Use <code>0 +</code> for an intercept-free Formulaic design and put exactly two identifier columns after <code>|</code>, in place of the two identifier options in the authors’ Stata commands. <code>estimator=</code> selects the equation (<code>model()</code> in Stata). <code>start=</code> takes a one-dimensional vector in coefficient order (<code>initial()</code> in Stata).</p>
@@ -3012,7 +3013,7 @@ Zeros                      4.2%                4.2%
 </tr>
 </tbody>
 </table>
-<p>These are the two moment equations in Jochmans and Verardi (2020). GMM2 gives each GMM1 rectangle a coefficient-dependent multiplier <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mrow><mi mathvariant="normal">exp</mi><mo>⁡</mo></mrow><mo stretchy="false" form="prefix">(</mo><mo stretchy="false" form="prefix">(</mo><mi>p</mi><mo>+</mo><mi>q</mi><msup><mo stretchy="false" form="postfix">)</mo><mo>′</mo></msup><mi>b</mi><mo stretchy="false" form="postfix">)</mo></mrow><annotation encoding="application/x-tex">\exp((p+q)&#39;b)</annotation></semantics></math>. The roots can differ. With exogenous slopes each equation has as many moments as slopes and uses a local Newton root solve. The default start is zero. Use <code>start=</code> to supply a finite vector in the displayed coefficient order and <code>max_iter=</code> to change the budget.</p>
+<p>GMM2 gives each GMM1 rectangle a coefficient-dependent multiplier <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mrow><mi mathvariant="normal">exp</mi><mo>⁡</mo></mrow><mo stretchy="false" form="prefix">(</mo><mo stretchy="false" form="prefix">(</mo><mi>p</mi><mo>+</mo><mi>q</mi><msup><mo stretchy="false" form="postfix">)</mo><mo>′</mo></msup><mi>b</mi><mo stretchy="false" form="postfix">)</mo></mrow><annotation encoding="application/x-tex">\exp((p+q)&#39;b)</annotation></semantics></math>. The roots can differ. With exogenous slopes each equation has as many moments as slopes and uses a local Newton root solve. The default start is zero. Use <code>start=</code> to supply a finite vector in the displayed coefficient order and <code>max_iter=</code> to change the budget.</p>
 <p>The multiplicative errors must have unit conditional means and unit conditional products for the opposite cell pairs used by the differences, given the full regressor array and fixed effects. For the cell-projection standard errors, assume conditional independence of the observed cells and the large-array regularity of the source, including growth in both dimensions. This scope excludes fixed-<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>T</mi><annotation encoding="application/x-tex">T</annotation></semantics></math> and unrestricted dyadic dependence. Calling this estimator adopts these assumptions.</p>
 <p>An intercept, an additive row or column regressor, or dependent rectangle contrasts raise <code>IdentificationError</code>. The solver also requires a resolved full-rank Jacobian at the evaluated point. Both a scaled moment and a local Newton correction must pass before inference. The returned <code>fit.certificate.status</code> is <code>&quot;local_solution&quot;</code>; existence and outcome can depend on the data and the start. <a href="#troubleshooting--jochmans-fits">Troubleshoot a refusal</a></p>
 </section>
@@ -3823,7 +3824,8 @@ price_index       -0.3110      0.0428    -7.27    0.000     -0.3948     -0.2272
 </section>
 <section id="bias-correction--wz-for-three-way-ppml-gravity" class="level3">
 <h3 class="anchored" data-anchor-id="bias-correction--wz-for-three-way-ppml-gravity">WZ for three-way PPML gravity</h3>
-<p>Weidner and Zylkin show that three-way PPML is consistent with a fixed number of years under their assumptions. Estimating exporter-year and importer-year effects can still shift the slope distribution and distort pair-clustered standard errors. The published analytical slope and covariance adjustments target those two sources of error. The slope adjustment uses the specific three-way PPML expansion. <a href="#references--the-separate-three-way-ppml-correction">Weidner and Zylkin (2021), §3 and Proposition 3</a></p>
+<p>Weidner and Zylkin (2021) show that three-way PPML is consistent with a fixed number of years under their assumptions. Estimating exporter-year and importer-year effects can still shift the slope distribution and distort pair-clustered standard errors. The published analytical slope and covariance adjustments target those two sources of error.</p>
+<p>Martin Weidner and Thomas Zylkin (2021). <em>Bias and consistency in three-way gravity models</em>. Journal of International Economics 132, 103513. The coefficient correction follows §3.4.2 and the expansion in Proposition 3. <a href="https://doi.org/10.1016/j.jinteco.2021.103513">Published paper</a></p>
 <p>Continue with <code>trade</code> and <code>formula</code> from the <a href="#first-fit">gravity walkthrough</a>. Here the explicit covariance request keeps the ordinary pair sandwich while you inspect the coefficient adjustment.</p>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb70"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb70-1"><a href="#cb70-1" aria-hidden="true" tabindex="-1"></a>wz_slope <span class="op">=</span> pm.fit(</span>
 <span id="cb70-2"><a href="#cb70-2" aria-hidden="true" tabindex="-1"></a>    formula,</span>
@@ -3862,7 +3864,8 @@ Nested blocks count as fully redundant in these block counts.</code></pre>
 </section>
 <section id="covariance-refinements" class="level2">
 <h2 class="anchored" data-anchor-id="covariance-refinements">Adjust pair covariance in three-way PPML</h2>
-<p>Ordinary pair clustering allows dependence within each pair’s history. In three-way PPML, estimating many country-year effects also changes the variability of the fitted scores used in that sandwich. Weidner and Zylkin’s analytical adjustment addresses this source of covariance bias. The coefficient correction is a separate calculation. <a href="#references--the-separate-three-way-ppml-correction">Weidner and Zylkin (2021), §3.4.3</a></p>
+<p>Ordinary pair clustering allows dependence within each pair’s history. In three-way PPML, estimating many country-year effects also changes the variability of the fitted scores used in that sandwich. The analytical adjustment of Weidner and Zylkin (2021) addresses this source of covariance bias. The coefficient correction is a separate calculation.</p>
+<p>Martin Weidner and Thomas Zylkin (2021). <em>Bias and consistency in three-way gravity models</em>. Journal of International Economics 132, 103513. The pair-clustered covariance adjustment follows §3.4.3. <a href="https://doi.org/10.1016/j.jinteco.2021.103513">Published paper</a></p>
 <section id="covariance-refinements--change-the-covariance-in-the-gravity-example" class="level3">
 <h3 class="anchored" data-anchor-id="covariance-refinements--change-the-covariance-in-the-gravity-example">Change the covariance in the gravity example</h3>
 <p>Start with the uncorrected <code>fit</code> from the <a href="#first-fit">gravity walkthrough</a> and the optional <code>wz_slope</code> from the <a href="#bias-correction">coefficient chapter</a>. The calls below use the retained fits, so the estimating equation is solved only once for each fit above. The same <code>vcov</code> mapping can be passed at fit time.</p>
@@ -4501,11 +4504,6 @@ y ~ treat + x_normal + x_skewed + x_binary + C(category) + dose + C(arm) + polic
 <h4 class="anchored" data-anchor-id="options--two-way-difference-options">Two-way difference options</h4>
 <p>Select <code>estimator=&quot;gmm1&quot;</code> or <code>&quot;gmm2&quot;</code> in <code>pm.fit</code> and use an intercept-free formula with exactly two fixed-effect identifiers. These fits accept the following options and require the input to contain every cell of the chosen geometry. Filter the data frame first to fit on a smaller complete array. <a href="#jochmans">Two-way difference method</a></p>
 <table class="caption-top table">
-<colgroup>
-<col style="width: 33%">
-<col style="width: 33%">
-<col style="width: 33%">
-</colgroup>
 <thead>
 <tr class="header">
 <th>Argument</th>
@@ -4517,7 +4515,7 @@ y ~ treat + x_normal + x_skewed + x_binary + C(category) + dose + C(arm) + polic
 <tr class="odd">
 <td><code>estimator</code></td>
 <td>Required for this route</td>
-<td><code>&quot;gmm1&quot;</code> or <code>&quot;gmm2&quot;</code> selects the Jochmans moment equation.</td>
+<td><code>&quot;gmm1&quot;</code> or <code>&quot;gmm2&quot;</code> selects the moment equation from Jochmans (2017), §III. <a href="https://doi.org/10.1162/REST_a_00620">Published paper</a></td>
 </tr>
 <tr class="even">
 <td><code>fe_layout</code></td>
@@ -5611,6 +5609,7 @@ original_uncorrected
 </tbody>
 </table>
 <p>Powermean supplies the coefficient corrections of Benatia et al. (2026) for cancelled fits. A <code>vcov</code> request that declares no sampling of the correction (robust, named HC, several dimensions, a classification that crosses the cancelled groups, or one coarser than them beside <code>True</code> or <code>&quot;short_group&quot;</code>) is answered at the fit as <code>with_vcov</code> answers it after the fit: the correction at the cancelled groups and the requested covariance at the uncorrected root, with the same estimates, covariance and diagnostic notes. The corrections use the cancelled fit’s working variance and their own numerical checks.</p>
+<p>The analytical coefficient and covariance adjustments follow Weidner and Zylkin (2021), §§3.4.2–3.4.3. <a href="https://doi.org/10.1016/j.jinteco.2021.103513">Published paper</a></p>
 <p>For three-way PPML, the WZ correction needs an identifiable directed pair block. Name the pair cluster explicitly if the formula leaves its role ambiguous. The correction requires the same set of at least three countries on the origin and destination sides and at least two dates. Each retained directed pair must appear once at every observed date. Whole pairs may be absent, and diagonal pairs may be present or absent.</p>
 <p>A joint fit must keep its original unconditioned sample: no positive-only restriction, conditioning or recorded sample-construction change. A cancelled fit must be unconditioned, cancel that pair block and keep every slope identified. Without a <code>vcov</code> request, the covariance becomes the pair cluster with <code>adjustment=&quot;wz&quot;</code>. An explicit request must cluster on the pair; adding <code>&quot;adjustment&quot;: &quot;none&quot;</code> keeps the ordinary pair covariance.</p>
 <p><code>coef()</code>, the <code>estimate</code> column of <code>tidy()</code>, effects, contrasts and tests use the corrected coefficients. <code>tidy()</code> adds <code>uncorrected</code> and <code>bias</code>, and <code>summary()</code> prints the decomposition. The certificate refers to the uncorrected root; <code>se()</code>, <code>vcov()</code> and intervals use the first-order covariance evaluated there. <code>provenance.options[&quot;bias_correction&quot;]</code> records the correction. If the root is not certified, the coefficients and the correction are withheld.</p>
@@ -6062,10 +6061,7 @@ fallback_used: False</code></pre>
 </table>
 <section id="references--two-way-exponential-regression" class="level3">
 <h3 class="anchored" data-anchor-id="references--two-way-exponential-regression">Two-way exponential regression</h3>
-<ul>
-<li>Jochmans, Koen (2017). <em>Two-Way Models for Gravity</em>. The Review of Economics and Statistics. See section II, Theorem 2 and its supplemental proof for the difference equation and cell-projection inference.</li>
-<li>Jochmans, Koen and Vincenzo Verardi (2020). <em>Fitting exponential regression models with two-way fixed effects</em>. The Stata Journal. Section 2 and the computational appendix describe the GMM1 and GMM2 moments and the array computations used by <code>twexp</code> and <code>twgravity</code>. <a href="#jochmans">Powermean implementation</a></li>
-</ul>
+<p>Jochmans, Koen (2017). <em>Two-Way Models for Gravity</em>. The Review of Economics and Statistics 99, 478–485. See §II for the difference moments and cell-projection inference (Theorem 2), and §III for GMM1 and GMM2. <a href="https://doi.org/10.1162/REST_a_00620">Published paper</a> · <a href="https://www.repository.cam.ac.uk/handle/1810/286880">Open manuscript</a> · <a href="#jochmans">Powermean implementation</a></p>
 </section>
 <section id="references--the-separate-three-way-ppml-correction" class="level3">
 <h3 class="anchored" data-anchor-id="references--the-separate-three-way-ppml-correction">The separate three-way PPML correction</h3>

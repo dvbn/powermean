@@ -64,12 +64,16 @@ cancelled fits. [Benatia et al. (2026), equations (5.5)–(5.7), the three-way p
 
 ## WZ for three-way PPML gravity
 
-Weidner and Zylkin show that three-way PPML is consistent with a fixed number
+Weidner and Zylkin (2021) show that three-way PPML is consistent with a fixed number
 of years under their assumptions. Estimating exporter-year and importer-year
 effects can still shift the slope distribution and distort pair-clustered
 standard errors. The published analytical slope and covariance adjustments
-target those two sources of error. The slope adjustment uses the specific
-three-way PPML expansion. [Weidner and Zylkin (2021), §3 and Proposition 3](../references.md#the-separate-three-way-ppml-correction)
+target those two sources of error.
+
+Martin Weidner and Thomas Zylkin (2021). *Bias and consistency in three-way
+gravity models*. Journal of International Economics 132, 103513. The
+coefficient correction follows §3.4.2 and the expansion in Proposition 3.
+[Published paper](https://doi.org/10.1016/j.jinteco.2021.103513)
 
 Continue with `trade` and `formula` from the [gravity walkthrough](../get-started.md).
 Here the explicit covariance request keeps the ordinary pair sandwich

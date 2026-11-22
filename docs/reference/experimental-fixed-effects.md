@@ -171,6 +171,10 @@ with the same estimates, covariance and diagnostic notes. The
 corrections use the cancelled fit's working variance and their own numerical
 checks.
 
+The analytical coefficient and covariance adjustments follow
+Weidner and Zylkin (2021), §§3.4.2–3.4.3.
+[Published paper](https://doi.org/10.1016/j.jinteco.2021.103513)
+
 For three-way PPML, the WZ correction needs an identifiable directed pair block.
 Name the pair cluster explicitly if the formula leaves its role ambiguous.
 The correction requires the same set of at least three countries on the origin

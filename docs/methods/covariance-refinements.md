@@ -2,10 +2,14 @@
 
 Ordinary pair clustering allows dependence within each pair's history.
 In three-way PPML, estimating many country-year effects also changes the
-variability of the fitted scores used in that sandwich. Weidner and Zylkin's
-analytical adjustment addresses this source of covariance bias. The
+variability of the fitted scores used in that sandwich. The analytical
+adjustment of Weidner and Zylkin (2021) addresses this source of covariance bias. The
 coefficient correction is a separate calculation.
-[Weidner and Zylkin (2021), §3.4.3](../references.md#the-separate-three-way-ppml-correction)
+
+Martin Weidner and Thomas Zylkin (2021). *Bias and consistency in three-way
+gravity models*. Journal of International Economics 132, 103513. The
+pair-clustered covariance adjustment follows §3.4.3.
+[Published paper](https://doi.org/10.1016/j.jinteco.2021.103513)
 
 ## Change the covariance in the gravity example
 

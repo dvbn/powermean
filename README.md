@@ -45,7 +45,7 @@ retained rows. [Worked prediction example](docs/reference/results.md#prediction-
 
 - [User guide](docs/README.md) · [Function index](docs/reference/api.md) · [Troubleshooting](docs/help/troubleshooting.md)
 - [Offline guide](docs/guide.html) · [Quarto source](docs/guide.qmd). Download the HTML and open it in a browser.
-- [Papers and section map](docs/references.md). Cite Benatia et al. (2026) and, for a WZ adjustment, Weidner and Zylkin (2021). Record the exact package build with your analysis.
+- Cite Benatia et al. (2026), Jochmans (2017) for GMM1 or GMM2, and Weidner and Zylkin (2021) for either WZ adjustment. Record the exact package build with your analysis. [Papers and section map](docs/references.md)
 
 ## License
 
