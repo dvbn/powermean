@@ -75,7 +75,7 @@ geometry. Filter the data frame first to fit on a smaller complete array.
 
 | Argument | Default | Meaning |
 | --- | --- | --- |
-| `estimator` | Required for this route | `"gmm1"` or `"gmm2"` selects the Jochmans moment equation. |
+| `estimator` | Required for this route | `"gmm1"` or `"gmm2"` selects the moment equation from Jochmans (2017), §III. [Published paper](https://doi.org/10.1162/REST_a_00620) |
 | `fe_layout` | `"rectangular"` | A complete crossing of two dimensions, or `"directed"` for all ordered non-self links among common agents. |
 | `vcov` | `"paper"` | Observed-cell normalization, or `"stata"` to match the directed Stata normalization. |
 | `start` | Zero slopes | Finite starting slopes in formula design order. |

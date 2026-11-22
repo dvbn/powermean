@@ -237,7 +237,7 @@ def fit_difference_gmm(
     data : pandas.DataFrame
         One row per observed cell. Outcomes are finite and nonnegative.
     estimator : {"gmm1", "gmm2"}
-        The two distinct Jochmans and Verardi moment equations.
+        The two moment equations from Jochmans (2017).
     fe_layout : {"rectangular", "directed"}, default "rectangular"
         Use ``"rectangular"`` for a complete crossing with at least two levels
         per axis (Stata's ``twexp``). A single rectangle cannot support covariance.

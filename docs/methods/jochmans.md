@@ -1,9 +1,14 @@
 # Difference out two fixed-effect blocks
 
 Set `estimator="gmm1"` or `"gmm2"` in `pm.fit` for an exogenous exponential mean
-with two fixed-effect blocks. Jochmans's differences remove both blocks from
-the estimating equation. The fitted result reports the slopes.
-[Papers](../references.md#two-way-exponential-regression)
+with two fixed-effect blocks. The differences in Jochmans (2017) remove
+both blocks from the estimating equation. The fitted result reports the slopes.
+
+Koen Jochmans (2017). *Two-Way Models for Gravity*. The Review of Economics
+and Statistics 99, 478–485. Section II derives the difference moments and
+cell-projection inference (Theorem 2). Section III defines GMM1 and GMM2.
+[Published paper](https://doi.org/10.1162/REST_a_00620) ·
+[Open manuscript](https://www.repository.cam.ac.uk/handle/1810/286880)
 
 ## Choose the observed array
 
@@ -73,7 +78,6 @@ admissible rectangles. Directed rectangles use four distinct agent labels.
 | `"gmm1"` | $P\exp(-p'b)-Q\exp(-q'b)$ |
 | `"gmm2"` | $P\exp(q'b)-Q\exp(p'b)$ |
 
-These are the two moment equations in Jochmans and Verardi (2020).
 GMM2 gives each GMM1 rectangle a coefficient-dependent multiplier
 $\exp((p+q)'b)$. The roots can differ. With exogenous slopes each equation
 has as many moments as slopes and uses a local Newton root solve. The

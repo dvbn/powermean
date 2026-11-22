@@ -823,9 +823,14 @@ short-group correction.
 ## Difference out two fixed-effect blocks {#jochmans}
 
 Set `estimator="gmm1"` or `"gmm2"` in `pm.fit` for an exogenous exponential mean
-with two fixed-effect blocks. Jochmans's differences remove both blocks from
-the estimating equation. The fitted result reports the slopes.
-[Papers](#references--two-way-exponential-regression)
+with two fixed-effect blocks. The differences in Jochmans (2017) remove
+both blocks from the estimating equation. The fitted result reports the slopes.
+
+Koen Jochmans (2017). *Two-Way Models for Gravity*. The Review of Economics
+and Statistics 99, 478–485. Section II derives the difference moments and
+cell-projection inference (Theorem 2). Section III defines GMM1 and GMM2.
+[Published paper](https://doi.org/10.1162/REST_a_00620) ·
+[Open manuscript](https://www.repository.cam.ac.uk/handle/1810/286880)
 
 ### Choose the observed array {#jochmans--choose-the-observed-array}
 
@@ -895,7 +900,6 @@ admissible rectangles. Directed rectangles use four distinct agent labels.
 | `"gmm1"` | $P\exp(-p'b)-Q\exp(-q'b)$ |
 | `"gmm2"` | $P\exp(q'b)-Q\exp(p'b)$ |
 
-These are the two moment equations in Jochmans and Verardi (2020).
 GMM2 gives each GMM1 rectangle a coefficient-dependent multiplier
 $\exp((p+q)'b)$. The roots can differ. With exogenous slopes each equation
 has as many moments as slopes and uses a local Newton root solve. The
@@ -2173,12 +2177,16 @@ cancelled fits. [Benatia et al. (2026), equations (5.5)–(5.7), the three-way p
 
 ### WZ for three-way PPML gravity {#bias-correction--wz-for-three-way-ppml-gravity}
 
-Weidner and Zylkin show that three-way PPML is consistent with a fixed number
+Weidner and Zylkin (2021) show that three-way PPML is consistent with a fixed number
 of years under their assumptions. Estimating exporter-year and importer-year
 effects can still shift the slope distribution and distort pair-clustered
 standard errors. The published analytical slope and covariance adjustments
-target those two sources of error. The slope adjustment uses the specific
-three-way PPML expansion. [Weidner and Zylkin (2021), §3 and Proposition 3](#references--the-separate-three-way-ppml-correction)
+target those two sources of error.
+
+Martin Weidner and Thomas Zylkin (2021). *Bias and consistency in three-way
+gravity models*. Journal of International Economics 132, 103513. The
+coefficient correction follows §3.4.2 and the expansion in Proposition 3.
+[Published paper](https://doi.org/10.1016/j.jinteco.2021.103513)
 
 Continue with `trade` and `formula` from the [gravity walkthrough](#first-fit).
 Here the explicit covariance request keeps the ordinary pair sandwich
@@ -2238,10 +2246,14 @@ respective assumptions. The single draw above illustrates the output.
 
 Ordinary pair clustering allows dependence within each pair's history.
 In three-way PPML, estimating many country-year effects also changes the
-variability of the fitted scores used in that sandwich. Weidner and Zylkin's
-analytical adjustment addresses this source of covariance bias. The
+variability of the fitted scores used in that sandwich. The analytical
+adjustment of Weidner and Zylkin (2021) addresses this source of covariance bias. The
 coefficient correction is a separate calculation.
-[Weidner and Zylkin (2021), §3.4.3](#references--the-separate-three-way-ppml-correction)
+
+Martin Weidner and Thomas Zylkin (2021). *Bias and consistency in three-way
+gravity models*. Journal of International Economics 132, 103513. The
+pair-clustered covariance adjustment follows §3.4.3.
+[Published paper](https://doi.org/10.1016/j.jinteco.2021.103513)
 
 ### Change the covariance in the gravity example {#covariance-refinements--change-the-covariance-in-the-gravity-example}
 
@@ -2937,7 +2949,7 @@ geometry. Filter the data frame first to fit on a smaller complete array.
 
 | Argument | Default | Meaning |
 | --- | --- | --- |
-| `estimator` | Required for this route | `"gmm1"` or `"gmm2"` selects the Jochmans moment equation. |
+| `estimator` | Required for this route | `"gmm1"` or `"gmm2"` selects the moment equation from Jochmans (2017), §III. [Published paper](https://doi.org/10.1162/REST_a_00620) |
 | `fe_layout` | `"rectangular"` | A complete crossing of two dimensions, or `"directed"` for all ordered non-self links among common agents. |
 | `vcov` | `"paper"` | Observed-cell normalization, or `"stata"` to match the directed Stata normalization. |
 | `start` | Zero slopes | Finite starting slopes in formula design order. |
@@ -4146,6 +4158,10 @@ with the same estimates, covariance and diagnostic notes. The
 corrections use the cancelled fit's working variance and their own numerical
 checks.
 
+The analytical coefficient and covariance adjustments follow
+Weidner and Zylkin (2021), §§3.4.2–3.4.3.
+[Published paper](https://doi.org/10.1016/j.jinteco.2021.103513)
+
 For three-way PPML, the WZ correction needs an identifiable directed pair block.
 Name the pair cluster explicitly if the formula leaves its role ambiguous.
 The correction requires the same set of at least three countries on the origin
@@ -4637,14 +4653,12 @@ from that same revision. [Paper](https://arxiv.org/abs/2203.11820v4) ·
 
 ### Two-way exponential regression {#references--two-way-exponential-regression}
 
-- Jochmans, Koen (2017). *Two-Way Models for Gravity*. The Review of
-  Economics and Statistics. See section II, Theorem 2 and its supplemental
-  proof for the difference equation and cell-projection inference.
-- Jochmans, Koen and Vincenzo Verardi (2020). *Fitting exponential regression
-  models with two-way fixed effects*. The Stata Journal. Section 2 and the
-  computational appendix describe the GMM1 and GMM2 moments and the array
-  computations used by `twexp` and `twgravity`.
-  [Powermean implementation](#jochmans)
+Jochmans, Koen (2017). *Two-Way Models for Gravity*. The Review of
+Economics and Statistics 99, 478–485. See §II for the difference moments and
+cell-projection inference (Theorem 2), and §III for GMM1 and GMM2.
+[Published paper](https://doi.org/10.1162/REST_a_00620) ·
+[Open manuscript](https://www.repository.cam.ac.uk/handle/1810/286880) ·
+[Powermean implementation](#jochmans)
 
 ### The separate three-way PPML correction {#references--the-separate-three-way-ppml-correction}
 

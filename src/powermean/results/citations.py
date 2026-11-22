@@ -109,7 +109,6 @@ QUASI_LIKELIHOOD = "wedderburn1974"
 PPML = "santos_silva_tenreyro2006"
 CONVENTION = "ppmlhdfe2020"
 JOCHMANS = "jochmans2017"
-JOCHMANS_VERARDI = "jochmans_verardi2020"
 
 _ENTRIES = (
     Reference(
@@ -194,14 +193,9 @@ _ENTRIES = (
         "Two-Way Models for Gravity",
         kind="article",
         journal="The Review of Economics and Statistics",
-    ),
-    Reference(
-        JOCHMANS_VERARDI,
-        ("Koen Jochmans", "Vincenzo Verardi"),
-        2020,
-        "Fitting exponential regression models with two-way fixed effects",
-        kind="article",
-        journal="The Stata Journal",
+        volume="99",
+        pages="478-485",
+        doi="10.1162/REST_a_00620",
     ),
 )
 
