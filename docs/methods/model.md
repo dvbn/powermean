@@ -5,6 +5,28 @@ In the [gravity example](../get-started.md) it is expected trade in levels.
 A positive mean order allows zeros, and the working variance determines how
 the estimating equation uses residuals.
 
+## Fit one conditional mean three ways
+
+Suppose `y` counts orders and `x` is a strictly exogenous binary regressor. The data below include a zero in each group. Fit the log-linear arithmetic mean with an intercept, first by PPML and then with two other working variances.
+
+```python
+import pandas as pd
+import powermean as pm
+
+orders = pd.DataFrame({
+    "x": [0] * 6 + [1] * 6,
+    "y": [0, 1, 2, 3, 4, 2, 0, 2, 3, 5, 6, 8],
+})
+ppml = pm.fit("y ~ x", orders, omega=1, tau=1)
+intermediate = pm.fit("y ~ x", orders, omega=1, tau=1.5)
+gamma = pm.fit("y ~ x", orders, omega=1, tau=2)
+change = ppml.effect("x", contrast=(0, 1))
+```
+
+The fitted means are 2 orders at `x=0` and 4 at `x=1`. With a binary regressor and an intercept, each estimating equation fits the two group means exactly. Read `ppml.tidy()` for the coefficient on the log-mean scale. Multiply `change.estimate` and each endpoint of `change.interval` by 100 for the fitted percentage change and its pointwise interval. Here the fitted increase is 100%. With more covariates the choice of working variance can affect the estimated slope.
+
+For strictly positive outcomes, log OLS targets the conditional mean of `log(y)`. [Mean orders and outcome domains](#choose-a-conditional-mean)
+
 ## Choose a conditional mean
 
 For $\omega\ne 0$, the regression assumes
@@ -115,28 +137,6 @@ choices: omitting both `tau` and `variance` in a cancelled `pm.fit` call
 selects `tau=2`. See [options](../reference/options.md#full-family-scope-and-the-current-entry-restriction)
 and [numerical methods](numerical-methods.md).
 
-## Fit one conditional mean three ways
-
-Suppose `y` counts orders and `x` is a strictly exogenous binary regressor. The data below include a zero in each group. Fit the log-linear arithmetic mean with an intercept, first by PPML and then with two other working variances.
-
-```python
-import pandas as pd
-import powermean as pm
-
-orders = pd.DataFrame({
-    "x": [0] * 6 + [1] * 6,
-    "y": [0, 1, 2, 3, 4, 2, 0, 2, 3, 5, 6, 8],
-})
-ppml = pm.fit("y ~ x", orders, omega=1, tau=1)
-intermediate = pm.fit("y ~ x", orders, omega=1, tau=1.5)
-gamma = pm.fit("y ~ x", orders, omega=1, tau=2)
-change = ppml.effect("x", contrast=(0, 1))
-```
-
-The fitted means are 2 orders at `x=0` and 4 at `x=1`. With a binary regressor and an intercept, each estimating equation fits the two group means exactly. Read `ppml.tidy()` for the coefficient on the log-mean scale. Multiply `change.estimate` and each endpoint of `change.interval` by 100 for the fitted percentage change and its pointwise interval. Here the fitted increase is 100%. With more covariates the choice of working variance can affect the estimated slope.
-
-For strictly positive outcomes, log OLS targets the conditional mean of `log(y)`. [Mean orders and outcome domains](#choose-a-conditional-mean)
-
 <!-- guide-navigation:start -->
-[Previous: Run the examples](../examples/README.md) · [Guide index](../README.md) · [Next: Fixed effects](fixed-effects.md)
+[Previous: Install](../install.md) · [Guide index](../README.md) · [Next: Prepare data](../help/prepare-data.md)
 <!-- guide-navigation:end -->

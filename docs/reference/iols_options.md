@@ -27,5 +27,5 @@
 Before the first iteration, IOLS checks the centered standard deviation of each slope in its input units. A positive SD below the larger of `1e-12 × largest slope SD` and `1e-300` stops the solve with status `solver_error`. The default raises `ConvergenceError`. With `on_failure="return"`, `result.provenance.failure` records the first affected slope name and its index (zero-based, excluding the intercept), its SD, the maximum SD, the floor and zero iterations and evaluations. The result has no fitted point or certificate, and inference is withheld. Changing a predictor’s units can cross this floor while preserving the rank of the design.
 
 <!-- guide-navigation:start -->
-[Previous: Advanced FE options](experimental-fixed-effects.md) · [Guide index](../README.md) · [Next: IOLS installation](../iols_installation.md)
+[Previous: Advanced fixed effects](experimental-fixed-effects.md) · [Guide index](../README.md) · [Next: IOLS installation](../iols_installation.md)
 <!-- guide-navigation:end -->

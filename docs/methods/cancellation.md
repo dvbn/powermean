@@ -109,12 +109,13 @@ see the sample and cluster count used for your fit.
 
 ## Use the cancelled result
 
-Read the slope, interval and `result.sample` in the usual way.
-`cancelled_gamma.fixef()` gives estimated year effects and in-sample
-recovered firm scales on the log power-mean scale, with status labels and
-without standard errors. `predict()` combines those scales with the retained
-effects, offsets and slope index on the fitted rows.
-[Recovered effects](../reference/results.md#recovered-cancelled-effects)
+To predict sales for a year in the panel, Powermean combines the price
+slope, the estimated year effect and the firm scale recovered from that
+firm's sales. `cancelled_gamma.predict()` gives fitted sales for every
+retained row. `cancelled_gamma.fixef()["firm"]` gives one recovered log
+effect per firm. With only four years per firm, these levels can be noisy.
+[Predict sales at a higher price](../reference/results.md#predict-from-a-cancelled-gamma-fit) ·
+[How the firm scale is recovered](../reference/results.md#recovered-cancelled-effects)
 
 In gravity the exporter-year and importer-year blocks can grow even after
 cancelling pairs. Their estimation can still shift the slope distribution.
@@ -122,5 +123,5 @@ cancelling pairs. Their estimation can still shift the slope distribution.
 short-group correction.
 
 <!-- guide-navigation:start -->
-[Previous: Fixed effects](fixed-effects.md) · [Guide index](../README.md) · [Next: Difference out two blocks](jochmans.md)
+[Previous: Estimate fixed effects](fixed-effects.md) · [Guide index](../README.md) · [Next: Nonlinear panel DiD](../examples/nonlinear-did.md)
 <!-- guide-navigation:end -->

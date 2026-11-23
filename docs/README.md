@@ -2,78 +2,59 @@
 
 <a id="powermean-01-user-guide"></a>
 
-<img src="assets/powermean-logo.png" align="right" width="130" class="guide-logo" alt="Powermean logo" />
+<img src="assets/powermean-logo.png" align="right" width="120" class="guide-logo" alt="Powermean logo" />
 
-Start with the conditional mean of the outcome in levels, including observed zeros. Powermean accompanies *Dealing with Logs and Zeros in Regression Models* by Benatia et al. (2026). [Paper](https://arxiv.org/abs/2203.11820v4) · [Install Powermean](install.md)
-
-**Conditional mean.** Suppose `x` is strictly exogenous and `E[y | x] = exp(a + b*x)`. With your own data frame, fit the arithmetic conditional mean by PPML.
-
-```python
-import powermean as pm
-
-fit = pm.fit("y ~ x", data, omega=1, tau=1)
-```
-
-Read the slope and its uncertainty with `fit.tidy()`. At `omega=1`, PPML (`tau=1`), Gamma PML (`tau=2`) and intermediate working variances such as `tau=1.5` target the same correctly specified conditional mean. [Run the example with 12 observations](methods/model.md#fit-one-conditional-mean-three-ways)
-
-**Gravity.** Fit trade in levels with pair, exporter-year and importer-year fixed effects. Read an agreement's estimated proportional effect and its interval. [Gravity walkthrough](get-started.md)
-
-**Nonlinear difference-in-differences.** Start with a policy adopted at a common date, then allow effects to vary by adoption cohort and date under multiplicative parallel trends. [DiD walkthrough](examples/nonlinear-did.md) · [Cohort effects figure](examples/nonlinear-did.md#plot-the-cohort-by-period-effects)
-
-| What do you need next? | Where to go |
-| --- | --- |
-| Set up an analysis | [Prepare the data and formula](help/prepare-data.md), then [choose the mean and working variance](methods/model.md). |
-| Choose a panel specification | [Estimate fixed effects](methods/fixed-effects.md) or [cancel one block](methods/cancellation.md), then [choose uncertainty for your sampling design](methods/inference.md). |
-| Compare and report fits | [Check the rows](examples/compare-samples.md), [interpret a proportional effect](methods/proportional-effects.md), or [build and export tables](reference/tables.md). |
-| Look up a call or resolve a warning | [Function index](reference/api.md) · [Fit options](reference/options.md) · [Troubleshooting](help/troubleshooting.md) |
-
-Download the [standalone HTML guide](guide.html) for offline reading. The [Quarto source](guide.qmd) is also available.
+Start with the [first fit](../README.md#a-first-fit) to estimate how an offer changes orders. The chapters below go from an ordinary regression to models with fixed effects and particular panel designs. To look up an argument directly, use the [function index](reference/api.md) or [fit options](reference/options.md). [Download the offline guide](guide.html) · [Quarto source](guide.qmd)
 
 ## Get started
 
-- [Install the current version](install.md) from a local wheel or source archive.
-- [Fit your first gravity model](get-started.md) and read its console output.
-- [Prepare data](help/prepare-data.md) and write the formula.
-- [Run the examples](examples/README.md) from your terminal.
-
-## Fit a model
-
-- [Choose a mean and working variance](methods/model.md), including PPML, Gamma PML, log OLS and NB2.
-- [Estimate fixed effects](methods/fixed-effects.md) and check what identifies the slope.
-- [Cancel one fixed-effect block](methods/cancellation.md) and compare the resulting estimating equations.
-- [Difference out two fixed-effect blocks](methods/jochmans.md) in a complete rectangle or directed array.
-- [Choose a solver](methods/numerical-methods.md) and interpret its certificate.
+- [Install Powermean](install.md) from PyPI or a local distribution.
+- [Fit one mean three ways](methods/model.md). Use twelve observations to see what PPML, Gamma PML and other working variances estimate. Then choose a power mean, log OLS or an NB2 variance for your outcome.
+- [Prepare your data and formula](help/prepare-data.md). Specify regressors and interactions, restrict the sample, and account for exposure, offsets or observation weights.
+- [Compare estimation samples](examples/compare-samples.md). Find which input rows each fit used, why rows were excluded and how the outcome distribution changed.
 
 ## Read and report results
 
-- [Check and compare estimation samples](examples/compare-samples.md), then describe their outcomes.
-- [Explore and export a fit](examples/reuse-a-fit.md), including predictions, coefficient tests, contrasts and tables.
-- [Predict and extract fixed effects](reference/results.md#prediction-and-retention), then replace covariates on the fitted rows for a counterfactual.
-- [Interpret proportional changes](methods/proportional-effects.md) on the fitted and population scales.
+- [Interpret a proportional change](methods/proportional-effects.md). Distinguish a change in an individual regressor from a contrast involving several covariates.
+- [Choose standard errors](methods/inference.md). Match robust or clustered covariance to the sampling design.
+- [Reuse a fit](examples/reuse-a-fit.md). Prepare a design once, compare solvers, change covariance, and compute contrasts, linear combinations and hypothesis tests.
+- [Predict and inspect results](reference/results.md). Find fitted means, residuals, influence, numerical diagnostics, and [predictions at other covariate values](reference/results.md#which-rows-can-i-predict-for).
+- [Describe the data and export tables](reference/tables.md). Report summary statistics, balance, outcomes by group, or regression coefficients and intervals.
 
-## Panel designs and inference
+<a id="fit-a-model"></a>
 
-- [Estimate nonlinear difference-in-differences](examples/nonlinear-did.md) with common or staggered adoption.
-- [Choose a covariance estimator](methods/inference.md) for the sampling design.
-- [Correct coefficient bias](methods/bias-correction.md) with the procedures of Benatia et al. (2026) or Weidner and Zylkin (2021).
-- [Adjust pair covariance in gravity](methods/covariance-refinements.md) and plot the resulting intervals.
-- [Compare with Stata ppmlhdfe](from-ppmlhdfe.md) on the same rows and specification.
+## Fixed effects
+
+- [Estimate fixed effects jointly](methods/fixed-effects.md). Write several blocks in one formula and check which comparisons identify the slope.
+- [Cancel a fixed-effect block](methods/cancellation.md). Follow the same firms over time, recover their effects after fitting, and [predict sales after a price change](reference/results.md#predict-from-a-cancelled-gamma-fit).
+
+<a id="panel-designs-and-inference"></a>
+<a id="read-the-guide--panel-designs-and-inference"></a>
+
+## Panel designs and applications
+
+- [Nonlinear difference-in-differences](examples/nonlinear-did.md). Estimate policy effects with common or staggered adoption under multiplicative parallel trends.
+- [Three-way gravity](get-started.md). Fit bilateral trade in levels with pair, exporter-year and importer-year effects.
+- [Difference out two fixed effects](methods/jochmans.md). Check the extra assumption behind GMM1 and GMM2 before using a complete panel or directed pairs.
+- [Correct coefficient bias](methods/bias-correction.md). Compare the short-panel adjustments of Benatia et al. (2026) and the three-way PPML correction of Weidner and Zylkin (2021).
+- [Adjust pair covariance in gravity](methods/covariance-refinements.md). See how the covariance adjustment changes an interval for the agreement effect.
+- [Compare with Stata ppmlhdfe](from-ppmlhdfe.md) on the same observations and specification.
+- [Run the example scripts](examples/README.md) to reproduce the applications.
 
 ## Reference and help
 
 | Page | What to look up |
 | --- | --- |
-| [Function index](reference/api.md) | Find an installed function, result method or output. |
-| [Supported methods](availability.md) | Supported model and covariance choices. |
-| [Fit options](reference/options.md) | Formula, sample, model, covariance and start arguments. |
-| [Results](reference/results.md) | Estimates, tests, covariance, sample records, diagnostics and fixed effects. |
-| [Tables and formats](reference/tables.md) | Summary statistics, balance, outcomes, regression tables and exports. |
-| [Solver options](reference/solver-options.md) | Newton, IOLS and numerical controls. |
-| [Advanced fixed effects](reference/experimental-fixed-effects.md) | Joint and cancelled controls, correction and inference requirements. |
-| [IOLS options](reference/iols_options.md) | Typed implementation and iteration settings. |
+| [Function index](reference/api.md) | Calls, returned objects, reporting tools, exceptions and synthetic data. |
+| [Supported methods](availability.md) | Which means, variances, fixed effects, solvers and covariance requests work together. |
+| [Fit options](reference/options.md) | Formulas, sample restrictions, weights, variance, clustering and small-sample conventions. |
+| [Numerical methods](methods/numerical-methods.md) | Which equation was solved and what its certificate means. |
+| [Solver options](reference/solver-options.md) | Starting values, iteration limits and accuracy controls. |
+| [Advanced fixed effects](reference/experimental-fixed-effects.md) | Joint and cancelled controls, separation and correction requirements. |
+| [IOLS options](reference/iols_options.md) | Select the implementation and set iteration or scaling options. |
 | [IOLS installation](iols_installation.md) | Compiled and NumPy-only builds. |
-| [Troubleshooting](help/troubleshooting.md) | Diagnose a warning, refusal or failed fit. |
-| [Report a problem](help/report-a-problem.md) | Gather the sample, diagnostic and version information. |
-| [Validation](validation.md) | Interpret numerical and statistical checks. |
-| [Papers and methods](references.md) | Read and cite the underlying work. |
-| [Build the guide](BUILD_GUIDE.md) | Regenerate the standalone HTML from these chapters. |
+| [Troubleshooting](help/troubleshooting.md) | Diagnose a warning, a sample exclusion or a failed fit. |
+| [Report a problem](help/report-a-problem.md) | Gather sample, diagnostic and version information. |
+| [Validation](validation.md) | Numerical and statistical checks. |
+| [Papers and methods](references.md) | Sources for the estimators and their assumptions. |
+| [Build the guide](BUILD_GUIDE.md) | Regenerate the standalone HTML. |

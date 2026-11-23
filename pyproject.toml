@@ -64,27 +64,24 @@ text = '''
 
 <img src="https://raw.githubusercontent.com/dvbn/powermean/9ca4917ebf7666fed58f842112ab28de8a37fd65/docs/assets/powermean-logo.png" align="right" width="120" alt="Powermean logo" />
 
-**Powermean is a Python package for fitting power-mean regressions and estimating proportional effects.** It implements the framework of Benatia et al. (2026), *Dealing with Logs and Zeros in Regression Models*, including exponential conditional-mean models and log-linear regressions. With `pm.fit`, choose the conditional mean and the working variance separately, model outcomes in levels with observed zeros, and report proportional effects with confidence intervals. [Paper](https://arxiv.org/abs/2203.11820v4)
+Powermean estimates how a change in a regressor changes a conditional mean in
+percentage terms. Fit outcomes in levels, including zeros, with Poisson or
+Gamma pseudo-maximum likelihood. Use the same formula interface for other
+power means, log-linear regression, and models with several fixed effects.
+[Benatia, Bellégo and Pape (2026)](https://arxiv.org/abs/2203.11820v4)
 
-Estimate multiple high-dimensional fixed-effect blocks jointly, or cancel a selected block while retaining the others. Powermean provides bias corrections that address the incidental-parameters problem in short panels and three-way gravity models. The same formula interface takes you from a simple conditional-mean regression to three-way gravity and nonlinear difference-in-differences.
-
-Use `estimator="gmm1"` or `"gmm2"` to difference out two fixed-effect blocks
-on complete panels or directed dyad arrays. Use `fit.predict()` for fitted
-means, `fit.predict(type="residual")` for residuals, and
-`fit.predict(type="fixed_effects")` for fixed effects. Cancelled and two-way
-GMM fits recover their missing effects after estimation. Fixed-effect fits
-support replacement covariates on the retained rows.
+Install with Python 3.12 or later.
 
 ```bash
 python -m pip install "powermean>=0.1.1"
 ```
 
-Use Python 3.12 or later. The release provides native wheels for CPython 3.12–3.14
-on Linux, macOS, and Windows for x86-64 and ARM64.
+Start with the [worked regression](https://github.com/dvbn/powermean/blob/main/docs/methods/model.md#fit-one-conditional-mean-three-ways).
+The [user guide](https://github.com/dvbn/powermean/blob/main/docs/README.md)
+covers fixed effects, gravity, difference-in-differences and inference.
+It shows how to [predict fitted means, recover effects, and compare covariate values](https://github.com/dvbn/powermean/blob/main/docs/reference/results.md#prediction-and-retention).
 
-[User guide](https://github.com/dvbn/powermean/blob/main/docs/README.md) · [Function index](https://github.com/dvbn/powermean/blob/main/docs/reference/api.md)
-· [Gravity walkthrough](https://github.com/dvbn/powermean/blob/main/docs/get-started.md) · [Nonlinear DiD](https://github.com/dvbn/powermean/blob/main/docs/examples/nonlinear-did.md)
-· [Two-way GMM](https://github.com/dvbn/powermean/blob/main/docs/methods/jochmans.md) · [Prediction](https://github.com/dvbn/powermean/blob/main/docs/reference/results.md#prediction-and-retention)
+[Python functions](https://github.com/dvbn/powermean/blob/main/docs/reference/api.md) · [Powermean for R](https://github.com/dvbn/powermean-R)
 '''
 
 [project.urls]

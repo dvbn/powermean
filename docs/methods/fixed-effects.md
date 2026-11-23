@@ -93,5 +93,5 @@ estimators changes the result. [Advanced FE options](../reference/experimental-f
 covers sample checks and numerical controls.
 
 <!-- guide-navigation:start -->
-[Previous: Mean and variance](model.md) · [Guide index](../README.md) · [Next: Cancel one block](cancellation.md)
+[Previous: Tables and exports](../reference/tables.md) · [Guide index](../README.md) · [Next: Cancel one block](cancellation.md)
 <!-- guide-navigation:end -->

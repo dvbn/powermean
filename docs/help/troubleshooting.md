@@ -123,7 +123,9 @@ distribution and final numerical accuracy. [Compare with ppmlhdfe](../from-ppmlh
 If the issue persists, keep both calls and use a small example someone else
 can run. [Report a problem](report-a-problem.md)
 
-## Jochmans fits
+<a id="jochmans-fits"></a>
+
+## GMM1 and GMM2 fits
 
 - For `SampleError`, check the counts of every row/column pair and make
   sure model values are finite. For directed links, use matching agent
@@ -138,7 +140,7 @@ can run. [Report a problem](report-a-problem.md)
   start and the last evaluated slope state when available. An
   `unusable_covariance` refusal means that the projection did not
   yield a finite, resolved full covariance.
-  [Jochmans estimation and covariance](../methods/jochmans.md)
+  [GMM1 and GMM2 estimation and covariance](../methods/jochmans.md)
 
 <!-- guide-navigation:start -->
 [Previous: IOLS installation](../iols_installation.md) · [Guide index](../README.md) · [Next: Report a problem](report-a-problem.md)

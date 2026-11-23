@@ -44,6 +44,11 @@ precision. `sample=fit` uses a fitted result's row positions. Supply the
 original frame with the same index labels in the same order. Each calculation
 then handles missing values within those rows according to its own options.
 
+For a GMM1 or GMM2 fit, pass the complete data frame you fitted directly
+to these four descriptive functions and omit `sample=`. These estimators
+require every submitted cell. Their result can also be passed directly to
+`pm.etable()` for a table of the fitted model.
+
 | Where | Additional options |
 | --- | --- |
 | Summary | `probs` selects quantile levels from 0 to 1. The default is `(0, .05, .1, .25, .5, .75, .9, .95, 1)`. `complete=True` uses rows complete in every requested variable, and `expand=True` expands categorical columns into indicators. |
@@ -137,5 +142,5 @@ for calculations and save model coefficients and covariance from the fitted
 result for further inference. [Worked exports](../examples/reuse-a-fit.md#export-tables)
 
 <!-- guide-navigation:start -->
-[Previous: Results](results.md) · [Guide index](../README.md) · [Next: Solver options](solver-options.md)
+[Previous: Results and prediction](results.md) · [Guide index](../README.md) · [Next: Estimate fixed effects](../methods/fixed-effects.md)
 <!-- guide-navigation:end -->
