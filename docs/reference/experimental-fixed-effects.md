@@ -160,7 +160,7 @@ established is refused rather than replaced by a zero correction.
 | `False` (default) | Any | No correction work runs. |
 | `True` or `"short_group"` | Cancelled | Short-group correction of Benatia et al. (2026), with cancelled groups as the sampling units. |
 | `"cell"` | Cancelled | Cell correction of Benatia et al. (2026). Without `vcov`, the sampling units are the cancelled groups; a declared one-way classification that consists of complete cancelled groups is the sampling unit. |
-| `"wz"` | Joint or cancelled | Weidner and Zylkin's correction for builtin PPML, `omega=1` and `tau=1`, with observed bread and no weights. |
+| `"wz"` | Joint or cancelled | The correction of Weidner and Zylkin (2021) for PPML, `omega=1` and `tau=1`, with observed bread and no weights. |
 
 Powermean supplies the coefficient corrections of Benatia et al. (2026) for cancelled fits. A `vcov` request that declares no sampling of the correction
 (robust, named HC, several dimensions, a classification that crosses the

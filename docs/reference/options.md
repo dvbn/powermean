@@ -29,14 +29,18 @@ equation. They belong to preparation when you use a prepared problem.
 | --- | --- | --- |
 | `positive_only` | `False` | Explicitly restrict to positive outcomes. |
 | `weights` | Omitted | Name of the weight column. |
-| `weight_type` | `"analytic"` | `"analytic"`, `"frequency"` or `"probability"`, with `weights`. |
+| `weight_type` | `"analytic"` | With `weights`, choose `"analytic"` or `"probability"` to weight each row's contribution, or `"frequency"` for integer replication counts. `sample.effective_n` sums the frequency counts. |
 | `offset` | Omitted | A column or numeric expression on the log power mean scale. |
 | `exposure` | Omitted | A positive column or expression whose logarithm is the offset. |
 | `subset` | Omitted | Boolean condition per row, such as `data["x"] > 0`; missing conditions exclude rows. |
-| `retain` | Omitted | Experimental FE metadata columns for supported later requests; not an ordinary no-FE activation. |
+| `retain` | Omitted | For joint or cancelled fixed effects, name a column or sequence of columns to keep for later inference, such as `retain="region"` if you plan to call `fit.vcov({"cluster": "region"})`. |
 
-Choose either offset or exposure. Supply sample arguments to `prepare` rather
-than `prepared.fit`. A fit cannot override the prepared outcome domain.
+Use either `offset` or `exposure`. For repeated fits, supply these and the
+other sample arguments to `pm.prepare()`. `prepared.positive_only` records
+the outcome domain shared by its fits. Observation weights are available
+with Newton and log OLS when the formula has no fixed-effect blocks. For
+models with fixed effects or for IOLS, omit `weights` and `weight_type`.
+[Prepare the data and formula](../help/prepare-data.md)
 
 ## Fit and inference arguments
 
@@ -289,11 +293,12 @@ The `tau` and `variance` arguments choose a working variance you provide;
 neither requests automatic targeting, and `solver="iols"` computes the
 equation you specified.
 
-Bias correction, difference moments, instruments and public thread control
-remain unavailable through ordinary no-FE calls, as does expected bread beside
-a robust or cluster request. `advise` and `gmm` are also reserved rather than
-active features. Recognized argument names can produce an informative
-unsupported-feature error without activating the feature.
+The keywords `advise`, `gmm` and `threads` are reserved. Supplying any of
+them raises an unsupported-feature error. To fit GMM1 or GMM2, use the
+[`estimator` option](#two-way-difference-options) on a complete two-way
+array. Coefficient bias correction requires a supported fixed-effect fit.
+Instrumental-variable estimation is unavailable. For a model without fixed
+effects, expected bread is available with a named HC covariance.
 
 Inactive `cancel=None`, `difference=False`, `bias_correction=False` and
 `moment="multiplicative"` are accepted, as is `bread="observed"` beside a
@@ -305,5 +310,5 @@ For computational controls, continue to [Solver options](solver-options.md).
 For inspecting a returned fit, use [Results](results.md).
 
 <!-- guide-navigation:start -->
-[Previous: Supported methods](../availability.md) · [Guide index](../README.md) · [Next: Results](results.md)
+[Previous: Supported methods](../availability.md) · [Guide index](../README.md) · [Next: Numerical methods](../methods/numerical-methods.md)
 <!-- guide-navigation:end -->

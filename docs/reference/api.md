@@ -1,14 +1,22 @@
 # Function index
 
-Use this index to look up the call and the object it returns. Examples use
-`import powermean as pm`. The [Supported methods](../availability.md) covers
-supported combinations.
+Examples use `import powermean as pm`. Choose the task you want to do.
+
+| Task | Start here |
+| --- | --- |
+| Estimate a regression or reuse a design | [Fitting functions](#fit-and-configure-a-model) and [supported methods by model](../availability.md). |
+| Read an estimate, change its standard errors or test a restriction | [Result methods](#inspect-a-fitted-result). GMM1 and GMM2 have a [smaller set of result methods](results.md#gmm1-and-gmm2-fits). |
+| Predict outcomes, calculate residuals or recover fixed effects | [Prediction and fixed effects](#predictions-and-fixed-effects). |
+| Find which rows were used or why a fit failed | [Sample and diagnostics](#sample-and-diagnostics) and [errors and warnings](#catch-a-refusal-or-inspect-a-warning). |
+| Describe data, compare fits or export a table | [Table functions and formats](#build-or-export-a-table). |
+| Simulate a panel or a dataset with a known slope | [Data generators and seed controls](#generate-synthetic-data). |
 
 ## Fit and configure a model
 
 ### `pm.fit()`
 
-`pm.fit(formula, data, **options)` returns a fitted `Result`. Use the
+`pm.fit(formula, data, **options)` returns a `Result` for a power-mean
+regression or log OLS. Use the
 untransformed outcome on the left of the formula. Choose the conditional
 mean with `omega` and the working variance with either `tau` or `variance`.
 A formula with fixed-effect blocks fits them jointly by default.
@@ -16,7 +24,7 @@ Use `cancel="block"` to cancel one named block.
 [Fit options](options.md) · [Gravity fit](../get-started.md#fit-with-three-fixed-effect-blocks) · [Nonlinear DiD](../examples/nonlinear-did.md#fit-the-twfe-equation-with-different-working-variances)
 
 Set `estimator="gmm1"` or `"gmm2"` to difference out exactly two fixed-effect
-blocks with the Jochmans exogenous moments. Use an intercept-free formula.
+blocks using the moments derived in Jochmans (2017). Use an intercept-free formula.
 The default `fe_layout="rectangular"` requires a complete crossing. Set
 `fe_layout="directed"` for complete ordered non-self links. The returned
 `JochmansResult` reports coefficient inference, sample identity and a local
@@ -62,7 +70,10 @@ order or equation.
 `pm.NB2(kappa=1.0)` returns a working variance `m + kappa*m**2`.
 Pass `variance=pm.NB2(kappa=0.5)` in place of `tau`. The fit holds the
 finite, nonnegative `kappa` fixed. Read `.kappa` or call `.to_dict()`
-to inspect the choice.
+to inspect the choice. Given `q = log(m)`, the variance object also
+provides `log_value(q)` for the log working variance, `elasticity(q)` for
+the derivative of log variance with respect to log mean, and
+`elasticity_derivative(q)` for its derivative with respect to `q`.
 [Working variances](../methods/model.md#set-weights-in-the-estimating-equation)
 
 ### `pm.ssc()`
@@ -96,6 +107,10 @@ See [advanced fixed effects](experimental-fixed-effects.md) for optional
 module-level sample, solver and cancellation records.
 
 ## Inspect a fitted result
+
+The calls below apply to ordinary `Result` objects, including fixed effects
+estimated jointly or with one block cancelled. For the complete panel or
+dyad estimators, see [GMM1 and GMM2 results](results.md#gmm1-and-gmm2-fits).
 
 ### Coefficients and uncertainty
 
@@ -211,7 +226,9 @@ delta-method uncertainty.
 
 `fit.test(expression)` returns a restriction record for one affine
 equality such as `"x1 = x2"`. Read its `statistic`, `p_value` and
-`metadata`. [Worked equality test](../examples/reuse-a-fit.md#test-or-combine-coefficients)
+`metadata`. For a single restriction or a joint `wald()` test, `difference`
+contains the estimated restriction residuals and `covariance` their
+covariance matrix. [Worked equality test](../examples/reuse-a-fit.md#test-or-combine-coefficients)
 
 #### `wald()`
 
@@ -425,5 +442,5 @@ ending in `.csv` or `.dta`. It writes the dataset and a companion
 JSON file with the same stem, and returns `None`.
 
 <!-- guide-navigation:start -->
-[Previous: Compare with ppmlhdfe](../from-ppmlhdfe.md) · [Guide index](../README.md) · [Next: Supported methods](../availability.md)
+[Previous: Run the examples](../examples/README.md) · [Guide index](../README.md) · [Next: Supported methods](../availability.md)
 <!-- guide-navigation:end -->

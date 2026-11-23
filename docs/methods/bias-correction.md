@@ -130,5 +130,5 @@ covariance request. These adjustments address leading terms under their
 respective assumptions. The single draw above illustrates the output.
 
 <!-- guide-navigation:start -->
-[Previous: Inference](inference.md) · [Guide index](../README.md) · [Next: WZ pair covariance](covariance-refinements.md)
+[Previous: Difference out two blocks](jochmans.md) · [Guide index](../README.md) · [Next: Gravity pair covariance](covariance-refinements.md)
 <!-- guide-navigation:end -->

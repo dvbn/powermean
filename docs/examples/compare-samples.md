@@ -227,5 +227,5 @@ print(price_sample.to_markdown())
 [Explore results, effects and exports](reuse-a-fit.md)
 
 <!-- guide-navigation:start -->
-[Previous: Numerical methods](../methods/numerical-methods.md) · [Guide index](../README.md) · [Next: Explore and export results](reuse-a-fit.md)
+[Previous: Prepare data](../help/prepare-data.md) · [Guide index](../README.md) · [Next: Proportional changes](../methods/proportional-effects.md)
 <!-- guide-navigation:end -->

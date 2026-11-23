@@ -66,5 +66,5 @@ The [options reference](../reference/options.md#fit-time-covariance-for-fixed-ef
 describes when each request can be evaluated and the retained inputs it needs.
 
 <!-- guide-navigation:start -->
-[Previous: Nonlinear panel DiD](../examples/nonlinear-did.md) · [Guide index](../README.md) · [Next: Coefficient bias](bias-correction.md)
+[Previous: Proportional changes](proportional-effects.md) · [Guide index](../README.md) · [Next: Explore and export a fit](../examples/reuse-a-fit.md)
 <!-- guide-navigation:end -->

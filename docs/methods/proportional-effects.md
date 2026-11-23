@@ -61,5 +61,5 @@ effects and their uncertainty require a separate calculation.
 [Result methods](../reference/results.md#proportional-effects-contrasts-and-tests)
 
 <!-- guide-navigation:start -->
-[Previous: Explore and export results](../examples/reuse-a-fit.md) · [Guide index](../README.md) · [Next: Nonlinear panel DiD](../examples/nonlinear-did.md)
+[Previous: Compare samples](../examples/compare-samples.md) · [Guide index](../README.md) · [Next: Standard errors](inference.md)
 <!-- guide-navigation:end -->

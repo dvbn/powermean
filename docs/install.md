@@ -5,7 +5,7 @@ later.
 
 ## Install in your analysis environment
 
-Choose a separate environment. Once 0.1.1 is available on PyPI, run:
+Install the package from PyPI in the environment where you run your analysis.
 
 ```bash
 python -m pip install "powermean>=0.1.1"
@@ -21,8 +21,7 @@ The release workflow builds separate wheels for CPython 3.12, 3.13 and 3.14
 on Linux, macOS and Windows for x86-64 and ARM64. The macOS
 wheels target macOS 15 or later.
 
-The import command checks that Python can find the package. For reproducible
-results, record the installed version and dependency versions.
+The second command prints the installed version. Keep that version with your analysis.
 
 ## Know what the installation needs
 
@@ -72,12 +71,9 @@ For the gravity example, run the script from the unpacked source root.
 python examples/first_fit.py
 ```
 
-The example prints fitted coefficients and standard errors. The walkthrough
-explains how to interpret them.
-
-Continue to the [gravity walkthrough](get-started.md) to follow
-the analysis from its question to its output.
+The [gravity walkthrough](get-started.md) explains which trade flows identify
+the agreement coefficient and how to report its percentage effect.
 
 <!-- guide-navigation:start -->
-[Guide index](README.md) · [Next: Gravity walkthrough](get-started.md)
+[Guide index](README.md) · [Next: Mean and variance](methods/model.md)
 <!-- guide-navigation:end -->

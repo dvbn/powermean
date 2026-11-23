@@ -53,5 +53,5 @@ The result records the implementation. To inspect or request one, see
 [IOLS installation](../iols_installation.md) and [IOLS controls](../reference/iols_options.md).
 
 <!-- guide-navigation:start -->
-[Previous: Difference out two blocks](jochmans.md) · [Guide index](../README.md) · [Next: Compare samples](../examples/compare-samples.md)
+[Previous: Fit options](../reference/options.md) · [Guide index](../README.md) · [Next: Solver options](../reference/solver-options.md)
 <!-- guide-navigation:end -->

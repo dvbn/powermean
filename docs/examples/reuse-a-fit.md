@@ -1,9 +1,10 @@
 # Explore and export a fitted result
 
-This small no-FE example holds the design and equation fixed across
-Newton and IOLS. It then computes a proportional change between two
-covariate configurations. The groups in the simulation let you exercise
-the cluster interface; its rows are generated independently.
+Fit a PPML regression once, then use it to [compare two covariate
+settings](#report-effects-and-contrasts), [predict outcomes for new
+rows](#inspect-predictions-and-influence-contributions) or [export a
+regression table](#export-tables). The example generates 240 independent
+observations and assigns them to groups to illustrate clustered standard errors.
 
 ## Solve the same mean equation twice
 
@@ -237,24 +238,37 @@ wald   28.43249 6.698278e-07        28.43249         chi2       2     None      
 
 ## Inspect predictions and influence contributions
 
+This model has no fixed effects, so you can specify new rows with just
+the regressors. How does the expected outcome change when `x1` goes
+from zero to one and `x2` stays at zero?
+
 ```python
-print(robust.predict(pd.DataFrame({"x1": [0.0], "x2": [0.0]})))
+scenarios = pd.DataFrame({"x1": [0.0, 1.0], "x2": [0.0, 0.0]},
+                         index=["baseline", "higher x1"])
+print(robust.predict(scenarios).round(3).to_string())
+```
+
+```text
+baseline     1.402
+higher x1    1.754
+```
+
+The fitted arithmetic mean rises from 1.402 to 1.754, a 25.2% increase.
+For a model with fixed effects, you can change the covariates on the
+retained rows and hold the effects fixed. [Fixed-effect counterfactuals](../reference/results.md#predict-from-a-cancelled-gamma-fit)
+
+To inspect how individual observations contribute to sampling variation in
+the coefficients, read the influence rows.
+
+```python
 print(newton.influence().head(2).reset_index().to_string(index=False))
 ```
 
 ```text
-0    1.401681
-Name: power_mean, dtype: float64
  position  Intercept        x1        x2
         0  -0.004538  0.001877  0.001345
         1   0.001679 -0.001195 -0.000852
 ```
-
-The prediction is the fitted arithmetic mean at the supplied regressor
-values. The influence rows give the first two stored sampling-unit
-contributions of the clustered fit. Use `fixef()` on an FE result to
-inspect its normalized or recovered group levels.
-[Fixed-effect results](../reference/results.md#fixed-effect-results)
 
 ## Export tables
 
@@ -275,5 +289,5 @@ and model metadata. See the [rendered Markdown example](compare-samples.md#expor
 [Table export formats](../reference/tables.md#print-or-export)
 
 <!-- guide-navigation:start -->
-[Previous: Compare samples](compare-samples.md) · [Guide index](../README.md) · [Next: Proportional changes](../methods/proportional-effects.md)
+[Previous: Standard errors](../methods/inference.md) · [Guide index](../README.md) · [Next: Results and prediction](../reference/results.md)
 <!-- guide-navigation:end -->

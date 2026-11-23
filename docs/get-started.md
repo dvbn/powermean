@@ -1,9 +1,9 @@
 # Estimate a trade agreement slope in a gravity model
 
-Suppose you observe exports from country $i$ to country $j$ in year $t$, with
-some recorded flows equal to zero. You want to estimate the proportional
-difference in expected trade associated with a bilateral agreement. Model
-trade in levels using
+How much more do two countries trade in years when they have an agreement?
+The example follows pairs of countries over time, including years with zero
+trade. It compares the same pair with and without an agreement while accounting
+for conditions in each country and year. The model for expected trade is
 
 $$
 E[Y_{ijt}\mid X,\alpha,\gamma,\delta]
@@ -18,18 +18,43 @@ the model gives the ratio $\exp(\beta)$.
 
 ## Create the trade panel
 
-[Install Powermean](install.md), then run the code below from the checkout or
-unpacked source root. The [standalone script](../examples/first_fit.py)
-contains the generator and first fit, and runs with
-`python examples/first_fit.py`. It needs only the installed package and its
-dependencies.
+After [installing Powermean](install.md), run the following in a Python
+session. It generates all the data used below. The same example is also
+available as a [standalone script](../examples/first_fit.py).
 
 ```python
+import numpy as np
+import pandas as pd
 import powermean as pm
 
-from examples.first_fit import gravity_data
+rng = np.random.default_rng(20261118)
+countries = range(12)
+years = np.arange(8)
+exporter, importer = np.array(
+    [(i, j) for i in countries for j in countries if i != j]
+).T
+n_pairs = len(exporter)
 
-trade = gravity_data()
+adoption_year = rng.integers(1, 12, size=n_pairs)
+agreement = years[None, :] >= adoption_year[:, None]
+pair_effect = rng.normal(0, 0.35, size=(n_pairs, 1))
+exporter_year = rng.normal(0, 0.25, size=(len(countries), len(years)))
+importer_year = rng.normal(0, 0.25, size=(len(countries), len(years)))
+mean = np.exp(
+    1.2 + pair_effect + exporter_year[exporter] + importer_year[importer]
+    + 0.35 * agreement
+)
+
+trade = pd.DataFrame(
+    {
+        "exporter": np.repeat(exporter, len(years)),
+        "importer": np.repeat(importer, len(years)),
+        "year": np.tile(2001 + years, n_pairs),
+        "pair": np.repeat(np.arange(n_pairs), len(years)),
+        "agreement": agreement.astype(int).ravel(),
+        "trade": rng.poisson(mean).ravel(),
+    }
+)
 print(pm.summary_statistics(trade, vars=("trade",), probs=(0, 0.5, 1)))
 ```
 
@@ -188,17 +213,17 @@ Intervals transform the endpoints of the interval of the log ratio. Covariance: 
 The outcome table reports 45.5% more average trade in observed agreement
 years. That comparison uses the two observed groups of rows. The
 regression's 53.9% holds the three fixed-effect blocks constant. Read the
-two numbers as answers to their respective comparisons. Both tables are
-from one synthetic draw run with Powermean 0.1.0.
-[Benatia et al. (2026), §§2–3 and §5 and Weidner–Zylkin §§3.1–3.4](references.md)
+two numbers as answers to their respective comparisons. Both tables use the same simulated panel and were reproduced with Powermean 0.1.1.
+[Benatia et al. (2026), §§2–3 and 5](https://arxiv.org/abs/2203.11820v4) · [Weidner and Zylkin (2021), §§3.1–3.4](https://doi.org/10.1016/j.jinteco.2021.103513)
 
 ## Continue with the same model
 
 Read [fixed effects](methods/fixed-effects.md) to compare joint absorption
 with pair cancellation on this panel. Read [coefficient bias](methods/bias-correction.md)
 and [covariance refinements](methods/covariance-refinements.md) to see how
-the separate WZ requests change the table, and what structure they require.
+the adjustments in Weidner and Zylkin (2021) change the agreement estimate
+and its interval.
 
 <!-- guide-navigation:start -->
-[Previous: Install](install.md) · [Guide index](README.md) · [Next: Prepare data](help/prepare-data.md)
+[Previous: Nonlinear panel DiD](examples/nonlinear-did.md) · [Guide index](README.md) · [Next: Difference out two blocks](methods/jochmans.md)
 <!-- guide-navigation:end -->

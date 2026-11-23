@@ -44,5 +44,5 @@ and computing uncertainty all take time. Compare first fits with first
 fits and prepared fits with prepared fits. [Validation](validation.md)
 
 <!-- guide-navigation:start -->
-[Previous: WZ pair covariance](methods/covariance-refinements.md) · [Guide index](README.md) · [Next: Function index](reference/api.md)
+[Previous: Gravity pair covariance](methods/covariance-refinements.md) · [Guide index](README.md) · [Next: Run the examples](examples/README.md)
 <!-- guide-navigation:end -->

@@ -77,6 +77,9 @@ request is refused when the compiled extension is unavailable.
 `fallback_used`; read them rather than assuming which implementation ran.
 
 Passing the typed default record preserves omitted implementation selection.
+Its `backend_explicit` property tells you whether a backend was requested.
+To construct a typed record from chosen options, use
+`type(pm.solver_defaults("iols")).from_dict({"stopcrit": 5000})`.
 Passing its complete `.to_dict()` mapping instead makes `"cpp"` explicit,
 because that mapping contains `iols_backend`. On a NumPy-only installation,
 use the typed record or explicitly request `"numpy"`. The
@@ -117,5 +120,5 @@ Use [Troubleshooting](../help/troubleshooting.md) to distinguish an unavailable
 request, a sample problem and an unsuccessful numerical solve.
 
 <!-- guide-navigation:start -->
-[Previous: Tables](tables.md) · [Guide index](../README.md) · [Next: Advanced FE options](experimental-fixed-effects.md)
+[Previous: Numerical methods](../methods/numerical-methods.md) · [Guide index](../README.md) · [Next: Advanced fixed effects](experimental-fixed-effects.md)
 <!-- guide-navigation:end -->

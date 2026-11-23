@@ -1,15 +1,10 @@
 # Results
 
-A fitted result keeps the estimate together with its uncertainty, sample and
-computation record. Each of the [worked results](../examples/reuse-a-fit.md)
-and [sample comparison](../examples/compare-samples.md) runs from fitting
-to a printed output. Begin with `summary()` or `tidy()`, then inspect the
-methods below for a particular calculation. The
-[first example](../get-started.md) uses this workflow.
-
-The methods report different objects: a prediction is a fitted conditional
-mean, an influence contribution describes first order sampling variation,
-and the numerical assessment concerns the computed point.
+Start with `fit.summary()` for the printed regression or `fit.tidy()` for
+a table of coefficients and confidence intervals. To see what the model
+predicts for each observation, go to [fitted values, residuals and
+counterfactuals](#prediction-and-retention). To find out why the fit used
+fewer rows than you supplied, [inspect the estimation sample](#inspect-the-estimation-sample).
 
 | Method or property | Contents |
 | --- | --- |
@@ -196,79 +191,91 @@ reference. A corrected FE result adds the columns `uncorrected` and `bias`.
 
 ## Prediction and retention
 
-Interpret a prediction using the mean order chosen at fitting. At order one,
-predictions are conditional arithmetic means. Other orders give conditional
-power means. Exponentiating the fitted log OLS index does not add
-the retransformation correction needed for an arithmetic mean. A replacement
-frame supplies the original raw regressors, including inputs for formula
-columns omitted due to collinearity. No-FE predictions on new data also read
-the offset or exposure specified at fitting.
+| What do you want? | Python call | What you get |
+| --- | --- | --- |
+| Fitted values | `fit.predict()` | One conditional power mean per retained observation, in fitting order. |
+| Residuals | `fit.predict(type="residual")` | One observed minus fitted response per retained observation, on the scale used for estimation. |
+| Fixed effects | `fit.fixef()` or `fit.predict(type="fixed_effects")` | A dictionary keyed by fixed-effect term. Each Series has one log-scale value per level. |
+| Fitted values at other covariates | `fit.predict(new_data)` | A Series indexed like `new_data`. With fixed effects, change the covariates on the retained rows. |
 
-For predictions without fixed effects, `predict(data)` uses the categorical
-levels learned during fitting, including the reference level. A missing
-categorical value gives a missing prediction at that row’s original position.
-If any observed value is outside the fitted levels, `predict(data)` raises
-a `SpecificationError` that identifies the factor and the unexpected value.
-`contrast()` also requires categorical values to belong to the fitted levels.
-
-For a fixed-effect fit, `fit.predict()` uses the retained rows in fitting order.
-`fit.predict(type="fixed_effects")` returns the same dictionary of normalized
-level Series as `fit.fixef()`. `fit.predict(type="residual")` subtracts the fitted
-response from the observed response on the estimating scale. The response is
-`Y` at `omega=1`, `log(Y)` at `omega=0`, and `Y**omega` at other orders.
-
-For rows with finite effects, Powermean adds the slope index, offset and
-fixed effects on the log scale, then exponentiates. An exposure contributes
-its logarithm as an offset. Joint fits already have the effects. Cancelled
-fits recover the missing group scale from the observed outcomes and fitted
-index. Two-way GMM fits recover both effect blocks by PPML with the GMM
-slopes held fixed. [Fixed-effect recovery](#fixed-effect-results)
-
-For a fixed-effect counterfactual, pass a frame with the same retained index
-and row order, containing the raw regressors used by the original formula.
-The fit replays its learned coding and transforms, holds the original offsets
-and effects fixed, and evaluates the slopes at the replacement covariates.
-If the frame includes FE identifiers, they must match the fitted membership.
-An outcome column is unnecessary.
+At `omega=1`, fitted values and residuals are in outcome units. At
+`omega=0`, the fitted value is the geometric mean and the residual is on
+the log scale. At any other order, `predict()` gives the conditional power
+mean $m$ and the residual is $Y^\omega-m^\omega$.
 
 ### Predict from a cancelled Gamma fit
 
-Run this from the source root. The simulated firm panel uses mean order one,
-so fitted sales and residuals are in outcome units.
+These four firms each report sales in three years. What would the fitted
+sales be if the price index rose by 0.10 in every firm and year?
 
 ```python
-import numpy as np
 import pandas as pd
 import powermean as pm
 
-from examples.short_panel import FORMULA, firm_data
+panel = pd.DataFrame({
+    "firm": ["A"] * 3 + ["B"] * 3 + ["C"] * 3 + ["D"] * 3,
+    "year": [2022, 2023, 2024] * 4,
+    "price": [1.0, 1.2, 1.1, 1.3, 1.1, 1.0, 1.2, 1.0, 1.3, 1.0, 1.3, 1.2],
+    "sales": [10, 8, 12, 5, 10, 12, 13, 17, 12, 8, 6, 9],
+})
+fit = pm.fit("sales ~ 0 + price | firm + year", panel, omega=1, tau=2,
+             cancel="firm", cluster="firm", bias_correction=False)
 
-data = firm_data()
-fit = pm.fit(FORMULA, data, omega=1, tau=2, cancel="firm", cluster="firm")
-rows = data.iloc[fit.sample.positions]
+rows = panel.iloc[fit.sample.positions]
 fitted = fit.predict()
-effects = fit.predict(type="fixed_effects")
 residuals = fit.predict(type="residual")
-counterfactual = fit.predict(rows.assign(price_index=rows["price_index"] + 0.10))
+higher = fit.predict(rows.assign(price=rows["price"] + 0.10))
 
-log_mean = (
-    fit.coef()["price_index"] * rows["price_index"]
-    + rows["firm"].map(effects["firm"])
-    + rows["year"].map(effects["year"])
-)
-np.testing.assert_allclose(fitted, np.exp(log_mean))
-print(pd.DataFrame({
-    "Sales": rows["sales"],
-    "Fitted sales": fitted,
-    "Sales at higher price": counterfactual,
-    "Residual": residuals,
-}).head().round(3))
-print(effects["firm"].head())
+print(pd.DataFrame({"Sales": rows["sales"], "Fitted": fitted,
+                    "At higher price": higher, "Residual": residuals}).head(3).round(2))
 ```
 
-The counterfactual adds 0.10 to the price index and keeps each firm's
-recovered scale and year effect fixed. For prediction after a bias
-correction, see [which fitted point is used](#corrected-results).
+```text
+   Sales  Fitted  At higher price  Residual
+0     10   10.19             8.64     -0.19
+1      8    8.26             7.01     -0.26
+2     12   11.42             9.69      0.58
+```
+
+In 2022, firm A sold 10 units. The model fits 10.19 at its observed price
+and 8.64 at the higher price, holding the firm's recovered effect and
+the 2022 effect fixed.
+
+The fit estimates the price slope and year effects after cancelling the
+firm effects. It recovers one scale for each firm from its observed sales.
+To look up a particular firm or year, index the Series by its label.
+
+```python
+effects = fit.predict(type="fixed_effects")
+print(round(effects["firm"].loc["A"], 3), round(effects["year"].loc[2022], 3))
+# 4.102 -0.133
+
+firm_and_year = rows["firm"].map(effects["firm"]) + rows["year"].map(effects["year"])
+```
+
+`firm_and_year` is the combined fixed-effect contribution for each row.
+Here the fitted mean is `exp(price * slope + firm_and_year)`. The separate
+firm and year values depend on the normalization. With only three sales
+observations per firm the recovered firm effects can be noisy.
+[How each method obtains fixed effects](#fixed-effect-results) ·
+[Prediction after a bias correction](#corrected-results)
+
+### Which rows can I predict for?
+
+**With fixed effects**, start from `data.iloc[fit.sample.positions]` and
+change the covariates of interest. Keep the index and order, even if all
+of your proposed group labels appeared in the fit. Powermean holds each
+row's group membership and original offset or exposure fixed. You can
+omit the outcome and fixed-effect identifiers from the replacement frame
+unless they also enter the regressor formula. If you supply a fixed-effect
+identifier, its values must match the fitted rows.
+
+**Without fixed effects**, supply any number of new rows. Include the raw
+variables used in the regressor formula, even inputs for omitted collinear
+terms, and any fitted offset or exposure. Powermean applies the formula
+and categorical coding from estimation. A missing category gives a missing
+prediction on that row. An unseen category raises `SpecificationError`.
+[Example with new rows](../examples/reuse-a-fit.md#inspect-predictions-and-influence-contributions)
 
 ### Recompute uncertainty from stored information
 
@@ -466,9 +473,9 @@ Fixed-effect block counts (fitted rows, active covariance)
 
 ### Recovered cancelled effects
 
-A cancelled fit never estimates the removed scales. After a certified fit,
-`fixef()` computes them on request from the estimation sample and the stored
-point; nothing is refit. Each group's value is
+After solving for the slopes and the remaining fixed effects, `fixef()`
+recovers one value for each level of the cancelled block from the
+estimation sample. Each group's value is
 `log(groupmean(Z exp(-v))) / omega`, where `Z` is the outcome on the fit's
 transformed scale and `v` the fitted working index without the cancelled
 effect. The Series attribute `attrs["cancelled_recovery"]` holds, by group,
@@ -484,11 +491,11 @@ is `v` centered within the group, its `log_scale`, a `status` and a
 
 `log_effect_status` is `"finite"`, `"no_finite_effect"`, `"overflow"` or
 `"underflow"`. The recorded `point` is the original uncorrected root or,
-after a short-group or cell correction, its reporting point. The `attrs` state that neither
-consistency of each effect nor unbiasedness of the plug-in values is
-asserted and that no standard errors are supplied: with fixed short groups
-these values remain noisy. The resulting fitted means and counterfactuals
-condition on the recovered scales.
+after a short-group or cell correction, its reporting point. The package
+reports these group values without standard errors. When the number of
+observations per group stays small, an individual effect can remain noisy
+even when the slope is well estimated. Fitted means and counterfactuals
+hold these recovered scales fixed.
 
 Inspect the fitted levels and recovered scales after following the
 [short-panel example](../methods/cancellation.md):
@@ -514,16 +521,16 @@ original_uncorrected
 
 ### Corrected results
 
-`bias_correction` changes the reported coefficients, not the certified root.
-`coef()` and the `estimate` column of `tidy()` are corrected; `tidy()` adds
-`uncorrected` and `bias`. Intervals are centered on the reported corrected
-coefficients, using first-order covariance evaluated at the uncorrected root;
-the standard errors use that covariance and the certificate describes that
-root. After a WZ correction, `fixef()` and joint
-`predict()` remain original uncorrected outputs, labeled in their `attrs`.
-After a short-group or cell correction, retained and recovered cancelled effects use its
-reporting point. See
-[advanced FE options](experimental-fixed-effects.md#coefficient-corrections).
+When you request a coefficient bias correction, `coef()` and the `estimate`
+column of `tidy()` report the corrected coefficients. `tidy()` also gives
+the uncorrected coefficients and estimated bias. Confidence intervals are
+centered on the corrected coefficients. The numerical certificate and the
+first-order covariance use the original estimating root.
+
+After the coefficient correction of Weidner and Zylkin (2021), both
+`predict()` and `fixef()` use the original slopes and effects. After a
+short-group or cell correction, a cancelled fit uses the corrected reporting
+point to predict and to recover fixed effects. [Details of the corrections](experimental-fixed-effects.md#coefficient-corrections) · [Weidner and Zylkin (2021)](https://doi.org/10.1016/j.jinteco.2021.103513)
 
 The FE retained backends have additional recomputation paths for named HC,
 cluster and WZ-adjusted requests. Each requires the relevant retained
@@ -537,18 +544,28 @@ status with coefficients and standard errors. The
 recorded displays; [validation](../validation.md) explains what evidence
 is needed to make broader claims.
 
-## Jochmans fits
+<a id="jochmans-fits"></a>
 
-`pm.fit(..., estimator="gmm1")` or `estimator="gmm2"` returns a
-`JochmansResult`. Read `coef()`, `se()`,
-`vcov()`, `confint(level)`, `tidy(level)`, `effects(level=...)`,
-`summary(level)` and `sample`. It supports `pm.etable()` and
-`with_vcov("paper")` or `with_vcov("stata")`. The certificate records
-the final relative moment and scaled Newton correction. Both effect
-blocks are differenced, so the result exposes slope inference and
-unit-change transformations of the slope coordinates.
-[Method and covariance conventions](../methods/jochmans.md)
+## GMM1 and GMM2 fits
+
+`pm.fit(..., estimator="gmm1")` and `estimator="gmm2"` return a
+`JochmansResult`. Both methods difference out the two fixed effects when
+estimating the slopes. To predict afterwards, Powermean holds those slopes
+fixed and recovers both sets of effects by PPML. [Method and worked example](../methods/jochmans.md)
+
+| Task | Available on the fitted result |
+| --- | --- |
+| Report estimates | `coef()`, `se()`, `confint(level)`, `tidy(level)` and `summary(level)`. Use `effects(level=...)` for `exp(b) - 1` by coefficient or `pm.etable(fit)` to build a regression table. |
+| Choose the cell-projection convention | `vcov()` gives the active matrix. `vcov("paper")` or `vcov("stata")` returns the requested matrix. `with_vcov(...)` applies it to subsequent reporting. [Covariance conventions](../methods/jochmans.md#read-uncertainty-and-compare-with-stata) |
+| Predict or extract effects | `predict()` gives fitted outcomes and `predict(type="residual")` gives observed minus fitted outcomes. `fixef()` and `predict(type="fixed_effects")` return both effect blocks. Use `predict(new_data)` for replacement covariates on the same cells, in fitting order. [Prediction example](../methods/jochmans.md#predict-trade-after-fitting) |
+| Identify the fitted array | Read `formula`, `method`, `layout`, `dimensions` and `fixed_effects` on the result. `sample.positions` gives the original row positions and `sample.retained_index` the original **index labels**. The complete-array requirement keeps all submitted rows. |
+| Check the numerical solution | `certificate.status` is `"local_solution"` on success. `relative_moment` and `correction` on the certificate give the final scaled moment and Newton correction. `tolerance` and `iterations` give the threshold and number of accepted updates. |
+
+`fit.provenance` records the estimator, covariance convention, status and
+references. For coefficient-level changes use `effects()` here. The named
+`effect()`, `contrast()`, coefficient tests and observation-level `influence()`
+belong to the ordinary regression result.
 
 <!-- guide-navigation:start -->
-[Previous: Options](options.md) · [Guide index](../README.md) · [Next: Tables](tables.md)
+[Previous: Explore and export a fit](../examples/reuse-a-fit.md) · [Guide index](../README.md) · [Next: Tables and exports](tables.md)
 <!-- guide-navigation:end -->

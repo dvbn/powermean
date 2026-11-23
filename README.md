@@ -1,50 +1,64 @@
-# Powermean <img src="docs/assets/powermean-logo.png" align="right" width="120" alt="Powermean logo" />
+# Powermean for Python <img src="docs/assets/powermean-logo.png" align="right" width="120" alt="Powermean logo" />
 
-**Powermean is a Python package for fitting power-mean regressions and estimating proportional effects.** It implements the framework of Benatia et al. (2026), *Dealing with Logs and Zeros in Regression Models*, including exponential conditional-mean models and log-linear regressions. With `pm.fit`, choose the conditional mean and the working variance separately, model outcomes in levels with observed zeros, and report proportional effects with confidence intervals. [Paper](https://arxiv.org/abs/2203.11820v4)
+How much does an offer change the expected number of orders, including customers who order nothing? Powermean fits regressions for questions like this and reports proportional changes with confidence intervals. You choose which conditional mean to model and how to weight observations. The same formula can include several fixed effects. [Benatia, Bellégo and Pape (2026)](https://arxiv.org/abs/2203.11820v4)
 
-Estimate multiple high-dimensional fixed-effect blocks jointly, or cancel a selected block while retaining the others. Powermean provides bias corrections that address the incidental-parameters problem in short panels and three-way gravity models. The same formula interface takes you from a simple conditional-mean regression to three-way gravity and nonlinear difference-in-differences.
+[User guide](docs/README.md) · [Function index](docs/reference/api.md) · [Troubleshooting](docs/help/troubleshooting.md) · [Powermean for R](https://github.com/dvbn/powermean-R)
 
-[Install Powermean](docs/install.md) · [User guide](docs/README.md) · [Function index](docs/reference/api.md) · [Powermean for R](https://github.com/dvbn/powermean-R)
+## Installation
 
-The examples below use Powermean 0.1.1 or later. Install it from PyPI.
+Install from PyPI with Python 3.12 or later. [Installation and platform requirements](docs/install.md)
 
 ```bash
 python -m pip install "powermean>=0.1.1"
 ```
 
-**Conditional mean.** Suppose `x` is strictly exogenous and `E[y | x] = exp(a + b*x)`. With a data frame named `data` containing `y` and `x`, fit the arithmetic conditional mean by Poisson pseudo-maximum likelihood (PPML).
+## A first fit
+
+Simulate 2,000 customers, give each a 50% chance of receiving a promotion, and fit the arithmetic mean of orders by Poisson pseudo-maximum likelihood (PPML).
 
 ```python
+import numpy as np
+import pandas as pd
 import powermean as pm
 
-fit = pm.fit("y ~ x", data, omega=1, tau=1)
+rng = np.random.default_rng(20261123)
+offer = rng.binomial(1, 0.5, size=2000)
+customers = pd.DataFrame({
+    "offer": offer,
+    "orders": rng.poisson(np.exp(0.2 + 0.4 * offer)),
+})
+
+fit = pm.fit("orders ~ offer", customers, omega=1, tau=1)
+change = fit.effect("offer", contrast=(0, 1))
+print(f"{100 * change.estimate:.1f}%")
+# 53.5%
 ```
 
-Read the coefficient on `x` and its interval in `fit.tidy()`. Keep `omega=1` and set `tau=1.5` or `tau=2` (Gamma PML) to change the working variance for the same mean. A runnable example shows how to report the fitted percentage change. [One conditional mean, three working variances](docs/methods/model.md#fit-one-conditional-mean-three-ways)
+The fitted mean number of orders is **53.5% higher** for customers who receive the offer (95% interval, 42.6% to 65.2%). All 478 customers who placed zero orders contribute. `change.estimate` and `change.interval` are on the proportion scale.
 
-**Gravity.** How does bilateral trade differ when a pair has an agreement? Fit trade in levels and choose fixed effects and inference suited to your panel. [Gravity walkthrough](docs/get-started.md)
+```python
+profiles = pd.DataFrame({"offer": [0, 1]})
+print(fit.predict(profiles).round(2).tolist())
+# [1.16, 1.78]
+```
 
-**Nonlinear difference-in-differences.** How do expected visits change after policy adoption? Use `pm.fit` for common or staggered adoption under multiplicative parallel trends, then read the effects by cohort and date with unit-clustered intervals. [DiD walkthrough](docs/examples/nonlinear-did.md)
+The model predicts 1.16 orders without the offer and 1.78 with it. Use `fit.predict(type="residual")` for observed minus fitted orders. With fixed effects, `fit.fixef()` returns estimates by level. You can change covariates on the retained rows and predict with those effects held fixed. [Worked example with firm and year effects](docs/reference/results.md#predict-from-a-cancelled-gamma-fit)
 
-## Work with the results
+## Where to go next
 
-Before comparing coefficients, check which rows each model used. Each result records their input positions and the reasons for exclusions. [Compare estimation samples](docs/examples/compare-samples.md)
+| If you want to… | Read |
+| --- | --- |
+| Choose between the arithmetic mean, another power mean, and log regression | [Choose the mean order](docs/methods/model.md#choose-a-conditional-mean) |
+| Compare PPML and Gamma PML for the same mean | [One conditional mean, three working variances](docs/methods/model.md#fit-one-conditional-mean-three-ways) |
+| Specify the sample, weights, exposure or an offset | [Prepare the data](docs/help/prepare-data.md) |
+| Check the estimation sample or export a regression table | [Compare fitted rows](docs/examples/compare-samples.md) · [Report and export results](docs/examples/reuse-a-fit.md) |
+| Fit trade in levels with pair and country-year effects | [Gravity walkthrough](docs/get-started.md) |
+| Estimate effects by cohort and date | [Nonlinear difference-in-differences](docs/examples/nonlinear-did.md) |
+| Cancel a fixed effect or correct short-panel bias | [Cancel one block](docs/methods/cancellation.md) · [Compare bias corrections](docs/methods/bias-correction.md) |
 
-Use `pm.etable` to place several fitted models side by side. The result also supplies tests, proportional effects and alternative covariance estimates. [Reuse and export a fit](docs/examples/reuse-a-fit.md) · [Tables and formats](docs/reference/tables.md)
+## Citation and license
 
-Use `fit.predict()` for fitted means, `fit.predict(type="residual")` for
-response residuals, and `fit.predict(type="fixed_effects")` to extract fixed
-effects. For a fixed-effect counterfactual, replace the covariates on the
-retained rows. [Worked prediction example](docs/reference/results.md#prediction-and-retention)
-
-## Documentation and citation
-
-- [User guide](docs/README.md) · [Function index](docs/reference/api.md) · [Troubleshooting](docs/help/troubleshooting.md)
-- [Offline guide](docs/guide.html) · [Quarto source](docs/guide.qmd). Download the HTML and open it in a browser.
-- Cite Benatia et al. (2026) and record the exact package build with your analysis. Find citations for individual methods in the [papers and section map](docs/references.md).
-
-## License
+Cite Benatia, Bellégo and Pape (2026) and record your package version. The [papers and methods guide](docs/references.md) lists the references for individual estimators. You can also download the [HTML guide](docs/guide.html) for offline use.
 
 Powermean's own source is licensed under [BSD-3-Clause](LICENSE).
-Bundled components carry the [scikit-learn notice](src/powermean/_vendor/SKLEARN_COPYING)
-and [native extension notices](licenses/NATIVE_NOTICE.md).
+Bundled components carry the [scikit-learn notice](src/powermean/_vendor/SKLEARN_COPYING) and [native extension notices](licenses/NATIVE_NOTICE.md).

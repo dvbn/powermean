@@ -1,23 +1,40 @@
 # Difference out two fixed-effect blocks
 
-Set `estimator="gmm1"` or `"gmm2"` in `pm.fit` for an exogenous exponential mean
-with two fixed-effect blocks. The differences in Jochmans (2017) remove
-both blocks from the estimating equation. The fitted result reports the slopes.
+GMM1 and GMM2 estimate slopes in an exponential mean model with two fixed
+effects. Both compare outcomes in groups of four observations, so neither
+fixed effect enters the slope equation. Use these estimators for a complete
+panel, such as firms observed in every year, or a complete set of directed
+links, such as trade between countries. [Jochmans (2017), §§I–III](https://doi.org/10.1162/REST_a_00620) · [Open manuscript](https://www.repository.cam.ac.uk/handle/1810/286880)
 
-Koen Jochmans (2017). *Two-Way Models for Gravity*. The Review of Economics
-and Statistics 99, 478–485. Section II derives the difference moments and
-cell-projection inference (Theorem 2). Section III defines GMM1 and GMM2.
-[Published paper](https://doi.org/10.1162/REST_a_00620) ·
-[Open manuscript](https://www.repository.cam.ac.uk/handle/1810/286880)
+## When is the comparison valid?
+
+Take two firms $i,k$ observed in two years $j,\ell$. Write
+$\mu_{ij}=a_i g_j\exp(x_{ij}'\beta)$ for expected output and
+$U_{ij}=Y_{ij}/\mu_{ij}$ for the multiplicative error. Let $C$ denote the
+full regressor array and both sets of fixed effects. The mean model gives
+$E[U_{ij}\mid C]=1$ for each observation.
+
+GMM1 and GMM2 also compare the products on the two diagonals. For this
+comparison to average to zero at the true slope, the rectangle must satisfy
+
+$$
+E[U_{ij}U_{k\ell}\mid C]=E[U_{i\ell}U_{kj}\mid C].
+$$
+
+This is an extra assumption. A shock shared by the two observations on one
+diagonal can preserve each conditional mean and still change their expected
+product. Jochmans (2017) derives the moment with both conditional products
+equal to one. The reported standard errors use the paper's cell-based
+variance calculation under conditional independence across observations and
+large-array regularity conditions. In a panel, both the number of firms and
+the number of years must grow for this inference. [Jochmans (2017), eqs. (1.3)–(1.4) and Theorem 2](https://doi.org/10.1162/REST_a_00620)
 
 ## Choose the observed array
 
-Supply a data frame with one row per observed cell, finite regressors
-and a finite nonnegative outcome. Use `0 +` for an intercept-free
-Formulaic design and put exactly two identifier columns after `|`, in place of
-the two identifier options in the authors' Stata commands. `estimator=` selects
-the equation (`model()` in Stata). `start=` takes a one-dimensional vector in
-coefficient order (`initial()` in Stata).
+Pass one row per observed cell, with finite regressors and a finite,
+nonnegative outcome. Put the two identifiers after `|` and omit the
+intercept with `0 +`. Set `estimator="gmm1"` or `estimator="gmm2"` to
+choose the moment equation.
 
 ### Rectangular panels
 
@@ -78,26 +95,29 @@ admissible rectangles. Directed rectangles use four distinct agent labels.
 | `"gmm1"` | $P\exp(-p'b)-Q\exp(-q'b)$ |
 | `"gmm2"` | $P\exp(q'b)-Q\exp(p'b)$ |
 
-GMM2 gives each GMM1 rectangle a coefficient-dependent multiplier
-$\exp((p+q)'b)$. The roots can differ. With exogenous slopes each equation
-has as many moments as slopes and uses a local Newton root solve. The
-default start is zero. Use `start=` to supply a finite vector in the
-displayed coefficient order and `max_iter=` to change the budget.
+GMM2 multiplies each GMM1 rectangle by $\exp((p+q)'b)$. Both target the same
+identified slope under the rectangle restriction, but rectangles receive
+different weights and the estimates can differ in a given sample.
 
-The multiplicative errors must have unit conditional means and unit
-conditional products for the opposite cell pairs used by the differences,
-given the full regressor array and fixed effects. For the cell-projection
-standard errors, assume conditional independence of the observed cells
-and the large-array regularity of the source, including growth in both
-dimensions. This scope excludes fixed-$T$ and unrestricted dyadic
-dependence. Calling this estimator adopts these assumptions.
+PML also offers a choice of weights, applied to a different quantity.
+At `omega=1`, a PML score with working variance $\mu^\tau$ weights each
+observation's relative residual $Y/\mu-1$ by $\mu^{2-\tau}$. PPML gives
+more weight to observations with larger means. Gamma PML weights relative
+residuals equally. Changing `tau` reweights these single-observation
+residuals. Choosing between GMM1 and GMM2 reweights four-observation
+contrasts, and both choices require the extra product restriction above.
+[Mean and working variance](model.md#set-weights-in-the-estimating-equation) · [Benatia et al. (2026), §3.2](https://arxiv.org/abs/2203.11820v4)
+
+Each GMM equation has one moment per slope. The Newton solver starts at
+zero unless you pass a finite vector in coefficient order with `start=`.
+Use `max_iter=` to set the iteration limit.
 
 An intercept, an additive row or column regressor, or dependent rectangle
 contrasts raise `IdentificationError`. The solver also requires a resolved
 full-rank Jacobian at the evaluated point. Both a scaled moment and a
 local Newton correction must pass before inference. The returned
 `fit.certificate.status` is `"local_solution"`; existence and outcome can
-depend on the data and the start. [Troubleshoot a refusal](../help/troubleshooting.md#jochmans-fits)
+depend on the data and the start. [Troubleshoot a refusal](../help/troubleshooting.md#gmm1-and-gmm2-fits)
 
 ## Read uncertainty and compare with Stata
 
@@ -162,5 +182,5 @@ and [prediction and counterfactuals](../reference/results.md#prediction-and-rete
 for the retained-row requirements.
 
 <!-- guide-navigation:start -->
-[Previous: Cancel one block](cancellation.md) · [Guide index](../README.md) · [Next: Numerical methods](numerical-methods.md)
+[Previous: Gravity walkthrough](../get-started.md) · [Guide index](../README.md) · [Next: Coefficient bias](bias-correction.md)
 <!-- guide-navigation:end -->
