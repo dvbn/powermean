@@ -29,7 +29,7 @@ The default `fe_layout="rectangular"` requires a complete crossing. Set
 `fe_layout="directed"` for complete ordered non-self links. The returned
 `JochmansResult` reports coefficient inference, sample identity and a local
 root certificate. [Two-way difference options](options.md#two-way-difference-options) ·
-[Method and example](../methods/jochmans.md)
+[When the two-way comparison is valid](../methods/jochmans.md#when-is-the-comparison-valid)
 
 ### `pm.ppml()`
 

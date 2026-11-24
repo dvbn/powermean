@@ -9,7 +9,7 @@ links, such as trade between countries. [Jochmans (2017), §§I–III](https://d
 ## When is the comparison valid?
 
 Take two firms $i,k$ observed in two years $j,\ell$. Write
-$\mu_{ij}=a_i g_j\exp(x_{ij}'\beta)$ for expected output and
+$\mu_{ij}=a_i g_j\exp(x_{ij}'\beta)$ for expected sales and
 $U_{ij}=Y_{ij}/\mu_{ij}$ for the multiplicative error. Let $C$ denote the
 full regressor array and both sets of fixed effects. The mean model gives
 $E[U_{ij}\mid C]=1$ for each observation.
@@ -21,13 +21,29 @@ $$
 E[U_{ij}U_{k\ell}\mid C]=E[U_{i\ell}U_{kj}\mid C].
 $$
 
-This is an extra assumption. A shock shared by the two observations on one
-diagonal can preserve each conditional mean and still change their expected
-product. Jochmans (2017) derives the moment with both conditional products
-equal to one. The reported standard errors use the paper's cell-based
-variance calculation under conditional independence across observations and
-large-array regularity conditions. In a panel, both the number of firms and
-the number of years must grow for this inference. [Jochmans (2017), eqs. (1.3)–(1.4) and Theorem 2](https://doi.org/10.1162/REST_a_00620)
+Since each error has conditional mean one, this equality requires the same
+conditional covariance on the two diagonals. That is an extra assumption
+about how firms' sales move together.
+
+Suppose a retailer sells more than expected this year and places a larger
+order with its supplier next year. A good year for the supplier might tell
+us little about the retailer's sales a year later. If that pattern persists
+when sales are measured as percentage deviations from their expected levels,
+the two diagonals can have different covariances. Even with exogenous prices,
+GMM1 and GMM2 can then misestimate the price elasticity if the imbalance
+lines up with how prices change across the two firms.
+
+PPML and Gamma PML use each observation's deviation from its own expected
+sales. The same spillover can leave their estimating equations valid when
+the conditional mean is correctly specified. Their standard errors still
+need to account for dependence across firms and years.
+
+Jochmans (2017) derives the difference moment with both conditional products
+equal to one. The GMM standard errors reported here use the paper's cell
+projections and assume conditional independence across observations, along
+with its other large-array conditions. In a firm panel, both the number of
+firms and the number of years must grow for this inference.
+[Jochmans (2017), eqs. (1.3)–(1.4) and Theorem 2](https://doi.org/10.1162/REST_a_00620)
 
 ## Choose the observed array
 
