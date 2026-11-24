@@ -21,17 +21,29 @@ $$
 E[U_{ij}U_{k\ell}\mid C]=E[U_{i\ell}U_{kj}\mid C].
 $$
 
-Since each error has conditional mean one, this equality requires the same
-conditional covariance on the two diagonals. That is an extra assumption
-about how firms' sales move together.
+Take a retailer and its supplier. Measure each firm's sales as a percentage
+above or below what its covariates and fixed effects predict. One diagonal
+pairs the retailer this year with the supplier next year. The other pairs
+the supplier this year with the retailer next year. Since each error has
+conditional mean one, the equation above holds exactly when the two
+pairings have the same conditional covariance.
 
-Suppose a retailer sells more than expected this year and places a larger
-order with its supplier next year. A good year for the supplier might tell
-us little about the retailer's sales a year later. If that pattern persists
-when sales are measured as percentage deviations from their expected levels,
-the two diagonals can have different covariances. Even with exogenous prices,
-GMM1 and GMM2 can then misestimate the price elasticity if the imbalance
-lines up with how prices change across the two firms.
+- **When it holds.** Suppose each firm's demand shocks are independent of
+  the other firm's shocks, given the covariates and fixed effects. A good
+  year can carry over into another good year at the same firm. Both
+  cross-firm covariances are still zero. The condition also holds if the
+  two covariances have the same nonzero value.
+- **When it fails.** Suppose the retailer restocks after an unexpectedly
+  strong year, raising the supplier's sales the following year. Suppose
+  also that an unexpectedly good year for the supplier is unrelated to the
+  retailer's sales the following year. The first covariance is positive
+  and the second is zero.
+
+In either case the model can correctly predict each firm's sales on
+average. GMM1 and GMM2 need the extra assumption because they use products
+of the firms' errors. If the covariance difference lines up with relative
+price changes across firms, it can distort the estimated price elasticity
+even when prices are exogenous.
 
 PPML and Gamma PML use each observation's deviation from its own expected
 sales. The same spillover can leave their estimating equations valid when
@@ -43,7 +55,7 @@ equal to one. The GMM standard errors reported here use the paper's cell
 projections and assume conditional independence across observations, along
 with its other large-array conditions. In a firm panel, both the number of
 firms and the number of years must grow for this inference.
-[Jochmans (2017), eqs. (1.3)–(1.4) and Theorem 2](https://doi.org/10.1162/REST_a_00620)
+[Jochmans (2017), eqs. (1.3)–(1.4), (2.1), and Theorem 2](https://doi.org/10.1162/REST_a_00620)
 
 ## Choose the observed array
 
