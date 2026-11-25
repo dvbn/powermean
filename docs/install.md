@@ -75,5 +75,5 @@ The [gravity walkthrough](get-started.md) explains which trade flows identify
 the agreement coefficient and how to report its percentage effect.
 
 <!-- guide-navigation:start -->
-[Guide index](README.md) · [Next: Mean and variance](methods/model.md)
+[Guide index](README.md) · [Next: Three worked examples](quick-tour.md)
 <!-- guide-navigation:end -->

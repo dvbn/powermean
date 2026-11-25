@@ -210,5 +210,5 @@ and [prediction and counterfactuals](../reference/results.md#prediction-and-rete
 for the retained-row requirements.
 
 <!-- guide-navigation:start -->
-[Previous: Gravity walkthrough](../get-started.md) · [Guide index](../README.md) · [Next: Coefficient bias](bias-correction.md)
+[Previous: Nonlinear panel DiD](../examples/nonlinear-did.md) · [Guide index](../README.md) · [Next: Coefficient bias](bias-correction.md)
 <!-- guide-navigation:end -->

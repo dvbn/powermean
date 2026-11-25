@@ -32,11 +32,12 @@ execute:
 
 <img src="assets/powermean-logo.png" align="right" width="120" class="guide-logo" alt="Powermean logo" />
 
-Start with the [first fit](../README.md#a-first-fit) to estimate how an offer changes orders. The chapters below go from an ordinary regression to models with fixed effects and particular panel designs. To look up an argument directly, use the [function index](#api) or [fit options](#options). [Download the offline guide](#read-the-guide) · [Quarto source](guide.qmd)
+Start with the [first fit](../README.md#a-first-fit), then follow the same three worked examples as in the R guide: a conditional mean, three-way gravity, and nonlinear difference-in-differences. Use the chapters below to prepare data, choose a model and report the results. [Function index](#api) · [Offline guide](#read-the-guide) · [Quarto source](guide.qmd)
 
 ## Get started {#read-the-guide--get-started .unlisted}
 
 - [Install Powermean](#install) from PyPI or a local distribution.
+- [Three worked examples](#quick-tour): fit a conditional mean, compare joint and cancelled gravity models, and estimate effects under staggered adoption.
 - [Fit one mean three ways](#model). Use twelve observations to see what PPML, Gamma PML and other working variances estimate. Then choose a power mean, log OLS or an NB2 variance for your outcome.
 - [Prepare your data and formula](#prepare-data). Specify regressors and interactions, restrict the sample, and account for exposure, offsets or observation weights.
 - [Compare estimation samples](#compare-samples). Find which input rows each fit used, why rows were excluded and how the outcome distribution changed.
@@ -61,8 +62,8 @@ Start with the [first fit](../README.md#a-first-fit) to estimate how an offer ch
 
 ## Panel designs and applications {#read-the-guide--panel-designs-and-applications .unlisted}
 
-- [Nonlinear difference-in-differences](#nonlinear-did). Estimate policy effects with common or staggered adoption under multiplicative parallel trends.
 - [Three-way gravity](#first-fit). Fit bilateral trade in levels with pair, exporter-year and importer-year effects.
+- [Nonlinear difference-in-differences](#nonlinear-did). Estimate policy effects with common or staggered adoption under multiplicative parallel trends.
 - [Difference out two fixed effects](#jochmans). Check the extra assumption behind GMM1 and GMM2 before using a complete panel or directed pairs.
 - [Correct coefficient bias](#bias-correction). Compare the short-panel adjustments of Benatia et al. (2026) and the three-way PPML correction of Weidner and Zylkin (2021).
 - [Adjust pair covariance in gravity](#covariance-refinements). See how the covariance adjustment changes an interval for the agreement effect.
@@ -164,6 +165,134 @@ python examples/first_fit.py
 
 The [gravity walkthrough](#first-fit) explains which trade flows identify
 the agreement coefficient and how to report its percentage effect.
+
+## Three worked examples {#quick-tour}
+
+Start with a conditional mean, then add fixed effects for gravity and nonlinear difference-in-differences. The Python and R guides use the same data, specifications and reported quantities.
+
+### 1. Conditional mean {#quick-tour--1-conditional-mean}
+
+Suppose $x$ is strictly exogenous and $E[Y\mid x]=\exp(\alpha+\beta x)$. Keep the mean order at one and change the working variance: Poisson (PPML), a power of 1.5, or Gamma PML. The outcome can be zero. A one-unit increase in $x$ changes the fitted mean by $100(\exp(\beta)-1)$ percent.
+
+```python
+import pandas as pd
+import powermean as pm
+
+data = pd.DataFrame({
+    "x": [-2, -2, -1, -1, 0, 0, 1, 1, 2, 2, 3, 3],
+    "y": [0, 1, 1, 2, 0, 2, 3, 2, 4, 1, 5, 9],
+})
+names = ("PPML", "Power 1.5", "Gamma PML")
+models = [pm.fit("y ~ x", data, omega=1, tau=tau) for tau in (1, 1.5, 2)]
+print(pm.etable(
+    *models, names=names, keep=("x",), scale="effect",
+    uncertainty="ci", stars=False, digits=1, stats=("nobs", "zeros"),
+).to_markdown())
+```
+
+|  | PPML | Power 1.5 | Gamma PML |
+| :--- | :---: | :---: | :---: |
+| x | 61.6 | 57.5 | 55.4 |
+|  | \[30.1, 100.7\] | \[28.4, 93.3\] | \[25.2, 93.0\] |
+| Estimator | PPML | tau = 1.5 | GPML |
+| Mean order \(omega\) | 1 | 1 | 1 |
+| Covariance | robust | robust | robust |
+| Convention | stata | stata | stata |
+| Reference | normal | normal | normal |
+| Observations | 12 | 12 | 12 |
+| Zeros | 16.7% | 16.7% | 16.7% |
+
+Percentage effects; 95% confidence intervals in brackets.
+
+All three fits use the same observations and target the same arithmetic conditional mean. The estimates can differ because the working variances weight residuals differently. [Choose the mean order and working variance](#model).
+
+### 2. Gravity {#quick-tour--2-gravity}
+
+How much more do two countries trade when they have an agreement? Download [the simulated trade panel](assets/tour-gravity.csv) to your working directory. The model uses pair, exporter-year and importer-year fixed effects. Compare estimating all three blocks jointly with cancelling the pair block and retaining the other two. Cluster standard errors by directed pair.
+
+```python
+trade = pd.read_csv("tour-gravity.csv")
+formula = "trade ~ 0 + agreement | pair + exporter^year + importer^year"
+names = ("Joint PPML", "Cancelled PPML", "Cancelled Gamma")
+models = [
+    pm.fit(formula, trade, omega=1, tau=tau, cancel=block,
+           cluster="pair", bias_correction=False)
+    for tau, block in ((1, None), (1, "pair"), (2, "pair"))
+]
+print(pm.etable(
+    *models, names=names, keep=("agreement",), scale="effect",
+    stars=False, digits=1, stats=("nobs", "zeros"),
+).to_markdown())
+```
+
+|  | Joint PPML | Cancelled PPML | Cancelled Gamma |
+| :--- | :---: | :---: | :---: |
+| agreement | 53.9 | 53.9 | 61.7 |
+|  | \(8.7\) | \(8.7\) | \(10.4\) |
+| Estimator | PPML | PPML | GPML |
+| Mean order \(omega\) | 1 | 1 | 1 |
+| pair effects | Estimated | Cancelled | Cancelled |
+| exporter^year effects | Estimated | Estimated | Estimated |
+| importer^year effects | Estimated | Estimated | Estimated |
+| Covariance | cluster: pair | cluster: pair | cluster: pair |
+| Convention | stata | stata | stata |
+| Reference | normal | normal | normal |
+| Clusters | 132 | 132 | 132 |
+| Observations | 1,056 | 1,056 | 1,056 |
+| Zeros | 6.0% | 6.0% | 6.0% |
+
+Percentage effects; pair-clustered standard errors in parentheses.
+
+On this panel, joint and cancelled PPML agree on the agreement slope. Cancelled Gamma PML uses a different estimating equation. The table shows the proportional change in fitted trade for the same pair, holding country-year effects fixed. [Work through the gravity model, including bias correction](#first-fit).
+
+### 3. Nonlinear difference-in-differences {#quick-tour--3-nonlinear-difference-in-differences}
+
+Download [the simulated visits panel](assets/tour-did.csv) to your working directory. Units adopt in period 2 or 3, or remain untreated. The indicator $g_{2,3}$ marks units that adopted in period 2, observed in period 3. Include the time-varying covariate $x$ alongside the five cohort-period treatment indicators and use unit and period fixed effects. Cluster standard errors by unit.
+
+```python
+panel = pd.read_csv("tour-did.csv")
+terms = ("g2_t2", "g2_t3", "g2_t4", "g3_t3", "g3_t4")
+formula = "visits ~ 0 + " + " + ".join((*terms, "x")) + " | unit + period"
+names = ("Joint PPML", "Cancelled 1.5", "Cancelled Gamma")
+models = [
+    pm.fit(formula, panel, omega=1, tau=tau, cancel=block,
+           cluster="unit", bias_correction=False)
+    for tau, block in ((1, None), (1.5, "unit"), (2, "unit"))
+]
+print(pm.etable(
+    *models, names=names, keep=terms, scale="effect",
+    stars=False, digits=1, stats=("nobs", "zeros"),
+).to_markdown())
+```
+
+|  | Joint PPML | Cancelled 1.5 | Cancelled Gamma |
+| :--- | :---: | :---: | :---: |
+| g2\_t2 | 29.4 | 30.5 | 31.5 |
+|  | \(14.0\) | \(13.9\) | \(13.9\) |
+| g2\_t3 | 36.2 | 34.1 | 31.5 |
+|  | \(17.0\) | \(16.9\) | \(16.9\) |
+| g2\_t4 | 64.9 | 64.8 | 64.9 |
+|  | \(19.1\) | \(19.1\) | \(19.4\) |
+| g3\_t3 | 12.4 | 10.6 | 8.1 |
+|  | \(12.2\) | \(12.2\) | \(12.3\) |
+| g3\_t4 | 29.6 | 28.4 | 27.1 |
+|  | \(12.9\) | \(13.0\) | \(13.2\) |
+| Estimator | PPML | tau = 1.5 | GPML |
+| Mean order \(omega\) | 1 | 1 | 1 |
+| unit effects | Estimated | Cancelled | Cancelled |
+| period effects | Estimated | Estimated | Estimated |
+| Covariance | cluster: unit | cluster: unit | cluster: unit |
+| Convention | stata | stata | stata |
+| Reference | normal | normal | normal |
+| Clusters | 240 | 240 | 240 |
+| Observations | 960 | 960 | 960 |
+| Zeros | 3.4% | 3.4% | 3.4% |
+
+Percentage effects; unit-clustered standard errors in parentheses.
+
+Each displayed effect is a percentage change in the fitted mean for that cohort and period. A causal interpretation requires multiplicative parallel trends conditional on the covariates, no anticipation, and comparable untreated observations. With this staggered design and covariate, changing the working variance can change the fitted effects. [See the assumptions and longer walkthrough](#nonlinear-did).
+
+[User guide](#read-the-guide)
 
 ## Choose the mean order and working variance {#model}
 
@@ -1937,6 +2066,232 @@ short-group correction.
 
 # Panel designs and applications {#panel-and-inference}
 
+## Estimate a trade agreement slope in a gravity model {#first-fit}
+
+How much more do two countries trade in years when they have an agreement?
+The example follows pairs of countries over time, including years with zero
+trade. It compares the same pair with and without an agreement while accounting
+for conditions in each country and year. The model for expected trade is
+
+$$
+E[Y_{ijt}\mid X,\alpha,\gamma,\delta]
+=\exp(\beta D_{ijt}+\alpha_{ij}+\gamma_{it}+\delta_{jt}).
+$$
+
+Here $D_{ijt}$ is the agreement indicator, $X$ contains the panel regressors,
+and the three fixed-effect terms represent a directed pair, an exporter-year
+and an importer-year. The target is the conditional arithmetic mean of trade.
+For a change in $D$ from zero to one with the fixed effects held constant,
+the model gives the ratio $\exp(\beta)$.
+
+### Create the trade panel {#first-fit--create-the-trade-panel}
+
+After [installing Powermean](#install), run the following in a Python
+session. It generates all the data used below. The same example is also
+available as a [standalone script](../examples/first_fit.py).
+
+```python
+import numpy as np
+import pandas as pd
+import powermean as pm
+
+rng = np.random.default_rng(20261118)
+countries = range(12)
+years = np.arange(8)
+exporter, importer = np.array(
+    [(i, j) for i in countries for j in countries if i != j]
+).T
+n_pairs = len(exporter)
+
+adoption_year = rng.integers(1, 12, size=n_pairs)
+agreement = years[None, :] >= adoption_year[:, None]
+pair_effect = rng.normal(0, 0.35, size=(n_pairs, 1))
+exporter_year = rng.normal(0, 0.25, size=(len(countries), len(years)))
+importer_year = rng.normal(0, 0.25, size=(len(countries), len(years)))
+mean = np.exp(
+    1.2 + pair_effect + exporter_year[exporter] + importer_year[importer]
+    + 0.35 * agreement
+)
+
+trade = pd.DataFrame(
+    {
+        "exporter": np.repeat(exporter, len(years)),
+        "importer": np.repeat(importer, len(years)),
+        "year": np.tile(2001 + years, n_pairs),
+        "pair": np.repeat(np.arange(n_pairs), len(years)),
+        "agreement": agreement.astype(int).ravel(),
+        "trade": rng.poisson(mean).ravel(),
+    }
+)
+print(pm.summary_statistics(trade, vars=("trade",), probs=(0, 0.5, 1)))
+```
+
+```text
+Summary statistics                                      N = 1,056 rows
+----------------------------------------------------------------------
+           N  missing  mean    sd    p0   p50   p100  zeros  mean | >0
+----------------------------------------------------------------------
+trade  1,056        0  4.08  3.25  0.00  3.00  37.00   6.0%       4.33
+----------------------------------------------------------------------
+```
+
+The simulation has 12 countries, all 132 directed foreign pairs, and eight
+years for each pair. There is no domestic trade in this design. Agreements
+start at different dates, with some pairs untreated throughout. Adoption
+dates are drawn independently by directed pair for this exercise. Real
+agreements are often reciprocal, in which case the appropriate clustering
+may differ. Trade is drawn in levels from a Poisson distribution with
+pair-specific baselines, country-year shifts and an agreement slope of 0.35.
+This makes the examples reproducible and shows how to handle genuine zeros.
+
+### Fit with three fixed-effect blocks {#first-fit--fit-with-three-fixed-effect-blocks}
+
+```python
+formula = "trade ~ 0 + agreement | pair + exporter^year + importer^year"
+fit = pm.fit(
+    formula, trade, omega=1, tau=1, cancel=None, bias_correction=False,
+    vcov={"cluster": "pair"},
+)
+print(fit.summary())
+```
+
+```text
+powermean
+====================================================================================
+PPML (omega = 1, tau = 1)
+Fixed effects: pair (estimated), exporter^year (estimated), importer^year (estimated)
+Observations: 1056 of 1056 input rows (none dropped)
+Status: verified; certified: True
+Coverage: unique_root (BBP prop:iols-exact-sample-root)
+------------------------------------------------------------------------------------
+                  coef.   std. err.        z    P>|z|    [95% conf. interval]
+------------------------------------------------------------------------------------
+agreement        0.4315      0.0563     7.66    0.000      0.3210      0.5419
+------------------------------------------------------------------------------------
+Fixed-effect block counts (fitted rows, active covariance)
+  pair: levels=132, redundant=132 (exact), nested in=pair
+  exporter^year: levels=96, redundant=1 (exact), nested in=none
+  importer^year: levels=96, redundant=8 (exact), nested in=none
+Nested blocks count as fully redundant in these block counts.
+```
+
+The console summary shows the estimator, the three jointly estimated blocks,
+the number of usable observations and the numerical status. The agreement
+row is on the log mean scale.
+
+- `omega=1` models the arithmetic mean. `tau=1` specifies the power working
+  variance $V(m)=m$ and gives PPML. The PPML moment needs a correctly specified
+  mean for its usual interpretation. Its use extends to nonnegative outcomes
+  measured in continuous units.
+- Terms after `|` are fixed-effect blocks. `pair` identifies a *directed*
+  exporter–importer pair. `^` creates one interaction block per term.
+  `0 +` omits a separate intercept because the effect indicators already
+  span a constant. The fit estimates the blocks jointly through absorption.
+- The covariance sums score contributions within each of the 132 pairs before
+  combining them. That matches independent pair histories and allows arbitrary
+  dependence within a history under the pair-sandwich assumptions. Shared
+  shocks across pairs require a separate sampling argument.
+
+All 63 zero flows contribute to the fit. In other data, some patterns of
+zeros can imply separation and change the estimation sample. Inspect
+`fit.sample` and `fit.summary()` for the actual sample and diagnostics.
+[Prepare your data](#prepare-data)
+
+### Identify the slope {#first-fit--identify-the-slope}
+
+Pair effects absorb permanent bilateral differences such as distance.
+Exporter-year effects absorb shifts common to all partners of an exporter
+in a year, and importer-year effects do the analogous job for importers.
+The agreement slope uses within-pair changes in policy that remain after
+both country-year blocks are accounted for. A policy that moves identically
+for all destinations of an exporter in each year would be absorbed by the
+exporter-year block, even if it changes within pairs.
+
+These controls identify a coefficient of the maintained mean model when
+enough variation remains. A causal trade-policy interpretation in an
+observational panel also needs assumptions about policy timing and other
+time-varying bilateral shocks. The model holds exporter-year and importer-year
+effects fixed when computing this comparison. A counterfactual in which those
+effects respond to policy requires an additional model.
+
+### Report a percentage and interval {#first-fit--report-a-percentage-and-interval}
+
+Ask `pm.etable` to report the coefficient as a percentage with the
+transformed confidence interval.
+
+```python
+table = pm.etable(
+    fit, names=("Gravity PPML",), scale="effect", uncertainty="ci",
+    stats=("nobs", "zeros"), stars=False, digits=1,
+)
+print(table)
+```
+
+```text
+------------------------------------
+                        Gravity PPML
+------------------------------------
+agreement                   53.9
+                        [37.9, 71.9]
+------------------------------------
+Estimator                   PPML
+Mean order (omega)           1
+pair effects             Estimated
+exporter^year effects    Estimated
+importer^year effects    Estimated
+Covariance             cluster: pair
+Convention                 stata
+Reference                  normal
+Clusters                    132
+------------------------------------
+Observations               1,056
+Zeros                       6.0%
+------------------------------------
+Entries are 100 (exp(b) - 1) for each reported coefficient coordinate; not a standalone regressor change.
+95% confidence intervals in brackets, transformed from the coefficient interval.
+```
+
+With the same fixed effects, the fitted conditional mean with an agreement
+is 53.9% higher. The 95% interval is pointwise. In a Python notebook,
+display `table` as the last expression for an HTML table. Use
+`table.to_latex()` for a LaTeX table or `fit.tidy()` for the unrounded
+coefficients and uncertainty as a DataFrame. For a named regressor
+comparison on the proportion scale, use `fit.effect("agreement", contrast=(0, 1))`.
+
+### Compare with the raw outcome means {#first-fit--compare-with-the-raw-outcome-means}
+
+```python
+outcomes = pm.outcome_table(
+    trade, outcomes="trade", treatment="agreement", cluster="pair",
+)
+print(outcomes)
+```
+
+```text
+Outcome table                                                          control: agreement = 0 (N = 721); agreement = 1 (N = 335)
+--------------------------------------------------------------------------------------------------------------------------------
+       target   zeros (0)  zeros (1)  mean (0)  mean (1)  mean | >0 (0)  mean | >0 (1)  difference, unadjusted  [95% conf. int.]
+--------------------------------------------------------------------------------------------------------------------------------
+trade  theta_N       6.9%       3.9%      3.56      5.18           3.83           5.39                   45.5%    [30.1%, 62.7%]
+--------------------------------------------------------------------------------------------------------------------------------
+Proportional difference in means, unadjusted (theta_N).
+Intervals transform the endpoints of the interval of the log ratio. Covariance: cluster-robust by 'pair', convention ssc='stata'.
+```
+
+The outcome table reports 45.5% more average trade in observed agreement
+years. That comparison uses the two observed groups of rows. The
+regression's 53.9% holds the three fixed-effect blocks constant. Read the
+two numbers as answers to their respective comparisons. Both tables use the same simulated panel and were reproduced with Powermean 0.1.1.
+[Benatia et al. (2026), §§2–3 and 5](https://arxiv.org/abs/2203.11820v4) · [Weidner and Zylkin (2021), §§3.1–3.4](https://doi.org/10.1016/j.jinteco.2021.103513)
+
+### Continue with the same model {#first-fit--continue-with-the-same-model}
+
+Read [fixed effects](#fixed-effects) to compare joint absorption
+with pair cancellation on this panel. Read [coefficient bias](#bias-correction)
+and [covariance refinements](#covariance-refinements) to see how
+the adjustments in Weidner and Zylkin (2021) change the agreement estimate
+and its interval.
+
 ## Nonlinear difference-in-differences in a short panel {#nonlinear-did}
 
 Suppose a policy changes the number of visits to a service. Some units record
@@ -2373,232 +2728,6 @@ Match controls, support, reference periods, clustering and aggregation
 weights when comparing software. Powermean produced the tables above. The Stata syntax follows the command documentation and source.
 [jwdid nonlinear estimation and postestimation](https://friosavila.github.io/app_metrics/app_metrics11.html) ·
 [jwdid source](https://github.com/friosavila/stpackages/blob/main/jwdid/jwdid.ado)
-
-## Estimate a trade agreement slope in a gravity model {#first-fit}
-
-How much more do two countries trade in years when they have an agreement?
-The example follows pairs of countries over time, including years with zero
-trade. It compares the same pair with and without an agreement while accounting
-for conditions in each country and year. The model for expected trade is
-
-$$
-E[Y_{ijt}\mid X,\alpha,\gamma,\delta]
-=\exp(\beta D_{ijt}+\alpha_{ij}+\gamma_{it}+\delta_{jt}).
-$$
-
-Here $D_{ijt}$ is the agreement indicator, $X$ contains the panel regressors,
-and the three fixed-effect terms represent a directed pair, an exporter-year
-and an importer-year. The target is the conditional arithmetic mean of trade.
-For a change in $D$ from zero to one with the fixed effects held constant,
-the model gives the ratio $\exp(\beta)$.
-
-### Create the trade panel {#first-fit--create-the-trade-panel}
-
-After [installing Powermean](#install), run the following in a Python
-session. It generates all the data used below. The same example is also
-available as a [standalone script](../examples/first_fit.py).
-
-```python
-import numpy as np
-import pandas as pd
-import powermean as pm
-
-rng = np.random.default_rng(20261118)
-countries = range(12)
-years = np.arange(8)
-exporter, importer = np.array(
-    [(i, j) for i in countries for j in countries if i != j]
-).T
-n_pairs = len(exporter)
-
-adoption_year = rng.integers(1, 12, size=n_pairs)
-agreement = years[None, :] >= adoption_year[:, None]
-pair_effect = rng.normal(0, 0.35, size=(n_pairs, 1))
-exporter_year = rng.normal(0, 0.25, size=(len(countries), len(years)))
-importer_year = rng.normal(0, 0.25, size=(len(countries), len(years)))
-mean = np.exp(
-    1.2 + pair_effect + exporter_year[exporter] + importer_year[importer]
-    + 0.35 * agreement
-)
-
-trade = pd.DataFrame(
-    {
-        "exporter": np.repeat(exporter, len(years)),
-        "importer": np.repeat(importer, len(years)),
-        "year": np.tile(2001 + years, n_pairs),
-        "pair": np.repeat(np.arange(n_pairs), len(years)),
-        "agreement": agreement.astype(int).ravel(),
-        "trade": rng.poisson(mean).ravel(),
-    }
-)
-print(pm.summary_statistics(trade, vars=("trade",), probs=(0, 0.5, 1)))
-```
-
-```text
-Summary statistics                                      N = 1,056 rows
-----------------------------------------------------------------------
-           N  missing  mean    sd    p0   p50   p100  zeros  mean | >0
-----------------------------------------------------------------------
-trade  1,056        0  4.08  3.25  0.00  3.00  37.00   6.0%       4.33
-----------------------------------------------------------------------
-```
-
-The simulation has 12 countries, all 132 directed foreign pairs, and eight
-years for each pair. There is no domestic trade in this design. Agreements
-start at different dates, with some pairs untreated throughout. Adoption
-dates are drawn independently by directed pair for this exercise. Real
-agreements are often reciprocal, in which case the appropriate clustering
-may differ. Trade is drawn in levels from a Poisson distribution with
-pair-specific baselines, country-year shifts and an agreement slope of 0.35.
-This makes the examples reproducible and shows how to handle genuine zeros.
-
-### Fit with three fixed-effect blocks {#first-fit--fit-with-three-fixed-effect-blocks}
-
-```python
-formula = "trade ~ 0 + agreement | pair + exporter^year + importer^year"
-fit = pm.fit(
-    formula, trade, omega=1, tau=1, cancel=None, bias_correction=False,
-    vcov={"cluster": "pair"},
-)
-print(fit.summary())
-```
-
-```text
-powermean
-====================================================================================
-PPML (omega = 1, tau = 1)
-Fixed effects: pair (estimated), exporter^year (estimated), importer^year (estimated)
-Observations: 1056 of 1056 input rows (none dropped)
-Status: verified; certified: True
-Coverage: unique_root (BBP prop:iols-exact-sample-root)
-------------------------------------------------------------------------------------
-                  coef.   std. err.        z    P>|z|    [95% conf. interval]
-------------------------------------------------------------------------------------
-agreement        0.4315      0.0563     7.66    0.000      0.3210      0.5419
-------------------------------------------------------------------------------------
-Fixed-effect block counts (fitted rows, active covariance)
-  pair: levels=132, redundant=132 (exact), nested in=pair
-  exporter^year: levels=96, redundant=1 (exact), nested in=none
-  importer^year: levels=96, redundant=8 (exact), nested in=none
-Nested blocks count as fully redundant in these block counts.
-```
-
-The console summary shows the estimator, the three jointly estimated blocks,
-the number of usable observations and the numerical status. The agreement
-row is on the log mean scale.
-
-- `omega=1` models the arithmetic mean. `tau=1` specifies the power working
-  variance $V(m)=m$ and gives PPML. The PPML moment needs a correctly specified
-  mean for its usual interpretation. Its use extends to nonnegative outcomes
-  measured in continuous units.
-- Terms after `|` are fixed-effect blocks. `pair` identifies a *directed*
-  exporter–importer pair. `^` creates one interaction block per term.
-  `0 +` omits a separate intercept because the effect indicators already
-  span a constant. The fit estimates the blocks jointly through absorption.
-- The covariance sums score contributions within each of the 132 pairs before
-  combining them. That matches independent pair histories and allows arbitrary
-  dependence within a history under the pair-sandwich assumptions. Shared
-  shocks across pairs require a separate sampling argument.
-
-All 63 zero flows contribute to the fit. In other data, some patterns of
-zeros can imply separation and change the estimation sample. Inspect
-`fit.sample` and `fit.summary()` for the actual sample and diagnostics.
-[Prepare your data](#prepare-data)
-
-### Identify the slope {#first-fit--identify-the-slope}
-
-Pair effects absorb permanent bilateral differences such as distance.
-Exporter-year effects absorb shifts common to all partners of an exporter
-in a year, and importer-year effects do the analogous job for importers.
-The agreement slope uses within-pair changes in policy that remain after
-both country-year blocks are accounted for. A policy that moves identically
-for all destinations of an exporter in each year would be absorbed by the
-exporter-year block, even if it changes within pairs.
-
-These controls identify a coefficient of the maintained mean model when
-enough variation remains. A causal trade-policy interpretation in an
-observational panel also needs assumptions about policy timing and other
-time-varying bilateral shocks. The model holds exporter-year and importer-year
-effects fixed when computing this comparison. A counterfactual in which those
-effects respond to policy requires an additional model.
-
-### Report a percentage and interval {#first-fit--report-a-percentage-and-interval}
-
-Ask `pm.etable` to report the coefficient as a percentage with the
-transformed confidence interval.
-
-```python
-table = pm.etable(
-    fit, names=("Gravity PPML",), scale="effect", uncertainty="ci",
-    stats=("nobs", "zeros"), stars=False, digits=1,
-)
-print(table)
-```
-
-```text
-------------------------------------
-                        Gravity PPML
-------------------------------------
-agreement                   53.9
-                        [37.9, 71.9]
-------------------------------------
-Estimator                   PPML
-Mean order (omega)           1
-pair effects             Estimated
-exporter^year effects    Estimated
-importer^year effects    Estimated
-Covariance             cluster: pair
-Convention                 stata
-Reference                  normal
-Clusters                    132
-------------------------------------
-Observations               1,056
-Zeros                       6.0%
-------------------------------------
-Entries are 100 (exp(b) - 1) for each reported coefficient coordinate; not a standalone regressor change.
-95% confidence intervals in brackets, transformed from the coefficient interval.
-```
-
-With the same fixed effects, the fitted conditional mean with an agreement
-is 53.9% higher. The 95% interval is pointwise. In a Python notebook,
-display `table` as the last expression for an HTML table. Use
-`table.to_latex()` for a LaTeX table or `fit.tidy()` for the unrounded
-coefficients and uncertainty as a DataFrame. For a named regressor
-comparison on the proportion scale, use `fit.effect("agreement", contrast=(0, 1))`.
-
-### Compare with the raw outcome means {#first-fit--compare-with-the-raw-outcome-means}
-
-```python
-outcomes = pm.outcome_table(
-    trade, outcomes="trade", treatment="agreement", cluster="pair",
-)
-print(outcomes)
-```
-
-```text
-Outcome table                                                          control: agreement = 0 (N = 721); agreement = 1 (N = 335)
---------------------------------------------------------------------------------------------------------------------------------
-       target   zeros (0)  zeros (1)  mean (0)  mean (1)  mean | >0 (0)  mean | >0 (1)  difference, unadjusted  [95% conf. int.]
---------------------------------------------------------------------------------------------------------------------------------
-trade  theta_N       6.9%       3.9%      3.56      5.18           3.83           5.39                   45.5%    [30.1%, 62.7%]
---------------------------------------------------------------------------------------------------------------------------------
-Proportional difference in means, unadjusted (theta_N).
-Intervals transform the endpoints of the interval of the log ratio. Covariance: cluster-robust by 'pair', convention ssc='stata'.
-```
-
-The outcome table reports 45.5% more average trade in observed agreement
-years. That comparison uses the two observed groups of rows. The
-regression's 53.9% holds the three fixed-effect blocks constant. Read the
-two numbers as answers to their respective comparisons. Both tables use the same simulated panel and were reproduced with Powermean 0.1.1.
-[Benatia et al. (2026), §§2–3 and 5](https://arxiv.org/abs/2203.11820v4) · [Weidner and Zylkin (2021), §§3.1–3.4](https://doi.org/10.1016/j.jinteco.2021.103513)
-
-### Continue with the same model {#first-fit--continue-with-the-same-model}
-
-Read [fixed effects](#fixed-effects) to compare joint absorption
-with pair cancellation on this panel. Read [coefficient bias](#bias-correction)
-and [covariance refinements](#covariance-refinements) to see how
-the adjustments in Weidner and Zylkin (2021) change the agreement estimate
-and its interval.
 
 ## Difference out two fixed-effect blocks {#jochmans}
 

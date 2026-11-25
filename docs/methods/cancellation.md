@@ -123,5 +123,5 @@ cancelling pairs. Their estimation can still shift the slope distribution.
 short-group correction.
 
 <!-- guide-navigation:start -->
-[Previous: Estimate fixed effects](fixed-effects.md) · [Guide index](../README.md) · [Next: Nonlinear panel DiD](../examples/nonlinear-did.md)
+[Previous: Estimate fixed effects](fixed-effects.md) · [Guide index](../README.md) · [Next: Gravity walkthrough](../get-started.md)
 <!-- guide-navigation:end -->

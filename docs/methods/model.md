@@ -138,5 +138,5 @@ selects `tau=2`. See [options](../reference/options.md#full-family-scope-and-the
 and [numerical methods](numerical-methods.md).
 
 <!-- guide-navigation:start -->
-[Previous: Install](../install.md) · [Guide index](../README.md) · [Next: Prepare data](../help/prepare-data.md)
+[Previous: Three worked examples](../quick-tour.md) · [Guide index](../README.md) · [Next: Prepare data](../help/prepare-data.md)
 <!-- guide-navigation:end -->
