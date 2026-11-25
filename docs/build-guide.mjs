@@ -7,6 +7,7 @@ const indexChapter = ['README.md', 'read-the-guide', 'Guide index'];
 const groups = [
   ['Get started', 'start', [
     ['install.md', 'install', 'Install'],
+    ['quick-tour.md', 'quick-tour', 'Three worked examples'],
     ['methods/model.md', 'model', 'Mean and variance'],
     ['help/prepare-data.md', 'prepare-data', 'Prepare data'],
     ['examples/compare-samples.md', 'compare-samples', 'Compare samples'],
@@ -23,8 +24,8 @@ const groups = [
     ['methods/cancellation.md', 'cancellation', 'Cancel one block'],
   ]],
   ['Panel designs and applications', 'panel-and-inference', [
-    ['examples/nonlinear-did.md', 'nonlinear-did', 'Nonlinear panel DiD'],
     ['get-started.md', 'first-fit', 'Gravity walkthrough'],
+    ['examples/nonlinear-did.md', 'nonlinear-did', 'Nonlinear panel DiD'],
     ['methods/jochmans.md', 'jochmans', 'Difference out two blocks'],
     ['methods/bias-correction.md', 'bias-correction', 'Coefficient bias'],
     ['methods/covariance-refinements.md', 'covariance-refinements', 'Gravity pair covariance'],

@@ -436,5 +436,5 @@ weights when comparing software. Powermean produced the tables above. The Stata 
 [jwdid source](https://github.com/friosavila/stpackages/blob/main/jwdid/jwdid.ado)
 
 <!-- guide-navigation:start -->
-[Previous: Cancel one block](../methods/cancellation.md) · [Guide index](../README.md) · [Next: Gravity walkthrough](../get-started.md)
+[Previous: Gravity walkthrough](../get-started.md) · [Guide index](../README.md) · [Next: Difference out two blocks](../methods/jochmans.md)
 <!-- guide-navigation:end -->

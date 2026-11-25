@@ -225,5 +225,5 @@ the adjustments in Weidner and Zylkin (2021) change the agreement estimate
 and its interval.
 
 <!-- guide-navigation:start -->
-[Previous: Nonlinear panel DiD](examples/nonlinear-did.md) · [Guide index](README.md) · [Next: Difference out two blocks](methods/jochmans.md)
+[Previous: Cancel one block](methods/cancellation.md) · [Guide index](README.md) · [Next: Nonlinear panel DiD](examples/nonlinear-did.md)
 <!-- guide-navigation:end -->

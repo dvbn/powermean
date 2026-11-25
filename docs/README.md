@@ -4,11 +4,12 @@
 
 <img src="assets/powermean-logo.png" align="right" width="120" class="guide-logo" alt="Powermean logo" />
 
-Start with the [first fit](../README.md#a-first-fit) to estimate how an offer changes orders. The chapters below go from an ordinary regression to models with fixed effects and particular panel designs. To look up an argument directly, use the [function index](reference/api.md) or [fit options](reference/options.md). [Download the offline guide](guide.html) · [Quarto source](guide.qmd)
+Start with the [first fit](../README.md#a-first-fit), then follow the same three worked examples as in the R guide: a conditional mean, three-way gravity, and nonlinear difference-in-differences. Use the chapters below to prepare data, choose a model and report the results. [Function index](reference/api.md) · [Offline guide](guide.html) · [Quarto source](guide.qmd)
 
 ## Get started
 
 - [Install Powermean](install.md) from PyPI or a local distribution.
+- [Three worked examples](quick-tour.md): fit a conditional mean, compare joint and cancelled gravity models, and estimate effects under staggered adoption.
 - [Fit one mean three ways](methods/model.md). Use twelve observations to see what PPML, Gamma PML and other working variances estimate. Then choose a power mean, log OLS or an NB2 variance for your outcome.
 - [Prepare your data and formula](help/prepare-data.md). Specify regressors and interactions, restrict the sample, and account for exposure, offsets or observation weights.
 - [Compare estimation samples](examples/compare-samples.md). Find which input rows each fit used, why rows were excluded and how the outcome distribution changed.
@@ -33,8 +34,8 @@ Start with the [first fit](../README.md#a-first-fit) to estimate how an offer ch
 
 ## Panel designs and applications
 
-- [Nonlinear difference-in-differences](examples/nonlinear-did.md). Estimate policy effects with common or staggered adoption under multiplicative parallel trends.
 - [Three-way gravity](get-started.md). Fit bilateral trade in levels with pair, exporter-year and importer-year effects.
+- [Nonlinear difference-in-differences](examples/nonlinear-did.md). Estimate policy effects with common or staggered adoption under multiplicative parallel trends.
 - [Difference out two fixed effects](methods/jochmans.md). Check the extra assumption behind GMM1 and GMM2 before using a complete panel or directed pairs.
 - [Correct coefficient bias](methods/bias-correction.md). Compare the short-panel adjustments of Benatia et al. (2026) and the three-way PPML correction of Weidner and Zylkin (2021).
 - [Adjust pair covariance in gravity](methods/covariance-refinements.md). See how the covariance adjustment changes an interval for the agreement effect.
